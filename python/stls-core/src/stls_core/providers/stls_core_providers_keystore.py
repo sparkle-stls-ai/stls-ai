@@ -337,10 +337,6 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
         )
 
     def startup_seen_keys(self) -> set[str]:
-        """InMemory: nessuna persistenza — restituisce set() vuoto."""
-        return set()
-
-    def startup_seen_keys(self) -> set[str]:
         """
         Legge il ZSET pending e restituisce tutti i kid attualmente presenti.
 

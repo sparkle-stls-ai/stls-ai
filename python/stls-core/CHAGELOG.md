@@ -7,6 +7,59 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.2] — 2026-10-18
+
+Performance and cleanup pass on `stls-core`'s hot paths, found during a
+code assessment ahead of the package's migration to the `stls-ai` repo.
+No wire-format or public API changes; all 250 unit/e2e tests (+ 80 PQC
+tests with real `liboqs`) and the full Node↔Python interoperability
+suite pass unchanged.
+
+### Fixed
+
+- **`stls_core_handshake.py`: a new `ThreadPoolExecutor` was created and
+  torn down on every single handshake** (`_resolve_blocking()`, used to
+  resolve the `arqit_py` provider's blocking `.get()` call) — real
+  thread-creation overhead on the most frequent code path of the
+  `arqit_py` provider. Now reuses asyncio's default executor
+  (`loop.run_in_executor(None, ...)`) instead of a dedicated one-shot
+  pool.
+- **`stls_core_providers_keystore.py`: `RedisArqitKeyStore.startup_seen_keys()`
+  was defined twice** in the same class — the first definition (a
+  trivial `return set()`, with a docstring mislabeling it as the
+  `InMemory` implementation) was always silently shadowed by the real
+  one below it. Dead code, removed.
+- **`stls_core_auth_manager.py`: the fire-and-forget audit task
+  (`asyncio.ensure_future(self._emit_audit(audit))`) kept no reference**
+  to the created `Task`, relying only on the event loop's internal
+  bookkeeping — a known asyncio footgun (a task with no other strong
+  reference can in principle be garbage-collected before it's
+  scheduled). `ApiKeyManager` now holds a `set()` of in-flight audit
+  tasks, discarding each one via `add_done_callback` on completion.
+
+### Changed
+
+- **`stls_core_crypto.py`: `StlsTransport._constant_time_equal` reimplemented
+  a constant-time byte comparison by hand** (a pure-Python XOR loop)
+  instead of using `hmac.compare_digest`, already used elsewhere in this
+  same package (`stls_core_handshake.py`, `auth/stls_core_auth_models.py`)
+  and in the Node port (`timingSafeEqual`). Replaced with
+  `hmac.compare_digest` — faster (C implementation) and consistent with
+  the rest of the codebase.
+- **`stls_core_crypto.py`: dropped `cryptography.hazmat.backends.default_backend()`**
+  from `StlsTransport` (`Cipher`, `HMAC`, `HKDFExpand`) — legacy/optional
+  in `cryptography>=46.0.5` (the package's declared minimum version),
+  one fewer object instantiated per `StlsTransport` and per
+  encrypt/decrypt call.
+
+### Operational notes
+
+- **`__init__.py`'s `__version__` had drifted to `"0.1.0"`** while
+  `pyproject.toml` already declared `0.1.1` — fixed as part of this
+  version bump; both now read `0.1.2`.
+
+---
+
 ## [0.1.1] — 2026-07-31
 
 ### Added

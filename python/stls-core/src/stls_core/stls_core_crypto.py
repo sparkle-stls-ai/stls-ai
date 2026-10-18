@@ -21,12 +21,12 @@ Uso tipico:
 """
 
 import base64
+import hmac as _hmac
 import json
 import logging
 import os
 from typing import Any
 
-from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
@@ -157,7 +157,6 @@ class StlsTransport:
             session_id:  Identificatore univoco della sessione STLS (UUID).
         """
         self.session_id = session_id
-        self._backend = default_backend()
 
         # Deriva chiavi AES e HMAC via HKDF-Expand.
         # La session_key SKA è già ad alta entropia → si usa solo Expand
@@ -167,14 +166,12 @@ class StlsTransport:
             algorithm=hashes.SHA256(),
             length=32,
             info=HKDF_INFO_AES,
-            backend=self._backend,
         ).derive(session_key)
 
         self._hmac_key: bytes = HKDFExpand(
             algorithm=hashes.SHA256(),
             length=32,
             info=HKDF_INFO_HMAC,
-            backend=self._backend,
         ).derive(session_key)
 
         logger.debug(
@@ -206,7 +203,6 @@ class StlsTransport:
         cipher = Cipher(
             algorithms.AES(self._aes_key),
             modes.GCM(iv),
-            backend=self._backend,
         )
         encryptor = cipher.encryptor()
         ciphertext = encryptor.update(plaintext) + encryptor.finalize()
@@ -266,7 +262,6 @@ class StlsTransport:
         cipher = Cipher(
             algorithms.AES(self._aes_key),
             modes.GCM(envelope.iv, envelope.tag),
-            backend=self._backend,
         )
         decryptor = cipher.decryptor()
         try:
@@ -327,16 +322,11 @@ class StlsTransport:
 
     def _compute_mac(self, iv: bytes, ciphertext: bytes, tag: bytes) -> bytes:
         """Calcola HMAC-SHA256 su (IV ‖ ciphertext ‖ GCM tag)."""
-        h = hmac.HMAC(self._hmac_key, hashes.SHA256(), backend=self._backend)
+        h = hmac.HMAC(self._hmac_key, hashes.SHA256())
         h.update(iv + ciphertext + tag)
         return h.finalize()
 
     @staticmethod
     def _constant_time_equal(a: bytes, b: bytes) -> bool:
         """Confronto timing-safe tra due byte string."""
-        if len(a) != len(b):
-            return False
-        result = 0
-        for x, y in zip(a, b):
-            result |= x ^ y
-        return result == 0
+        return _hmac.compare_digest(a, b)

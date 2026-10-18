@@ -181,6 +181,11 @@ class ApiKeyManager:
         self._audit_hook = audit_hook if audit_hook is not None else default_audit_hook()
         self._enable_cache = enable_cache
         self._refresher: BackgroundRefresher | None = None
+        # Trattiene una reference ai task di audit fire-and-forget finché non
+        # completano — senza, l'unica reference sarebbe quella interna al
+        # loop, che asyncio non garantisce contro la garbage collection
+        # prematura del task prima della sua schedulazione.
+        self._audit_tasks: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------------
     # Factory methods
@@ -590,9 +595,12 @@ class ApiKeyManager:
                 result.value, client_id, endpoint, key_id[:12],
             )
 
-        # fire-and-forget dell'audit hook (non blocca la risposta)
+        # fire-and-forget dell'audit hook (non blocca la risposta), con
+        # reference trattenuta in self._audit_tasks finché non completa.
         if self._audit_hook:
-            asyncio.ensure_future(self._emit_audit(audit))
+            task = asyncio.ensure_future(self._emit_audit(audit))
+            self._audit_tasks.add(task)
+            task.add_done_callback(self._audit_tasks.discard)
 
         return ValidationResult(result=result, record=record, audit=audit)
 

@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import concurrent.futures
 import hmac as _hmac
 import inspect
 import logging
@@ -310,12 +309,17 @@ async def _resolve(result: Any) -> Any:
 async def _resolve_blocking(result: Any) -> Any:
     """
     Come _resolve, ma per operazioni bloccanti (I/O di rete Arqit):
-    esegue in ThreadPoolExecutor per non bloccare il loop asyncio.
+    esegue nel default executor del loop per non bloccare asyncio.
+
+    Usa l'executor di default del loop (thread pool condiviso, creato pigramente
+    da asyncio) invece di istanziarne uno nuovo ad ogni chiamata: un
+    ThreadPoolExecutor dedicato per handshake comporta la creazione/distruzione
+    di un thread OS ad ogni singolo handshake — overhead evitabile sul percorso
+    più frequente del provider arqit_py.
     """
     if inspect.isawaitable(result):
         return await result
     if not (hasattr(result, "get") and callable(result.get)):
         return result
     loop = asyncio.get_event_loop()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return await loop.run_in_executor(pool, result.get)
+    return await loop.run_in_executor(None, result.get)
