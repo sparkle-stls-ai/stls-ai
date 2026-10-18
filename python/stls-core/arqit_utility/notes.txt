@@ -1,0 +1,29 @@
+#################
+# registration  #
+#################
+
+# device registration (also works with OTA_QUANTUM mode)
+python device_registration.py -r -i server-core-test -c /home/anton/VSProjects/stls-ai-java-sdk/python/stls-core/arqit_utility/aq-server-core-test.json -m QKEY
+python device_registration.py -r -i client-core-test -c /home/anton/VSProjects/stls-ai-java-sdk/python/stls-core/arqit_utility/aq-client-core-test.json -m QKEY
+
+# device deregistration
+python device_registration.py -d -c /home/anton/VSProjects/stls-ai-java-sdk/python/stls-core/arqit_utility/aq-sf-agent-server.json
+
+#################
+# provisioning  #
+#################
+
+# note: the file must be copied into the directory where provisioning is launched from
+# provisioning also updates the metadata file (provisioning state)
+python device_provisioning.py -c /home/anton/VSProjects/stls-ai-java-sdk/python/stls-core/arqit_utility/aq-server-core-test.json
+python device_provisioning.py -c /home/anton/VSProjects/stls-ai-java-sdk/python/stls-core/arqit_utility/aq-client-core-test.json
+
+
+#################
+# peering       #
+#################
+
+# receiver
+python device_peering.py -r -c /home/anton/VSProjects/stls-ai-java-sdk/python/stls-core/arqit_utility/aq-server-core-test.json
+# initiator
+python device_peering.py -i -c /home/anton/VSProjects/stls-ai-java-sdk/python/stls-core/arqit_utility/aq-client-core-test.json

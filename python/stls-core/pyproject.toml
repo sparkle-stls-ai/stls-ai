@@ -1,0 +1,103 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stls_core"
+version = "0.1.1"
+description = "Core cryptographic transport layer for STLS — protocol-agnostic symmetric encryption, quantum-safe key providers and API key auth"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # Crypto primitives: AES-256-GCM, HMAC-SHA256, HKDF-Expand
+    "cryptography>=46.0.5",
+    # KeyRecord / HandshakeRequest / HandshakeResponse Pydantic models
+    "pydantic>=2.0.0",
+    # Env var loading (.env support nei provider)
+    "python-dotenv>=1.2.1",
+]
+
+[project.optional-dependencies]
+
+# Cache Redis per ApiKeyManager (RedisKeyCache, BackgroundRefresher).
+# Installazione:  uv pip install -e ".[redis]"
+redis = [
+    "redis>=7.4.0",
+]
+
+# PostgresLoader (stls_core.auth) — backend AUTH_LOADER_BACKEND=postgres
+# per ApiKeyManager. Separato da [redis]: sono due backend indipendenti
+# (cache sessioni/chiavi vs sorgente dati chiavi), non c'è motivo che
+# installare l'uno tiri dentro l'altro. Prima di questa modifica asyncpg
+# viveva (per errore) dentro [redis] — chi dipendeva da quel comportamento
+# (uv pip install -e ".[redis]" per ottenere anche asyncpg) deve ora
+# aggiungere esplicitamente anche [postgres], es.
+# uv pip install -e ".[redis,postgres]".
+# Installazione:  uv pip install -e ".[postgres]"
+postgres = [
+    "asyncpg>=0.31.0",
+]
+
+# Arqit SKA-Platform™ Python SDK (wheel locali in arqit_wheels/).
+# Installazione:
+#   uv pip install -e ".[arqit_py]" \
+#     --find-links arqit_wheels/arqit-skaplatform-common/ \
+#     --find-links arqit_wheels/arqit-skaplatform-policy/ \
+#     --find-links arqit_wheels/arqit-skaplatform-registration/ \
+#     --find-links arqit_wheels/arqit-skaplatform-provisioning/ \
+#     --find-links arqit_wheels/arqit-skaplatform-mqtt-common/ \
+#     --find-links arqit_wheels/arqit-skaplatform-peering/ \
+#     --find-links arqit_wheels/arqit-skaplatform-monitoring/
+arqit_py = [
+    "arqit-skaplatform-common",
+    "arqit-skaplatform-policy",
+    "arqit-skaplatform-registration",
+    "arqit-skaplatform-provisioning",
+    "arqit-skaplatform-mqtt-common",
+    "arqit-skaplatform-peering",
+    "arqit-skaplatform-monitoring",
+]
+
+# Provider PQC — ibrido X25519 + ML-KEM-768 (NIST FIPS 203).
+# Quantum-safe senza dipendenza da servizi esterni (Arqit non richiesto).
+# liboqs-python include liboqs compilata (C library): richiede build tools
+# o wheel pre-built disponibili su PyPI per le piattaforme principali.
+# Installazione: uv pip install -e ".[pqc]"
+pqc = [
+    # Deve corrispondere alla versione della liboqs C library installata
+    # sul sistema (/usr/local/lib/liboqs.so.*). Un mismatch di versione
+    # tra la C library e il wrapper Python causa AttributeError a runtime.
+    # Verificare la versione C: strings /usr/local/lib/liboqs.so.* | grep "^0\."
+    # Installazione: uv pip install -e ".[pqc]"
+    "liboqs-python>=0.14.1",
+]
+
+# Dipendenze di sviluppo e test.
+# fastapi/uvicorn/httpx servono solo per il test E2E over-the-wire
+# (test_e2e_client_server.py) — non sono dipendenze runtime del package.
+# Installazione:  uv pip install -e ".[dev]"
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "fastapi>=0.129.0",
+    "uvicorn>=0.40.0",
+    "httpx>=0.28.1",
+    # Fake Redis per i test del keystore Redis senza un server reale.
+    # Supporta GETEX, ZRANGEBYSCORE, pipeline — copre tutto RedisArqitKeyStore.
+    "fakeredis>=2.23.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+log_cli = true
+log_cli_level = "WARNING"
+
+[tool.coverage.run]
+source = ["src/stls_core"]
+omit = ["tests/*"]

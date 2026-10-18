@@ -1,0 +1,105 @@
+name: stls-core Node/Python interop
+
+# Verifies that stls-core (Node) and stls-core (Python) remain
+# bit-compatible: same encrypted envelope, same handshake (standard and
+# PQC), same Redis layout for the session cache and auth, same
+# PostgresLoader SQL schema, same RPC protocol for the Arqit sidecar.
+#
+# Only triggers on changes to one of the two packages, to avoid burning
+# CI minutes on unrelated parts of this monorepo.
+on:
+  push:
+    paths:
+      - "node/stls-core/**"
+      - "python/stls-core/**"
+      - ".github/workflows/stls-core-node-interop.yml"
+  pull_request:
+    paths:
+      - "node/stls-core/**"
+      - "python/stls-core/**"
+      - ".github/workflows/stls-core-node-interop.yml"
+
+jobs:
+  interop:
+    runs-on: ubuntu-latest
+
+    # Redis and Postgres as service containers — disposable, scoped to
+    # this job only. The Postgres instance is NOT the shared development
+    # database used manually to validate PostgresLoader; it starts empty
+    # and the live tests create their own sf_api_keys table and fixture
+    # row in it (see tests/postgres-schema.sql).
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6399:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: stls_test
+          POSTGRES_PASSWORD: stls_test
+          POSTGRES_DB: stls_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      TEST_REDIS_URL: redis://localhost:6399
+      START_LOCAL_REDIS: "0" # already provided by the service container
+      AUTH_PG_DSN: postgresql://stls_test:stls_test@localhost:5432/stls_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # liboqs-python is a ctypes binding over the liboqs C library — it
+      # does not bundle it, so it must be built and installed separately
+      # (the same constraint documented in python/stls-core/README.md).
+      # Version pinned for reproducibility: PyPI only distributes the most
+      # recent liboqs-python releases (0.16.0 / 0.16.0.1 as of this
+      # writing — 0.15.0, used in development, was removed from the
+      # index), so the C library tag below must track whatever is
+      # currently the latest available wheel, not a historically-verified
+      # one.
+      - name: Build liboqs (C library for ML-KEM-768)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build build-essential libssl-dev
+          git clone --depth 1 --branch 0.16.0 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
+          cmake -S /tmp/liboqs -B /tmp/liboqs/build -GNinja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
+          ninja -C /tmp/liboqs/build
+          sudo ninja -C /tmp/liboqs/build install
+          sudo ldconfig
+
+      - name: Install stls-core (Python) with the dev+pqc extras
+        working-directory: python/stls-core
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[dev]" "liboqs-python==0.16.0.1"
+
+      - name: Install + build stls-core (Node)
+        working-directory: node/stls-core
+        run: |
+          npm install
+          npm run build
+
+      - name: Run the interoperability test suite
+        working-directory: node/stls-core
+        run: ./tests/run-interop-tests.sh

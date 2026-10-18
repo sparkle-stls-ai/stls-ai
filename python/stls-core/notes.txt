@@ -1,0 +1,108 @@
+cd python/stls-core
+
+uv venv
+
+# Activate the venv
+source .venv/bin/activate          # Linux/macOS/WSL
+
+# install
+uv pip install -e ".[dev]"
+
+# Verify installation
+uv pip show stls_core
+
+# verbose run
+pytest tests/ -v
+
+# With coverage
+pytest --cov --cov-report=term-missing
+
+# A single file
+pytest tests/test_stls_core_crypto.py -v
+
+# to install the build tool
+uv pip install build
+
+# Build (produces both wheel and sdist in dist/)
+python3 -m build
+
+# to reinstall core
+uv pip install -e ".[dev]" --reinstall-package stls_core
+
+# local
+#########
+redis-cli
+
+KEYS *
+KEYS stls:pg:*
+
+# remaining TTL of a key (in seconds)
+TTL stls:ks:default:key:<kid>
+
+# check that it exists (1 = exists, 0 = doesn't exist / evicted)
+EXISTS stls:ks:default:key:<kid>
+
+# length in bytes (e.g. 32 for AES-256)
+STRLEN stls:ks:default:key:<kid>
+
+# do NOT GET a cryptographic key in production — dev/debug only
+GET stls:ks:default:key:<kid>
+
+# all pending kids in the queue, with insertion timestamp (score)
+ZRANGE stls:ks:default:pending 0 -1 WITHSCORES
+
+# how many keys are pending
+ZCARD stls:ks:default:pending
+
+# pending keys that arrived after a given timestamp
+ZRANGEBYSCORE stls:ks:default:pending 1750000000 +inf WITHSCORES
+
+ZCARD stls:ks:default:pending          # → 1
+TTL  stls:ks:default:key:<kid>         # → ~300 (KEY_STORE_PENDING_TTL)
+
+
+# remove a specific key
+DEL stls:ks:default:key:<kid>
+ZREM stls:ks:default:pending <kid>
+
+# clear the whole namespace (WARNING: dev only)
+EVAL "return redis.call('DEL', unpack(redis.call('KEYS', ARGV[1])))" 0 "stls:ks:default:*"
+
+# redis monitoring
+redis-cli -u redis://localhost:6379 MONITOR | grep "stls:ks"
+
+# liboqs-python
+# to see the available versions
+pip index versions liboqs-python
+
+# Install build dependencies
+sudo apt-get install cmake ninja-build libssl-dev
+
+# Clone
+git clone --depth 1 --branch 0.15.0 \
+    https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs-0.15.0
+
+cd /tmp/liboqs-0.15.0
+mkdir build && cd build
+
+cmake -GNinja \
+    -DOQS_USE_OPENSSL=ON \
+    -DBUILD_SHARED_LIBS=ON \
+    -DCMAKE_INSTALL_PREFIX=/usr/local ..
+
+ninja
+sudo ninja install
+sudo ldconfig
+
+# Verify
+ls -la /usr/local/lib/liboqs.so*
+python -c "import oqs; print('OK:', oqs.__version__)"
+
+# alternative check
+python -c "
+import oqs
+kem = oqs.KeyEncapsulation('ML-KEM-768')
+pub = kem.generate_keypair()
+print('ML-KEM-768 OK — pubkey len:', len(pub))
+kem.free()
+"

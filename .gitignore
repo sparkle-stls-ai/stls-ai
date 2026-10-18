@@ -1,0 +1,97 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+!python/stls-a2a/dist/
+!python/stls-core/dist/
+!python/stls-mcp/dist/
+python/stls-a2a/arqit_wheels
+python/stls-core/arqit_wheels
+python/stls-mcp/arqit_wheels
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing / coverage
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Jupyter
+.ipynb_checkpoints
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# ---- Node ----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+.cache/
+.parcel-cache/
+
+# Logs
+logs/
+*.log
+
+# Runtime / coverage
+coverage/
+.nyc_output/
+
+# Package manager locks (optional - uncomment if desired)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
