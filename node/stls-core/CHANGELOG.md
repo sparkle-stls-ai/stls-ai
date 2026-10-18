@@ -9,7 +9,7 @@ of which this package is the TypeScript port.
 
 ---
 
-## [Unreleased]
+## [0.1.2] — 2026-10-18
 
 ### Added — `KeySessionProviderFactory`/`KeyProviderFactory` (`providers/factory.ts`)
 
