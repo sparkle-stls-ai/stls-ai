@@ -11,6 +11,30 @@ of which this package is the TypeScript port.
 
 ## [0.1.2] — 2026-10-18
 
+### Fixed — CI: Arqit sidecar step always failed, for a structural reason that can't be fixed in CI
+
+First real run of `.github/workflows/stls-core-node-interop.yml` against
+this repo (`stls-ai`) failed step `[9/11]`
+(`tests/interop/arqit-sidecar-guard.smoke.ts`) with an assertion
+mismatch: the sidecar rejected the `arqit_py` role request with
+`ImportError: ... richiede i wheel Arqit SKA-Platform™` (the wheels
+aren't installed) instead of the `ARQIT_PY_SERVER_CONFIG non impostato`
+error the test expects — it exercises the *config-missing* path, which
+assumes the wheels ARE present and only the config path is missing.
+
+This isn't fixable by installing the wheels in CI: `arqit_wheels/` holds
+proprietary, non-redistributable SKA-Platform™ packages (see
+`.gitignore` and `python/stls-core/pyproject.toml`'s `[arqit_py]`
+extra) — they're deliberately never shipped anywhere, CI included.
+`.github/workflows/stls-core-node-interop.yml` now sets
+`SKIP_ARQIT_SIDECAR: "1"`, so step `[9/11]` (and the already
+config-gated `[10/11]`/`[11/11]`) are skipped in CI. Arqit sidecar/real
+peering coverage stays local-only, run manually with the wheels
+installed (`uv pip install -e ".[arqit_py]" --find-links
+arqit_wheels/...`, see `python/stls-core/README.md`); CI keeps
+verifying Node↔Python interoperability through the `base` and PQC
+(X25519 + ML-KEM-768) providers, which need no proprietary dependency.
+
 ### Added — `KeySessionProviderFactory`/`KeyProviderFactory` (`providers/factory.ts`)
 
 A real gap, found while porting `stls-mcp` (Node): unlike Python, which

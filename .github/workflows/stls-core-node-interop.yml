@@ -56,6 +56,15 @@ jobs:
       TEST_REDIS_URL: redis://localhost:6399
       START_LOCAL_REDIS: "0" # already provided by the service container
       AUTH_PG_DSN: postgresql://stls_test:stls_test@localhost:5432/stls_test
+      # The Arqit SKA-Platform™ wheels are proprietary and not
+      # redistributable (see arqit_wheels/ in .gitignore) — CI never
+      # installs the [arqit_py] extra, so the sidecar step would always
+      # fail here on the wheel-missing ImportError instead of exercising
+      # anything real. Arqit sidecar/peering coverage stays local-only
+      # (uv pip install -e ".[arqit_py]" --find-links arqit_wheels/...,
+      # see python/stls-core/README.md); CI verifies interoperability via
+      # the base and PQC (X25519 + ML-KEM-768) providers instead.
+      SKIP_ARQIT_SIDECAR: "1"
 
     steps:
       - uses: actions/checkout@v4
