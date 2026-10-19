@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stls_mcp"
+version = "0.1.2"
+description = "STLS extension of the Model Context Protocol — transparent application-layer symmetric encryption over Streamable HTTP, sharing the stls-core crypto/session/handshake/provider/auth layer with stls-a2a"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # Crittografia, session cache, handshake, key provider (base/arqit_py) e
+    # API key auth — condivisi con stls-a2a. Risolto come pacchetto locale
+    # del monorepo via [tool.uv.sources] sotto.
+    "stls_core>=0.1.1",
+    # SDK ufficiale MCP — FastMCP + Streamable HTTP transport.
+    # <2 upper bound per restare compatibili fino al rilascio stabile v2
+    # (beta prevista 2026-06-30, stable 2026-07-27).
+    "mcp>=1.27,<2",
+    # Middleware ASGI server-side per /mcp-stls (accanto all'app FastMCP
+    # standard montata su /mcp, generata e gestita interamente dall'SDK).
+    "starlette>=0.40.0",
+    "uvicorn>=0.40.0",
+    # Client-side: custom httpx.AsyncBaseTransport per streamablehttp_client.
+    "httpx>=0.28.1",
+    "python-dotenv>=1.2.1",
+]
+
+[project.optional-dependencies]
+
+# Cache Redis per ApiKeyManager — pass-through verso stls-core.
+redis = [
+    "stls_core[redis]",
+]
+
+# Arqit SKA-Platform™ Python SDK — pass-through verso stls-core.
+# Installazione:
+#   uv pip install -e ".[arqit_py]" \
+#     --find-links arqit_wheels/arqit-skaplatform-common/ \
+#     --find-links arqit_wheels/arqit-skaplatform-policy/ \
+#     --find-links arqit_wheels/arqit-skaplatform-registration/ \
+#     --find-links arqit_wheels/arqit-skaplatform-provisioning/ \
+#     --find-links arqit_wheels/arqit-skaplatform-mqtt-common/ \
+#     --find-links arqit_wheels/arqit-skaplatform-peering/ \
+#     --find-links arqit_wheels/arqit-skaplatform-monitoring/
+arqit_py = [
+    "stls_core[arqit_py]",
+]
+
+# Provider PQC — ibrido X25519 + ML-KEM-768. Pass-through verso stls-core[pqc].
+# Installazione: uv pip install -e ".[pqc]"
+pqc = [
+    "stls_core[pqc]",
+]
+
+# PostgresLoader (stls_core.auth) — backend AUTH_LOADER_BACKEND=postgres
+# per ApiKeyManager (vedi vault_server.py build_api_key_manager()).
+# Pass-through verso stls-core[postgres]. Senza questo extra, import lazy
+# di asyncpg dentro PostgresLoader.load_all()/load_one() — l'errore arriva
+# solo al primo uso reale (AUTH_ENABLED=true + AUTH_LOADER_BACKEND=postgres),
+# non all'avvio del processo con backend diverso.
+# Installazione: uv pip install -e ".[postgres]"
+postgres = [
+    "stls_core[postgres]",
+]
+
+# ADK client-side — STLSMCPToolset / create_stls_mcp_toolset
+# (stls_mcp_secure_toolset.py). Import di google-adk lazy, dentro
+# STLSMCPToolset.__new__: senza questo extra, `import stls_mcp` resta
+# comunque valido (uso server-side, es. vault_server.py) — l'errore
+# arriva solo istanziando STLSMCPToolset senza google-adk installato.
+# Stesso vincolo di versione di stls-a2a: google-adk 2.x introduce
+# breaking change nel runner asincrono (GeneratorExit / OpenTelemetry
+# context detach) — vedi note stls-a2a pyproject.toml.
+# Installazione: uv pip install -e ".[adk]"
+adk = [
+    "google-adk>=1.25.0,<2.0.0",
+]
+
+# Dipendenze di sviluppo e test.
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Risolve stls_core come pacchetto locale del monorepo (path relativo a
+# questo pyproject.toml). In produzione, sostituire con la versione
+# pubblicata su un index privato e rimuovere questa sezione.
+[tool.uv.sources]
+stls_core = { path = "../stls-core" }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+log_cli = true
+log_cli_level = "WARNING"
+
+[tool.coverage.run]
+source = ["src/stls_mcp"]
+omit = ["tests/*"]

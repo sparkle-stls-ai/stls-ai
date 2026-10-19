@@ -1,0 +1,98 @@
+name: stls-mcp Node/Python interop
+
+# Verifies that stls-mcp (Node) and stls-mcp (Python) remain interoperable:
+# same STLS handshake (standard and PQC) over the MCP Streamable HTTP
+# transport, same plain-endpoint behavior, in both server/client language
+# directions. Also covers node/stls-core and python/stls-core, since
+# stls-mcp is built directly on top of them (a change there can break this
+# suite without touching stls-mcp itself).
+#
+# No Redis/Postgres service containers needed here: tests/run-interop-tests.sh
+# runs every Python vault_server.py/vault_client.py invocation with
+# SESSION_CACHE_BACKEND=memory, KEY_STORE_BACKEND=memory, AUTH_ENABLED=false
+# (see that script's PY_COMMON_ENV) — unlike stls-core's own interop suite,
+# nothing here exercises the Redis-backed session cache or PostgresLoader.
+#
+# Only triggers on changes to one of the packages involved, to avoid
+# burning CI minutes on unrelated parts of this monorepo.
+on:
+  push:
+    paths:
+      - "node/stls-mcp/**"
+      - "python/stls-mcp/**"
+      - "node/stls-core/**"
+      - "python/stls-core/**"
+      - ".github/workflows/stls-mcp-node-interop.yml"
+  pull_request:
+    paths:
+      - "node/stls-mcp/**"
+      - "python/stls-mcp/**"
+      - "node/stls-core/**"
+      - "python/stls-core/**"
+      - ".github/workflows/stls-mcp-node-interop.yml"
+
+jobs:
+  interop:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # liboqs-python is a ctypes binding over the liboqs C library — it
+      # does not bundle it, so it must be built and installed separately
+      # (same constraint as stls-core's own workflow; keep this step's
+      # liboqs tag in sync with stls-core-node-interop.yml's).
+      - name: Build liboqs (C library for ML-KEM-768)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build build-essential libssl-dev
+          git clone --depth 1 --branch 0.16.0 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
+          cmake -S /tmp/liboqs -B /tmp/liboqs/build -GNinja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
+          ninja -C /tmp/liboqs/build
+          sudo ninja -C /tmp/liboqs/build install
+          sudo ldconfig
+
+      # stls_core (Python) is installed first, into the same venv that
+      # stls-mcp (Python) will later reuse: stls-mcp's pyproject.toml
+      # declares "stls_core>=0.1.1" as a dependency, resolved via a local
+      # path only in [tool.uv.sources] (uv-specific) — under plain pip, as
+      # used here, that requirement is satisfied by whatever's already
+      # installed in the venv instead of hitting PyPI for a package that
+      # was never published there.
+      - name: Install stls-core (Python) with the dev+pqc extras
+        working-directory: python/stls-core
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[dev]" "liboqs-python==0.16.0.1"
+
+      - name: Install stls-mcp (Python) with the dev+pqc extras
+        working-directory: python/stls-mcp
+        run: |
+          ../stls-core/.venv/bin/pip install -e ".[dev,pqc]"
+
+      - name: Install + build stls-core (Node)
+        working-directory: node/stls-core
+        run: |
+          npm install
+          npm run build
+
+      - name: Install + build stls-mcp (Node)
+        working-directory: node/stls-mcp
+        run: |
+          npm install
+          npm run build
+
+      - name: Run the interoperability test suite
+        working-directory: node/stls-mcp
+        env:
+          PYTHON_VENV: ${{ github.workspace }}/python/stls-core/.venv/bin/python
+        run: ./tests/run-interop-tests.sh
