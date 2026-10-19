@@ -58,6 +58,50 @@ suite pass unchanged.
   `pyproject.toml` already declared `0.1.1` — fixed as part of this
   version bump; both now read `0.1.2`.
 
+### Fixed — `KeyProviderServerArqitPy.stop()` never actually released the receiver's listening socket
+
+Surfaced while chasing down `test_arqit_py_real_peering.py` failures
+against the real Arqit cloud. Two distinct, real bugs, neither of
+them "cloud flakiness":
+
+- **`_listen()`'s idle loop runs AFTER `listen_for_key_negotiation()`
+  returns, not instead of it** — the SDK keeps the real listener alive
+  internally; our idle loop (checking `_is_cancel_ref`) only governs
+  when our own daemon thread's function returns, with no effect on the
+  SDK's own socket. `stop()` set the cancel flag and returned, but
+  **never called anything on the SDK's own receiver object** — the
+  listening socket stayed bound for the rest of the process. Harmless
+  when the provider runs in its own OS process (killing the process
+  releases the socket regardless, which is why
+  `test_two_separate_processes_succeeds` and
+  `test_n_sequential_clients_against_one_server_succeeds` never showed
+  this), but fatal for `test_same_process_reproduces_401`, the one
+  caller that starts/stops the provider in-process and then needs the
+  same port free again — it reliably hit `Address already in use`
+  forever, no timeout long enough would have fixed it. Fixed by storing
+  the SDK's receiver object (`SocketClientReceiver`/`MqttClientReceiver`,
+  both expose the same `end_key_negotiation()`) and calling it from
+  `stop()`, which actually `shutdown()`s and `close()`s the listening
+  socket.
+- **`KeyProviderServerArqitPy.start()` returns as soon as its listener
+  thread is *launched*, not when the socket is actually bound and
+  `listen()`ing** — the real `bind()`/`listen()` happens inside that
+  background thread. The test harness's own "SERVER_READY" readiness
+  signal was printed right after `start()` returned, before the socket
+  was necessarily live, so the CLIENT role (a separate process) could
+  race ahead and get a genuine `ConnectionRefusedError`. Not a library
+  bug — `tests/_arqit_py_real_e2e_server_role.py` now actively
+  connect-polls the receiver's own port before reporting ready.
+- **`_wait_port_free()`'s 10–15s timeouts were simply too short**:
+  Linux's TCP TIME_WAIT for a real, closed connection is a fixed ~60s
+  (2×MSL), not configurable from the probing side. Bumped the default
+  to 65s.
+
+Verified: all 3 tests in `test_arqit_py_real_peering.py` pass together
+against the real Arqit cloud (previously 1/3, with the other 2 failing
+on teardown/connection races, not on the actual key agreement or
+handshake logic). Full local suite unaffected (250 passed, 1 skipped).
+
 ---
 
 ## [0.1.1] — 2026-07-31

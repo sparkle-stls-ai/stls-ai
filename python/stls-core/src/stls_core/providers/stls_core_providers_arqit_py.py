@@ -339,6 +339,10 @@ class KeyProviderServerArqitPy(KeyProviderServer):
         self._key_store = ArqitKeyStoreFactory.build(role="server")
         self._session: Optional[KeySessionProviderArqitPy] = None
         self._is_cancel_ref: list[bool] = [False]
+        # Handle to the SDK's own receiver object (SocketClientReceiver /
+        # MqttClientReceiver), needed in stop() to actually release the
+        # listening socket via its end_key_negotiation() — see stop().
+        self._sdk_receiver: Optional[object] = None
 
     async def start(self) -> BlockableResult:
         from uk.arqit.device.common import QCConfig
@@ -388,6 +392,7 @@ class KeyProviderServerArqitPy(KeyProviderServer):
                 qc_config.socket_listening_port,
             )
 
+        self._sdk_receiver = server
         is_cancel_ref = self._is_cancel_ref
 
         def _listen() -> None:
@@ -427,8 +432,32 @@ class KeyProviderServerArqitPy(KeyProviderServer):
         return self._session
 
     async def stop(self) -> None:
+        """
+        Stops the server provider.
+
+        Beyond signaling the idle loop in _listen() to exit (which does
+        NOT by itself release the listening socket — that loop only
+        runs AFTER listen_for_key_negotiation() has already returned,
+        with the real listener kept alive by the SDK internally), this
+        also calls end_key_negotiation() on the SDK's own receiver
+        object to actually shut down and close the listening socket.
+        Without this, the port stays bound for the remaining lifetime
+        of the process — harmless when the provider runs in its own OS
+        process (killing the process releases it regardless), but fatal
+        for any caller that starts/stops this provider in-process and
+        then needs the same port again (see
+        tests/test_arqit_py_real_peering.py::test_same_process_reproduces_401).
+        """
         logger.info("[KeyProviderServerArqitPy] stop()")
         self._is_cancel_ref[0] = True
+        if self._sdk_receiver is not None:
+            try:
+                self._sdk_receiver.end_key_negotiation()
+            except Exception as exc:
+                logger.warning(
+                    "[KeyProviderServerArqitPy] stop(): errore chiusura "
+                    "listener SDK (probabilmente mai avviato): %s", exc,
+                )
 
 
 # ---------------------------------------------------------------------------

@@ -36,7 +36,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import socket
 import sys
+import time
 
 logging.basicConfig(
     level=logging.DEBUG if "--debug" in sys.argv else logging.INFO,
@@ -52,6 +55,37 @@ from stls_core import HandshakeRequest, perform_handshake
 from stls_core.stls_core_session import InMemorySessionCache
 from stls_core.providers.stls_core_providers_factory import KeySessionProviderFactory
 from stls_core.providers.stls_core_providers_base import KeySessionProvider
+
+
+def _wait_receiver_listening(timeout: float = 10.0) -> None:
+    """
+    Attende che il socket receiver dell'SDK Arqit sia effettivamente in
+    listen() prima di segnalare SERVER_READY all'orchestratore.
+
+    KeyProviderServerArqitPy.start() avvia il peering Arqit in un thread
+    daemon e ritorna non appena il thread è stato lanciato — NON quando
+    il socket è davvero bindato e in ascolto (bind()/listen() avvengono
+    dentro server.listen_for_key_negotiation(), eseguito nel thread).
+    Senza questa attesa, il ruolo CLIENT (processo separato) può tentare
+    connect() prima che il listener sia pronto, ottenendo un
+    ConnectionRefusedError reale — non un problema del cloud Arqit, ma
+    una semplice race fra "thread avviato" e "socket in ascolto".
+    """
+    port = int(json.load(open(os.environ["ARQIT_PY_SERVER_CONFIG"])).get("SOCKET_LISTENING_PORT", 8889))
+    deadline = time.monotonic() + timeout
+    last_error: OSError | None = None
+    while time.monotonic() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.2)
+            try:
+                s.connect(("127.0.0.1", port))
+                return  # connect riuscito — il receiver è davvero in ascolto
+            except OSError as exc:
+                last_error = exc
+        time.sleep(0.1)
+    raise TimeoutError(
+        f"receiver non in ascolto su 127.0.0.1:{port} dopo {timeout}s: {last_error}"
+    )
 
 
 def main() -> None:
@@ -71,6 +105,7 @@ def main() -> None:
     # singolo test, nessun bisogno di condividerla con altri processi.
     session_cache = InMemorySessionCache()
 
+    _wait_receiver_listening()
     print("SERVER_READY", flush=True)
 
     for raw_line in sys.stdin:

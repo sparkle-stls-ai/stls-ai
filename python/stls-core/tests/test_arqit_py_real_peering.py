@@ -119,7 +119,7 @@ def _receiver_port() -> int:
         return int(json.load(fh).get("SOCKET_LISTENING_PORT", 8889))
 
 
-def _wait_port_free(port: int, host: str = "127.0.0.1", timeout: float = 10.0) -> None:
+def _wait_port_free(port: int, host: str = "127.0.0.1", timeout: float = 65.0) -> None:
     """
     Attende che `host:port` sia effettivamente BINDABILE — non solo che
     nessuno accetti connessioni lì. `Popen.terminate()` + `.wait()`
@@ -135,6 +135,15 @@ def _wait_port_free(port: int, host: str = "127.0.0.1", timeout: float = 10.0) -
     sottoprocesso) può fallire con "Address already in use" per un
     semplice problema di timing dell'OS, non per il vincolo
     same-process sotto test altrove in questo file.
+
+    Default 65s, non 10-15s come nella prima versione: il TIME_WAIT di
+    TCP su Linux per una connessione realmente stabilita e chiusa è
+    fisso a ~60s (2×MSL, non riducibile via opzioni socket lato
+    "probe") — un timeout più corto fallisce in modo riproducibile ogni
+    volta che almeno una connessione reale client→receiver è stata
+    aperta e chiusa su questa porta (cioè in ogni run che non sia il
+    primissimo). Non è flakiness del cloud Arqit: è il comportamento
+    documentato del kernel.
     """
     deadline = time.monotonic() + timeout
     last_error: OSError | None = None
@@ -395,10 +404,12 @@ def test_n_sequential_clients_against_one_server_succeeds():
             results.append(result)
     finally:
         _stop_server_process(server_proc)
-        # Timeout più largo del default: dopo N negoziazioni il receiver
-        # ha avuto più lavoro in corso (thread, socket) da smaltire
-        # rispetto al caso a un client solo.
-        _wait_port_free(_receiver_port(), timeout=15.0)
+        # Usa il default della funzione (65s): dopo N negoziazioni reali,
+        # l'ultima connessione chiusa sulla porta del receiver è comunque
+        # soggetta allo stesso TIME_WAIT fisso di ~60s di una singola
+        # negoziazione — non serve un timeout diverso, serve solo che sia
+        # abbastanza lungo in assoluto (vedi _wait_port_free).
+        _wait_port_free(_receiver_port())
 
     assert len(results) == _N_CLIENTS
     kids = [r["kid"] for r in results]
