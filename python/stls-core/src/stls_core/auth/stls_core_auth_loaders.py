@@ -1,15 +1,15 @@
 """
 stls_core_auth_loaders.py
 ------------------------
-Loader intercambiabili per le API key di STLS.
+Interchangeable loaders for STLS API keys.
 
-Selezione via env AUTH_LOADER_BACKEND:
-    static   → StaticLoader   (in-memory, compatibile con AuthConfig attuale)
-    file     → FileLoader     (YAML/JSON, path da AUTH_KEYS_FILE)
-    postgres → PostgresLoader (asyncpg, dsn da AUTH_PG_DSN)
+Selected via the AUTH_LOADER_BACKEND env var:
+    static   → StaticLoader   (in-memory, compatible with the current AuthConfig)
+    file     → FileLoader     (YAML/JSON, path from AUTH_KEYS_FILE)
+    postgres → PostgresLoader (asyncpg, dsn from AUTH_PG_DSN)
 
-Il BackgroundRefresher in auth_manager chiama load_all() periodicamente.
-ApiKeyManager chiama load_one() solo su cache miss.
+The BackgroundRefresher in auth_manager calls load_all() periodically.
+ApiKeyManager calls load_one() only on a cache miss.
 """
 
 from __future__ import annotations
@@ -36,51 +36,52 @@ logger = logging.getLogger(__name__)
 
 class ApiKeyLoader(ABC):
     """
-    Interfaccia comune per tutti i loader.
+    Common interface for all loaders.
 
-    Ogni implementazione deve essere safe per uso concorrente
-    (chiamate asyncio parallele da manager e refresher).
+    Every implementation must be safe for concurrent use
+    (parallel asyncio calls from the manager and the refresher).
     """
 
     @abstractmethod
     async def load_all(self) -> list[KeyRecord]:
         """
-        Carica tutti i KeyRecord disponibili.
+        Loads all available KeyRecords.
 
-        Chiamato dal BackgroundRefresher a ogni ciclo di refresh.
-        Deve restituire una lista vuota (non alzare eccezione) se la
-        sorgente è temporaneamente non disponibile — il refresher logga
-        e riprova al prossimo intervallo.
+        Called by the BackgroundRefresher on every refresh cycle.
+        Must return an empty list (not raise) if the source is
+        temporarily unavailable — the refresher logs it and retries
+        on the next interval.
         """
         ...
 
     @abstractmethod
     async def load_one(self, key_id: str) -> KeyRecord | None:
         """
-        Carica un singolo KeyRecord per key_id (SHA-256 hex).
+        Loads a single KeyRecord by key_id (SHA-256 hex).
 
-        Chiamato da ApiKeyManager su cache miss.
-        Restituisce None se non trovato.
+        Called by ApiKeyManager on a cache miss.
+        Returns None if not found.
         """
         ...
 
     async def close(self) -> None:
-        """Rilascia risorse (connessioni, file handle). Override se necessario."""
+        """Releases resources (connections, file handles). Override if needed."""
 
 
 # ---------------------------------------------------------------------------
-# StaticLoader — compatibile con AuthConfig attuale, per test/dev
+# StaticLoader — compatible with the current AuthConfig, for test/dev
 # ---------------------------------------------------------------------------
 
 class StaticLoader(ApiKeyLoader):
     """
-    Loader in-memory: le chiavi sono passate direttamente al costruttore.
+    In-memory loader: the keys are passed directly to the constructor.
 
-    Mantiene la compatibilità con il sistema AuthConfig già in produzione.
-    Accetta sia KeyRecord già costruiti sia dict con i campi di KeyRecord,
-    sia plaintext (raw_key + client_id) per semplicità nei test.
+    Maintains compatibility with the AuthConfig system already in
+    production. Accepts either already-built KeyRecords, dicts with
+    KeyRecord's fields, or plaintext (raw_key + client_id) for
+    simplicity in tests.
 
-    Esempio di utilizzo con plaintext (retrocompatibile):
+    Usage example with plaintext (backward compatible):
 
         loader = StaticLoader.from_plaintext({
             "my-secret-key-1": {"client_id": "agent-weather",
@@ -89,13 +90,13 @@ class StaticLoader(ApiKeyLoader):
                                 "scopes": ["secure-a2a", "admin"]},
         })
 
-    Esempio con AuthConfig attuale:
+    Usage with the current AuthConfig:
 
         loader = StaticLoader.from_auth_config(auth_config)
     """
 
     def __init__(self, records: list[KeyRecord]) -> None:
-        # index per key_id per lookup O(1)
+        # index by key_id for O(1) lookup
         self._store: dict[str, KeyRecord] = {r.key_id: r for r in records}
 
     # ------------------------------------------------------------------
@@ -108,9 +109,9 @@ class StaticLoader(ApiKeyLoader):
         keys: dict[str, dict[str, Any]],
     ) -> "StaticLoader":
         """
-        Costruisce il loader da un dict {raw_key: {client_id, scopes, ...}}.
+        Builds the loader from a dict {raw_key: {client_id, scopes, ...}}.
 
-        Il plaintext viene hashato immediatamente e poi scartato.
+        The plaintext is hashed immediately and then discarded.
         """
         records: list[KeyRecord] = []
         for raw_key, props in keys.items():
@@ -129,10 +130,10 @@ class StaticLoader(ApiKeyLoader):
     @classmethod
     def from_auth_config(cls, auth_config: Any) -> "StaticLoader":
         """
-        Costruisce il loader dall'AuthConfig esistente di STLS.
+        Builds the loader from STLS's existing AuthConfig.
 
-        Compatibile con la struttura attuale: auth_config.api_keys (lista
-        di stringhe plaintext) e auth_config.bearer_tokens.
+        Compatible with the current structure: auth_config.api_keys (a
+        list of plaintext strings) and auth_config.bearer_tokens.
         """
         records: list[KeyRecord] = []
 
@@ -173,11 +174,11 @@ class StaticLoader(ApiKeyLoader):
         return self._store.get(key_id)
 
     def add(self, record: KeyRecord) -> None:
-        """Aggiunge o aggiorna un record a runtime (utile nei test)."""
+        """Adds or updates a record at runtime (useful in tests)."""
         self._store[record.key_id] = record
 
     def remove(self, key_id: str) -> None:
-        """Rimuove un record a runtime."""
+        """Removes a record at runtime."""
         self._store.pop(key_id, None)
 
     def __len__(self) -> int:
@@ -185,35 +186,35 @@ class StaticLoader(ApiKeyLoader):
 
 
 # ---------------------------------------------------------------------------
-# FileLoader — YAML o JSON, ricaricabile a runtime
+# FileLoader — YAML or JSON, reloadable at runtime
 # ---------------------------------------------------------------------------
 
 class FileLoader(ApiKeyLoader):
     """
-    Carica le API key da un file YAML o JSON.
+    Loads API keys from a YAML or JSON file.
 
-    Path configurabile via env AUTH_KEYS_FILE.
-    Supporta reload a runtime: se il file cambia su disco, il
-    BackgroundRefresher legge la versione aggiornata al prossimo ciclo
-    (nessun SIGHUP necessario — il mtime viene confrontato a ogni load_all).
+    Path configurable via the AUTH_KEYS_FILE env var.
+    Supports runtime reload: if the file changes on disk, the
+    BackgroundRefresher reads the updated version on the next cycle
+    (no SIGHUP needed — the mtime is compared on every load_all() call).
 
-    Formato YAML atteso::
+    Expected YAML format::
 
         keys:
-          - key_id: "<sha256 hex>"          # oppure raw_key (vedi sotto)
+          - key_id: "<sha256 hex>"          # or raw_key (see below)
             client_id: "agent-weather"
             scopes:
               - secure-a2a
             endpoints:
               - /secure-a2a
               - /secure-a2a/stream
-            description: "Agente meteo"
-            expires_at: "2027-01-01T00:00:00Z"  # opzionale
+            description: "Weather agent"
+            expires_at: "2027-01-01T00:00:00Z"  # optional
 
-    Se nel file compare ``raw_key`` invece di ``key_id``, il loader
-    esegue l'hash e scarta il plaintext in memoria.
+    If the file has ``raw_key`` instead of ``key_id``, the loader
+    hashes it and discards the plaintext in memory.
 
-    Formato JSON equivalente con lista piatta::
+    Equivalent flat-list JSON format::
 
         [
           {"key_id": "...", "client_id": "...", "scopes": ["secure-a2a"]},
@@ -246,16 +247,16 @@ class FileLoader(ApiKeyLoader):
         return list(self._cache.values())
 
     async def load_one(self, key_id: str) -> KeyRecord | None:
-        # forza reload se cache vuota o file cambiato
+        # forces a reload if the cache is empty or the file changed
         await self.load_all()
         return self._cache.get(key_id)
 
     # ------------------------------------------------------------------
-    # Parsing interno
+    # Internal parsing
     # ------------------------------------------------------------------
 
     def _parse_file(self) -> list[KeyRecord]:
-        """Legge e valida il file YAML/JSON, restituisce lista di KeyRecord."""
+        """Reads and validates the YAML/JSON file, returns a list of KeyRecords."""
         suffix = self._path.suffix.lower()
         text = self._path.read_text(encoding="utf-8")
 
@@ -268,7 +269,7 @@ class FileLoader(ApiKeyLoader):
             logger.error("FileLoader: errore parsing %s: %s", self._path, exc)
             return []
 
-        # normalizza: accetta sia dict con chiave "keys" sia lista piatta
+        # normalizes: accepts either a dict with a "keys" field or a flat list
         if isinstance(raw, dict):
             items = raw.get("keys", [])
         elif isinstance(raw, list):
@@ -290,25 +291,25 @@ class FileLoader(ApiKeyLoader):
 
     @staticmethod
     def _item_to_record(item: dict[str, Any]) -> KeyRecord:
-        """Converte un dict YAML/JSON in KeyRecord, gestendo raw_key."""
+        """Converts a YAML/JSON dict into a KeyRecord, handling raw_key."""
         if "raw_key" in item and "key_id" not in item:
-            item = dict(item)  # copia per non mutare l'originale
+            item = dict(item)  # copy so as not to mutate the original
             item["key_id"] = hash_key(item.pop("raw_key"))
         return KeyRecord.from_dict(item)
 
     @staticmethod
     def _parse_yaml(text: str) -> Any:
         """
-        Parse YAML con fallback graceful se PyYAML non è installato.
+        Parses YAML with a graceful fallback if PyYAML isn't installed.
 
-        Per ambienti production si consiglia di aggiungere pyyaml alle
-        dipendenze. In development, JSON è sempre disponibile.
+        For production environments it's recommended to add pyyaml to
+        the dependencies. In development, JSON is always available.
         """
         try:
             import yaml  # type: ignore
             return yaml.safe_load(text)
         except ImportError:
-            # fallback: prova a parsare come JSON (superset di YAML per casi semplici)
+            # fallback: try parsing as JSON (a superset of YAML for simple cases)
             logger.warning(
                 "FileLoader: pyyaml non installato, tento JSON parse del file .yaml"
             )
@@ -316,20 +317,20 @@ class FileLoader(ApiKeyLoader):
 
 
 # ---------------------------------------------------------------------------
-# PostgresLoader — asyncpg, per ambienti production
+# PostgresLoader — asyncpg, for production environments
 # ---------------------------------------------------------------------------
 
 class PostgresLoader(ApiKeyLoader):
     """
-    Carica le API key da PostgreSQL via asyncpg.
+    Loads API keys from PostgreSQL via asyncpg.
 
-    Configurazione via env:
-        AUTH_PG_DSN          DSN PostgreSQL (es. postgresql://user:pass@host/db)
-        SF_API_KEYS_TABLE    Nome tabella (default: sf_api_keys)
+    Configuration via env:
+        AUTH_PG_DSN          PostgreSQL DSN (e.g. postgresql://user:pass@host/db)
+        SF_API_KEYS_TABLE    Table name (default: sf_api_keys)
 
-    Il connection pool viene creato al primo utilizzo (lazy init).
+    The connection pool is created on first use (lazy init).
 
-    Schema atteso::
+    Expected schema::
 
         CREATE TABLE sf_api_keys (
             key_id      TEXT        PRIMARY KEY,
@@ -343,11 +344,11 @@ class PostgresLoader(ApiKeyLoader):
             metadata    JSONB       DEFAULT '{}'
         );
 
-    Il loader filtra automaticamente le righe con ``revoked = true``.
-    La revoca effettiva viene gestita da RedisKeyCache (SET stls:revoked).
+    The loader automatically filters out rows with ``revoked = true``.
+    Actual revocation is handled by RedisKeyCache (the SET stls:revoked).
     """
 
-    # Default tabella — sovrascrivibile via env SF_API_KEYS_TABLE
+    # Default table — overridable via the SF_API_KEYS_TABLE env var
     DEFAULT_TABLE = "sf_api_keys"
 
     def __init__(
@@ -360,8 +361,8 @@ class PostgresLoader(ApiKeyLoader):
         self._dsn = dsn or os.environ.get("AUTH_PG_DSN", "")
         self._min_pool = min_pool_size
         self._max_pool = max_pool_size
-        self._pool: Any = None  # asyncpg.Pool, tipizzato come Any per evitare import a livello modulo
-        # Nome tabella: parametro esplicito > env SF_API_KEYS_TABLE > default
+        self._pool: Any = None  # asyncpg.Pool, typed as Any to avoid a module-level import
+        # Table name: explicit parameter > SF_API_KEYS_TABLE env > default
         self._table = table or os.environ.get("SF_API_KEYS_TABLE", self.DEFAULT_TABLE)
         logger.debug("PostgresLoader: table=%s", self._table)
 
@@ -370,7 +371,7 @@ class PostgresLoader(ApiKeyLoader):
     # ------------------------------------------------------------------
 
     async def _get_pool(self) -> Any:
-        """Crea il pool asyncpg al primo utilizzo (lazy)."""
+        """Creates the asyncpg pool on first use (lazy)."""
         if self._pool is not None:
             return self._pool
         try:
@@ -446,20 +447,20 @@ class PostgresLoader(ApiKeyLoader):
             return None
 
     # ------------------------------------------------------------------
-    # Conversione row → KeyRecord
+    # Row → KeyRecord conversion
     # ------------------------------------------------------------------
 
     @staticmethod
     def _row_to_record(row: Any) -> KeyRecord:
         """
-        Converte una asyncpg Record in KeyRecord.
+        Converts an asyncpg Record into a KeyRecord.
 
-        asyncpg restituisce:
+        asyncpg returns:
         - TEXT[]     → list[str]
-        - JSONB      → dict già deserializzato OPPURE stringa se il driver
-                       non ha ancora deserializzato (es. PG18 + asyncpg 0.31).
-                       Gestiamo entrambi i casi con _safe_dict().
-        - TIMESTAMPTZ → datetime aware (UTC)
+        - JSONB      → an already-deserialized dict, OR a string if the
+                       driver hasn't deserialized it yet (e.g. PG18 +
+                       asyncpg 0.31). Both cases handled via _safe_dict().
+        - TIMESTAMPTZ → an aware datetime (UTC)
         """
         return KeyRecord(
             key_id=row["key_id"],
@@ -475,11 +476,11 @@ class PostgresLoader(ApiKeyLoader):
 
 def _safe_dict(value: Any) -> dict:
     """
-    Converte in dict in modo sicuro il valore di una colonna JSONB.
+    Safely converts a JSONB column value into a dict.
 
-    asyncpg di solito deserializza JSONB → dict automaticamente,
-    ma con alcune versioni di PostgreSQL (es. PG 18) o asyncpg (0.31)
-    può restituire una stringa JSON o None.
+    asyncpg usually deserializes JSONB → dict automatically, but with
+    some PostgreSQL versions (e.g. PG 18) or asyncpg versions (0.31)
+    it may return a JSON string or None.
     """
     import json as _json
     if value is None:
@@ -496,7 +497,7 @@ def _safe_dict(value: Any) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Factory — crea il loader corretto in base all'env AUTH_LOADER_BACKEND
+# Factory — builds the correct loader based on the AUTH_LOADER_BACKEND env var
 # ---------------------------------------------------------------------------
 
 def create_loader(
@@ -504,18 +505,18 @@ def create_loader(
     **kwargs: Any,
 ) -> ApiKeyLoader:
     """
-    Factory function. Istanzia il loader corretto.
+    Factory function. Instantiates the correct loader.
 
     Args:
-        backend: "static" | "file" | "postgres" oppure LoaderBackend enum.
-                 Default: env AUTH_LOADER_BACKEND, fallback "static".
-        **kwargs: Argomenti passati al costruttore del loader specifico.
+        backend: "static" | "file" | "postgres", or a LoaderBackend enum.
+                 Default: the AUTH_LOADER_BACKEND env var, fallback "static".
+        **kwargs: Arguments passed to the specific loader's constructor.
                   StaticLoader: records=[...]
                   FileLoader:   path="..."
                   PostgresLoader: dsn="...", min_pool_size=1, max_pool_size=5
 
     Raises:
-        ValueError: se il backend non è riconosciuto.
+        ValueError: if the backend is not recognized.
     """
     if backend is None:
         backend = os.environ.get("AUTH_LOADER_BACKEND", LoaderBackend.STATIC.value)

@@ -1,15 +1,15 @@
 """
 stls_core_providers_base.py
 ---------------------------
-Interfacce ABC del sistema key provider STLS e implementazione Base.
+ABC interfaces for the STLS key provider system and the Base implementation.
 
-Contenuto:
-  - ABC: KeySessionProvider, KeyProviderClient, KeyProviderServer, KeyProvider
-  - Implementazione Base: chiave fissa cablata, zero dipendenze esterne.
-    Usata per sviluppo, test e ambienti dove Arqit non è disponibile.
+Contents:
+  - ABCs: KeySessionProvider, KeyProviderClient, KeyProviderServer, KeyProvider
+  - Base implementation: a fixed hardcoded key, zero external dependencies.
+    Used for development, testing and environments where Arqit isn't available.
 
-Il provider Base non richiede né JVM né wheel Arqit — il modulo si importa
-con la sola dipendenza su stdlib.
+The Base provider requires neither a JVM nor the Arqit wheel — the module
+imports with only the stdlib as a dependency.
 """
 
 from __future__ import annotations
@@ -24,16 +24,16 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# ABC — interfacce del sistema provider
+# ABCs — provider system interfaces
 # ---------------------------------------------------------------------------
 
 class KeySessionProvider(ABC):
     """
-    Interfaccia per un provider di sessione crittografica.
+    Interface for a cryptographic session provider.
 
-    Implementata da Base (chiave fissa) e ArqitPy (SKA-Platform).
-    Usata da perform_handshake() e SessionCache per recuperare
-    la chiave di sessione associata a un key identifier.
+    Implemented by Base (fixed key) and ArqitPy (SKA-Platform).
+    Used by perform_handshake() and SessionCache to retrieve
+    the session key associated with a key identifier.
     """
 
     class KeySessionProviderType(Enum):
@@ -42,98 +42,98 @@ class KeySessionProvider(ABC):
 
     @abstractmethod
     def getSessionType(self) -> "KeySessionProvider.KeySessionProviderType":
-        """Restituisce il ruolo del provider (CLIENT o SERVER)."""
+        """Returns the provider's role (CLIENT or SERVER)."""
         pass
 
     @abstractmethod
     async def getSessionKeyIdentifier(self) -> str:
         """
-        Restituisce il key identifier (kid) della sessione corrente.
+        Returns the key identifier (kid) of the current session.
 
-        Può essere asincrono: su ArqitPy attende che il peering
-        produca almeno una chiave prima di restituire il kid.
+        May be asynchronous: on ArqitPy it waits for the peering
+        process to produce at least one key before returning the kid.
         """
         pass
 
     @abstractmethod
     def setSessionKeyIdentifier(self, session_key_identifier: str) -> None:
-        """Imposta esplicitamente il kid (usato in scenari di riuso sessione)."""
+        """Explicitly sets the kid (used in session-reuse scenarios)."""
         pass
 
     @abstractmethod
     async def getSessionKeyData(self, session_key_identifier: str) -> bytes:
         """
-        Restituisce la chiave di sessione associata al kid fornito.
+        Returns the session key associated with the given kid.
 
         Args:
-            session_key_identifier: Key identifier (kid) da risolvere.
+            session_key_identifier: Key identifier (kid) to resolve.
 
         Returns:
-            Chiave di sessione come bytes.
+            Session key as bytes.
 
         Raises:
-            KeyError: Se il kid non è noto al provider.
-            TimeoutError: Se il provider non riesce a produrre la chiave
-                          entro il timeout (ArqitPy).
+            KeyError: If the kid is not known to the provider.
+            TimeoutError: If the provider fails to produce the key
+                          within the timeout (ArqitPy).
         """
         pass
 
     @abstractmethod
     def getPeerIdentity(self) -> str | None:
-        """Restituisce l'identità del peer (IP, device_id, ecc.) o None."""
+        """Returns the peer's identity (IP, device_id, etc.) or None."""
         pass
 
 
 class KeyProviderClient(ABC):
-    """Interfaccia per il lato client del key provider."""
+    """Interface for the client side of the key provider."""
 
     @abstractmethod
     def start(self) -> None:
-        """Avvia il provider client (negoziazione chiavi, autenticazione)."""
+        """Starts the client provider (key negotiation, authentication)."""
         pass
 
     @abstractmethod
     def createProviderSession(self) -> KeySessionProvider:
-        """Restituisce la sessione provider dopo start()."""
+        """Returns the provider session after start()."""
         pass
 
     @abstractmethod
     def stop(self) -> None:
-        """Ferma il provider client e rilascia risorse."""
+        """Stops the client provider and releases resources."""
         pass
 
 
 class KeyProviderServer(ABC):
-    """Interfaccia per il lato server del key provider."""
+    """Interface for the server side of the key provider."""
 
     @abstractmethod
     async def start(self) -> None:
-        """Avvia il provider server (ascolto, autenticazione)."""
+        """Starts the server provider (listening, authentication)."""
         pass
 
     @abstractmethod
     def createProviderSession(self) -> KeySessionProvider:
-        """Restituisce la sessione provider dopo start()."""
+        """Returns the provider session after start()."""
         pass
 
     @abstractmethod
     async def stop(self) -> None:
-        """Ferma il provider server e rilascia risorse."""
+        """Stops the server provider and releases resources."""
         pass
 
 
 class KeyProvider(ABC):
     """
-    Factory ABC per la creazione di client e server provider.
+    Factory ABC for creating client and server providers.
 
-    Implementata da KeyProviderBase e KeyProviderArqitPy.
-    KeyProviderFactory usa questa interfaccia per istanziare
-    il provider corretto in base a KEY_PROVIDER_NAME.
+    Implemented by KeyProviderBase and KeyProviderArqitPy.
+    KeyProviderFactory uses this interface to instantiate
+    the correct provider based on KEY_PROVIDER_NAME.
     """
 
     @abstractmethod
     def get_name(self) -> str:
-        """Nome identificativo del provider (es. "base", "arqit_py")."""
+        """The provider's identifying name (e.g. "base", "arqit_py")."""
         pass
 
     @abstractmethod
@@ -151,27 +151,27 @@ class KeyProvider(ABC):
 
 class BlockableResult:
     """
-    Oggetto restituito da start() dei provider server sincroni.
-    Compatibile con il pattern .block() usato da KeySessionProviderFactory.
+    Object returned by start() on synchronous server providers.
+    Compatible with the .block() pattern used by KeySessionProviderFactory.
     """
     def block(self) -> None:
         pass
 
 
 # ---------------------------------------------------------------------------
-# Provider Base — chiave fissa, zero dipendenze
+# Base provider — fixed key, zero dependencies
 # ---------------------------------------------------------------------------
 
 _BASE_KEY_ID  = "base-session-key-identifier"
-_BASE_KEY_DATA = b"0123456789abcdef"   # 16 byte — sufficiente per HKDF-Expand
+_BASE_KEY_DATA = b"0123456789abcdef"   # 16 bytes — sufficient for HKDF-Expand
 
 
 class KeySessionProviderBase(KeySessionProvider):
     """
-    KeySessionProvider con chiave fissa cablata.
+    KeySessionProvider with a fixed, hardcoded key.
 
-    Usato per sviluppo, test e CI. Non richiede né JVM né Arqit.
-    La chiave è nota a entrambi i lati senza negoziazione.
+    Used for development, testing and CI. Requires neither a JVM nor Arqit.
+    The key is known to both sides with no negotiation.
     """
 
     def __init__(
@@ -228,9 +228,9 @@ class KeyProviderServerBase(KeyProviderServer):
 
 class KeyProviderBase(KeyProvider):
     """
-    KeyProvider Base — chiave fissa, zero dipendenze esterne.
+    Base KeyProvider — fixed key, no external dependencies.
 
-    Selezione: KEY_PROVIDER_NAME=base
+    Selection: KEY_PROVIDER_NAME=base
     """
 
     def get_name(self) -> str:

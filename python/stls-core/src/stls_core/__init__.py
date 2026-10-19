@@ -1,10 +1,10 @@
 """
 stls_core
 ---------
-Core crittografico protocol-agnostic per STLS.
+Protocol-agnostic cryptographic core for STLS.
 
-Esporta le API pubbliche di tutti i sottomoduli.
-I package figli (stls-a2a, stls-mcp) importano da qui.
+Exports the public API of all submodules.
+Child packages (stls-a2a, stls-mcp) import from here.
 """
 
 from .stls_core_constants import (
@@ -131,13 +131,13 @@ __all__ = [
     "SessionCacheFactory",
     "InMemorySessionCache",
     "RedisSessionCache",
-    # handshake standard
+    # standard handshake
     "HandshakeRequest",
     "HandshakeResponse",
     "HandshakeError",
     "perform_handshake",
     "verify_handshake_proof",
-    # handshake PQC
+    # PQC handshake
     "PQCHandshakeRequest",
     "PQCHandshakeResponse",
     "PQCHandshakeError",
@@ -156,7 +156,7 @@ __all__ = [
     "KeySessionProviderBase",
     "KeyProviderFactory",
     "KeySessionProviderFactory",
-    # providers PQC
+    # PQC providers
     "KeyProviderPQC",
     "KeyProviderClientPQC",
     "KeyProviderServerPQC",

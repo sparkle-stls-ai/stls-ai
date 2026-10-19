@@ -1,10 +1,10 @@
 """
 stls_core_auth_models.py
 -----------------------
-Data model condiviso per il sistema di autenticazione API key di STLS.
+Shared data model for the STLS API key authentication system.
 
-Nessuna dipendenza esterna — solo stdlib. Importabile da tutti i moduli
-auth senza rischio di circular import.
+No external dependencies — stdlib only. Importable from every auth
+module with no circular import risk.
 """
 
 from __future__ import annotations
@@ -19,48 +19,48 @@ from typing import Any
 
 
 # ---------------------------------------------------------------------------
-# Enumerazioni
+# Enumerations
 # ---------------------------------------------------------------------------
 
 class AuthResult(Enum):
-    """Esito della validazione di una API key."""
+    """Outcome of an API key validation."""
     OK = "ok"
-    INVALID = "invalid"          # key non trovata o hash non corrisponde
-    REVOKED = "revoked"          # key esplicitamente revocata
-    EXPIRED = "expired"          # expires_at nel passato
-    SCOPE_DENIED = "scope_denied"    # endpoint non autorizzato per questa key
+    INVALID = "invalid"          # key not found or hash mismatch
+    REVOKED = "revoked"          # key explicitly revoked
+    EXPIRED = "expired"          # expires_at is in the past
+    SCOPE_DENIED = "scope_denied"    # endpoint not authorized for this key
     INTERNAL_ERROR = "internal_error"
 
 
 class LoaderBackend(Enum):
-    """Backend configurabile via env AUTH_LOADER_BACKEND."""
-    STATIC = "static"       # in-memory, compatibile con AuthConfig attuale
-    FILE = "file"           # YAML/JSON da AUTH_KEYS_FILE
-    POSTGRES = "postgres"   # asyncpg, dsn da AUTH_PG_DSN
+    """Backend configurable via the AUTH_LOADER_BACKEND env var."""
+    STATIC = "static"       # in-memory, compatible with the current AuthConfig
+    FILE = "file"           # YAML/JSON from AUTH_KEYS_FILE
+    POSTGRES = "postgres"   # asyncpg, dsn from AUTH_PG_DSN
 
 
 # ---------------------------------------------------------------------------
-# KeyRecord — record principale di una API key
+# KeyRecord — the main record of an API key
 # ---------------------------------------------------------------------------
 
 @dataclass
 class KeyRecord:
     """
-    Rappresentazione di una API key nel sistema.
+    Representation of an API key in the system.
 
-    Il campo ``key_id`` contiene sempre l'hash SHA-256 del valore grezzo
-    della chiave — il plaintext non viene mai persistito né loggato.
+    The ``key_id`` field always holds the SHA-256 hash of the raw key
+    value — the plaintext is never persisted nor logged.
 
     Attributes:
-        key_id:      SHA-256 hex digest del valore grezzo (mai il plaintext).
-        client_id:   Identificativo del client/agente (es. "agent-weather").
-        scopes:      Lista di scope autorizzati (es. ["secure-a2a", "admin"]).
-        endpoints:   Endpoint autorizzati (es. ["/secure-a2a"]).
-                     Lista vuota = tutti gli endpoint autorizzati.
-        expires_at:  Scadenza UTC. None = nessuna scadenza.
-        created_at:  Timestamp di creazione UTC.
-        description: Nota leggibile, opzionale.
-        metadata:    Dict arbitrario per uso applicativo (es. tenant, piano).
+        key_id:      SHA-256 hex digest of the raw key value (never the plaintext).
+        client_id:   Client/agent identifier (e.g. "agent-weather").
+        scopes:      List of authorized scopes (e.g. ["secure-a2a", "admin"]).
+        endpoints:   Authorized endpoints (e.g. ["/secure-a2a"]).
+                     Empty list = all endpoints authorized.
+        expires_at:  UTC expiry. None = never expires.
+        created_at:  UTC creation timestamp.
+        description: Human-readable note, optional.
+        metadata:    Arbitrary dict for application use (e.g. tenant, plan).
     """
 
     key_id: str
@@ -73,21 +73,21 @@ class KeyRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
-    # Validazione dello stato
+    # State validation
     # ------------------------------------------------------------------
 
     def is_expired(self) -> bool:
-        """True se la key ha una scadenza e questa è già trascorsa."""
+        """True if the key has an expiry and it has already passed."""
         if self.expires_at is None:
             return False
         return datetime.now(timezone.utc) >= self.expires_at
 
     def allows_endpoint(self, endpoint: str) -> bool:
         """
-        True se questa key è autorizzata per l'endpoint richiesto.
+        True if this key is authorized for the requested endpoint.
 
-        La verifica è prefix-based: una key con endpoint=["/secure-a2a"]
-        autorizza anche "/secure-a2a/stream". Lista vuota = wildcard.
+        The check is prefix-based: a key with endpoints=["/secure-a2a"]
+        also authorizes "/secure-a2a/stream". An empty list means wildcard.
         """
         if not self.endpoints:
             return True
@@ -96,15 +96,15 @@ class KeyRecord:
                    for e in self.endpoints)
 
     def has_scope(self, scope: str) -> bool:
-        """True se la key ha lo scope richiesto o il wildcard '*'."""
+        """True if this key has the requested scope or the '*' wildcard."""
         return "*" in self.scopes or scope in self.scopes
 
     # ------------------------------------------------------------------
-    # Serializzazione / deserializzazione
+    # Serialization / deserialization
     # ------------------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
-        """Converte in dict JSON-serializzabile (per Redis, log, API)."""
+        """Converts to a JSON-serializable dict (for Redis, logs, API)."""
         return {
             "key_id": self.key_id,
             "client_id": self.client_id,
@@ -118,7 +118,7 @@ class KeyRecord:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "KeyRecord":
-        """Ricostruisce un KeyRecord da un dict (da Redis JSON, PG row, YAML)."""
+        """Reconstructs a KeyRecord from a dict (from Redis JSON, a PG row, YAML)."""
         expires_at = None
         if data.get("expires_at"):
             expires_at = datetime.fromisoformat(data["expires_at"])
@@ -152,25 +152,25 @@ class KeyRecord:
 
 
 # ---------------------------------------------------------------------------
-# AuditEntry — record di ogni tentativo di autenticazione
+# AuditEntry — record of every authentication attempt
 # ---------------------------------------------------------------------------
 
 @dataclass
 class AuditEntry:
     """
-    Singola voce del log di audit per ogni chiamata a validate().
+    Single audit log entry for every call to validate().
 
-    Non contiene mai il plaintext della chiave. Strutturato per essere
-    facilmente serializzabile in JSON e inviato a sistemi SIEM.
+    Never contains the key's plaintext. Structured to be easily
+    serializable to JSON and sent to SIEM systems.
     """
 
     timestamp: datetime
-    key_id: str | None          # None se la key era malformata / assente
+    key_id: str | None          # None if the key was malformed / absent
     client_id: str | None
     endpoint: str
     result: AuthResult
     remote_addr: str = ""
-    request_id: str = ""        # trace id dalla request, se disponibile
+    request_id: str = ""        # trace id from the request, if available
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -185,18 +185,18 @@ class AuditEntry:
 
 
 # ---------------------------------------------------------------------------
-# ValidationResult — output di ApiKeyManager.validate()
+# ValidationResult — output of ApiKeyManager.validate()
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ValidationResult:
     """
-    Esito completo della validazione restituito da ApiKeyManager.
+    Full validation outcome returned by ApiKeyManager.
 
     Attributes:
-        result:  Codice esito (AuthResult).
-        record:  KeyRecord se result == OK, None altrimenti.
-        audit:   AuditEntry corrispondente, sempre presente.
+        result:  Outcome code (AuthResult).
+        record:  KeyRecord if result == OK, None otherwise.
+        audit:   Corresponding AuditEntry, always present.
     """
 
     result: AuthResult
@@ -209,8 +209,8 @@ class ValidationResult:
 
     def www_authenticate_header(self, realm: str = "STLS") -> str:
         """
-        Valore dell'header WWW-Authenticate per risposte 401.
-        Segue RFC 7235.
+        Value of the WWW-Authenticate header for 401 responses.
+        Follows RFC 7235.
         """
         if self.result == AuthResult.EXPIRED:
             return f'ApiKey realm="{realm}", error="token_expired"'
@@ -222,82 +222,83 @@ class ValidationResult:
 
 
 # ---------------------------------------------------------------------------
-# Utilità crittografiche — usate da manager e loaders
+# Cryptographic utilities — used by the manager and the loaders
 # ---------------------------------------------------------------------------
 
 def hash_key(raw_key: str) -> str:
     """
-    Calcola SHA-256 hex digest del valore grezzo della API key.
+    Computes the SHA-256 hex digest of the raw API key value.
 
-    È l'unica funzione che riceve il plaintext. Usarla sempre come
-    prima operazione, poi scartare il valore raw.
+    This is the only function that receives the plaintext. Always use
+    it as the first operation, then discard the raw value.
     """
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
 def constant_time_equal(a: str, b: str) -> bool:
     """
-    Confronto timing-safe tra due stringhe (wrapper su hmac.compare_digest).
-    Previene timing attacks sulla validazione delle chiavi.
+    Timing-safe comparison between two strings (wrapper over hmac.compare_digest).
+    Prevents timing attacks on key validation.
     """
     return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
 
 
 def generate_api_key(prefix: str = "stls") -> tuple[str, str]:
     """
-    Genera una nuova API key sicura.
+    Generates a new secure API key.
 
     Returns:
-        (raw_key, key_id): il plaintext da consegnare al client
-        e il key_id (SHA-256) da persistere.
+        (raw_key, key_id): the plaintext to deliver to the client
+        and the key_id (SHA-256) to persist.
 
-    Formato: ``{prefix}_{32 byte hex random}``
-    Entropia: 256 bit.
+    Format: ``{prefix}_{32 random hex bytes}``
+    Entropy: 256 bits.
     """
     raw = f"{prefix}_{secrets.token_hex(32)}"
     return raw, hash_key(raw)
 
 
 # ---------------------------------------------------------------------------
-# AuthConfig — validazione statica leggera, senza loader/cache/refresh
+# AuthConfig — lightweight static validation, no loader/cache/refresh
 # ---------------------------------------------------------------------------
 
 @dataclass
 class AuthConfig:
     """
-    Configurazione statica dell'autorizzazione, in-memory, senza loader/
-    Redis/refresh — pensata per test, script standalone e deployment
-    piccoli dove il ciclo di vita completo di ApiKeyManager (loader,
-    RedisKeyCache, BackgroundRefresher, avvio/arresto async) è cerimonia
-    non necessaria.
+    Static, in-memory authorization configuration, with no loader/
+    Redis/refresh — meant for tests, standalone scripts and small
+    deployments where ApiKeyManager's full lifecycle (loader,
+    RedisKeyCache, BackgroundRefresher, async start/stop) is
+    unnecessary ceremony.
 
-    Nata in stls-a2a come classe locale (pydantic BaseModel), spostata qui
-    in stls-core per essere condivisa senza duplicazione con stls-mcp — a
-    differenza di KeyRecord/ApiKeyManager, non richiede alcuna dipendenza
-    esterna (redis/yaml/asyncpg restano comunque lazy, come nel resto di
-    questo file), quindi non introduce alcun nuovo requisito di import
-    per chi usa già ApiKeyManager: è dataclass stdlib pura, coerente con
-    KeyRecord/AuditEntry in questo stesso modulo.
+    Originally a local class in stls-a2a (a pydantic BaseModel), moved
+    here to stls-core to actually be shared with stls-mcp without
+    duplication — unlike KeyRecord/ApiKeyManager, it requires no
+    external dependency (redis/yaml/asyncpg stay lazy here too, as in
+    the rest of this file), so it introduces no new import requirement
+    for anyone already using ApiKeyManager: it's a pure stdlib
+    dataclass, consistent with KeyRecord/AuditEntry in this same module.
 
-    Supporta due schemi, usabili insieme o separatamente:
+    Supports two schemes, usable together or separately:
       - Bearer token : header  Authorization: Bearer <token>
       - API Key      : header  X-API-Key: <key>
-                       oppure  query param  ?api_key=<key>
+                       or      query param  ?api_key=<key>
 
-    Se entrambi i set sono vuoti nessuna validazione viene effettuata
-    (retrocompatibilità: AuthConfig() lascia gli endpoint aperti).
-    Il confronto avviene con constant_time_equal() (hmac.compare_digest)
-    per prevenire timing attacks.
+    If both sets are empty, no validation is performed (backward
+    compatibility: AuthConfig() leaves the endpoints open).
+    The comparison uses constant_time_equal() (hmac.compare_digest)
+    to prevent timing attacks.
 
-    Non sostituisce ApiKeyManager: dove serve rotazione delle chiavi senza
-    riavvii, audit strutturato, scope/endpoint per-key, o un backend
-    Redis/File/Postgres condiviso tra più istanze, usare ApiKeyManager.
-    AuthConfig resta il fallback "due righe per un test locale" — priorità
-    inversa rispetto ad ApiKeyManager quando entrambi sono configurati
-    (vedi il pattern _check_auth_async in stls-a2a e il gate ASGI in
-    stls-mcp: ApiKeyManager, se presente, ha sempre precedenza).
+    Does not replace ApiKeyManager: where key rotation without
+    restarts, structured audit, per-key scope/endpoint, or a shared
+    Redis/File/Postgres backend across multiple instances is needed,
+    use ApiKeyManager instead. AuthConfig remains the "two lines for a
+    local test" fallback — lower priority than ApiKeyManager when both
+    are configured (see the _check_auth_async pattern in stls-a2a and
+    the ASGI gate in stls-mcp: ApiKeyManager, when present, always
+    takes precedence).
 
-    Esempio:
+    Example:
         AuthConfig(api_keys={"key-abc123"}, realm="My Server")
     """
     bearer_tokens: set[str] = field(default_factory=set)
@@ -309,7 +310,7 @@ class AuthConfig:
         return bool(self.bearer_tokens or self.api_keys)
 
     def check(self, authorization: str | None, api_key: str | None) -> bool:
-        """Verifica le credenziali fornite. True se almeno uno schema è valido."""
+        """Verifies the given credentials. True if at least one scheme is valid."""
         if self.bearer_tokens and authorization:
             parts = authorization.split(" ", 1)
             if len(parts) == 2 and parts[0].lower() == "bearer":
@@ -326,12 +327,12 @@ class AuthConfig:
 
 
 # ---------------------------------------------------------------------------
-# Costanti di configurazione (valori di default — sovrascrivibili via env)
+# Configuration constants (defaults — overridable via env)
 # ---------------------------------------------------------------------------
 
-DEFAULT_KEY_TTL_SECONDS: int = 3600          # TTL Redis per i KeyRecord
-DEFAULT_REFRESH_INTERVAL_SECONDS: int = 300  # intervallo BackgroundRefresher
+DEFAULT_KEY_TTL_SECONDS: int = 3600          # Redis TTL for KeyRecords
+DEFAULT_REFRESH_INTERVAL_SECONDS: int = 300  # BackgroundRefresher interval
 
 REDIS_KEY_PREFIX = "stls:key:"              # stls:key:{key_id}
-REDIS_REVOKED_SET = "stls:revoked"          # SET dei key_id revocati
-REDIS_INDEX_SET = "stls:keys:index"         # SET di tutti i key_id noti
+REDIS_REVOKED_SET = "stls:revoked"          # SET of revoked key_ids
+REDIS_INDEX_SET = "stls:keys:index"         # SET of all known key_ids

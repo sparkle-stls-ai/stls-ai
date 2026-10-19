@@ -1,29 +1,29 @@
 """
 stls_core_auth_manager.py
 ------------------------
-Orchestratore principale del sistema di autenticazione API key STLS.
+Main orchestrator of the STLS API key authentication system.
 
-Componenti:
-    default_audit_hook()    — audit hook standard basato su logging (factory)
-    ApiKeyManager           — valida le chiavi, applica scope/endpoint check,
-                              scrive l'audit log.
-    ApiKeyManagerGroup      — gestisce il lifecycle di un insieme di manager
-                              con una sola chiamata (start/stop/health/refresh).
-    BackgroundRefresher     — asyncio task che ricarica periodicamente tutte
-                              le chiavi dal loader → Redis.
+Components:
+    default_audit_hook()    — standard logging-based audit hook (factory)
+    ApiKeyManager           — validates keys, applies scope/endpoint checks,
+                              writes the audit log.
+    ApiKeyManagerGroup      — manages the lifecycle of a set of managers
+                              with a single call (start/stop/health/refresh).
+    BackgroundRefresher     — asyncio task that periodically reloads all
+                              keys from the loader → Redis.
 
-Flusso di validazione per ogni richiesta:
-    1. Estrai raw_key dall'header (X-API-Key) o query param (?api_key=).
-    2. hash(raw_key) → key_id  (plaintext scartato subito).
-    3. RedisKeyCache.is_revoked(key_id) → 401 immediato.
+Validation flow for every request:
+    1. Extract raw_key from the header (X-API-Key) or query param (?api_key=).
+    2. hash(raw_key) → key_id  (plaintext discarded immediately).
+    3. RedisKeyCache.is_revoked(key_id) → immediate 401.
     4. RedisKeyCache.get(key_id) → cache hit → check expiry/scope/endpoint.
     5. Cache miss → loader.load_one(key_id) → RedisKeyCache.set() → check.
-    6. Scrivi AuditEntry (logging strutturato + hook opzionale).
-    7. Restituisce ValidationResult.
+    6. Write the AuditEntry (structured logging + optional hook).
+    7. Return the ValidationResult.
 
-Integrazione con il middleware esistente (stls_core_integration.py):
+Integration with the existing middleware (stls_core_integration.py):
 
-    # Inizializzazione (una volta sola, all'avvio dell'app)
+    # Initialization (once, at app startup)
     manager = ApiKeyManager.from_loader(loader)
     await manager.start()
 
@@ -35,7 +35,7 @@ Integrazione con il middleware esistente (stls_core_integration.py):
     # Shutdown
     await manager.stop()
 
-    # Oppure con ApiKeyManagerGroup:
+    # Or with ApiKeyManagerGroup:
     group = ApiKeyManagerGroup().add("static", sm).add("file", fm)
     async with group:
         ...
@@ -63,35 +63,35 @@ from .stls_core_auth_store import RedisKeyCache
 
 logger = logging.getLogger(__name__)
 
-# Tipo per l'hook di audit esterno (es. invio a SIEM, Pub/Sub, ecc.)
+# Type for the external audit hook (e.g. sending to SIEM, Pub/Sub, etc.)
 AuditHook = Callable[[AuditEntry], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
-# Audit hook di default
+# Default audit hook
 # ---------------------------------------------------------------------------
 
 def default_audit_hook(
     logger_instance: logging.Logger | None = None,
 ) -> AuditHook:
     """
-    Factory che restituisce un audit_hook standard basato su logging.
+    Factory returning a standard, logging-based audit_hook.
 
-    Logga ogni tentativo di autenticazione con livello INFO (OK) o WARNING
-    (denied). Adatto per la maggior parte dei deployment; in produzione
-    sostituire con un hook che invia a SIEM/Pub-Sub/Cloud Logging.
+    Logs every authentication attempt at INFO (OK) or WARNING (denied)
+    level. Suited for most deployments; in production replace it with
+    a hook that sends to SIEM/Pub-Sub/Cloud Logging.
 
     Args:
-        logger_instance: Logger da usare. Default: ``stls_core.audit``.
+        logger_instance: Logger to use. Default: ``stls_core.audit``.
 
     Returns:
-        Coroutine callable compatibile con il tipo ``AuditHook``.
+        An async callable compatible with the ``AuditHook`` type.
 
-    Esempio::
+    Example::
 
         manager = ApiKeyManager.from_loader(loader, audit_hook=default_audit_hook())
 
-        # Con logger custom:
+        # With a custom logger:
         manager = ApiKeyManager.from_loader(
             loader,
             audit_hook=default_audit_hook(logging.getLogger("myapp.security")),
@@ -116,20 +116,20 @@ def default_audit_hook(
 
 def _namespace_for_loader(loader: ApiKeyLoader) -> str:
     """
-    Deriva il namespace Redis dal tipo di loader.
+    Derives the Redis namespace from the loader's type.
 
-    Garantisce che loader distinti sullo stesso Redis (es. StaticLoader +
-    FileLoader + PostgresLoader nello stesso server) usino chiavi separate
-    e non si sovrascrivano durante bulk_reload.
+    Guarantees that distinct loaders on the same Redis (e.g.
+    StaticLoader + FileLoader + PostgresLoader on the same server) use
+    separate keys and don't overwrite each other during bulk_reload.
 
     Mapping:
         StaticLoader    → "stls:static"
         FileLoader      → "stls:file"
         PostgresLoader  → "stls:pg"
-        altro           → "stls"   (compatibilità con versioni precedenti)
+        other           → "stls"   (compatible with earlier versions)
 
-    Se si usano più istanze dello stesso tipo (raro), passare ``namespace``
-    esplicitamente a ``from_loader()``.
+    If multiple instances of the same type are used (rare), pass
+    ``namespace`` explicitly to ``from_loader()``.
     """
     loader_type = type(loader).__name__
     _map = {
@@ -148,18 +148,18 @@ def _namespace_for_loader(loader: ApiKeyLoader) -> str:
 
 class ApiKeyManager:
     """
-    Orchestratore della validazione API key.
+    Orchestrator of API key validation.
 
     Args:
-        loader:           Implementazione ApiKeyLoader (Static/File/Postgres).
-        cache:            Istanza RedisKeyCache già configurata.
-        refresh_interval: Secondi tra un reload e l'altro del BackgroundRefresher.
-                          Default: env AUTH_REFRESH_INTERVAL, poi 300s.
-        audit_hook:       Callback async opzionale chiamato dopo ogni validazione.
-                          Riceve l'AuditEntry completo. Utile per SIEM / Pub/Sub.
-                          Se None, viene usato default_audit_hook() automaticamente.
-        enable_cache:     Se False, bypassa Redis e interroga sempre il loader.
-                          Utile per ambienti senza Redis o per test.
+        loader:           ApiKeyLoader implementation (Static/File/Postgres).
+        cache:            An already-configured RedisKeyCache instance.
+        refresh_interval: Seconds between BackgroundRefresher reload cycles.
+                          Default: env AUTH_REFRESH_INTERVAL, then 300s.
+        audit_hook:       Optional async callback invoked after every validation.
+                          Receives the full AuditEntry. Useful for SIEM / Pub/Sub.
+                          If None, default_audit_hook() is used automatically.
+        enable_cache:     If False, bypasses Redis and always queries the loader.
+                          Useful for environments without Redis or for tests.
     """
 
     def __init__(
@@ -175,16 +175,16 @@ class ApiKeyManager:
         self._refresh_interval = refresh_interval or int(
             os.environ.get("AUTH_REFRESH_INTERVAL", DEFAULT_REFRESH_INTERVAL_SECONDS)
         )
-        # Se non viene passato un hook esplicito usa il default basato su logging.
-        # Questo garantisce che ogni tentativo sia sempre loggato senza obbligare
-        # ogni server a definire la stessa boilerplate.
+        # If no explicit hook is passed, falls back to the logging-based default.
+        # This guarantees that every attempt is always logged without
+        # forcing every server to define the same boilerplate.
         self._audit_hook = audit_hook if audit_hook is not None else default_audit_hook()
         self._enable_cache = enable_cache
         self._refresher: BackgroundRefresher | None = None
-        # Trattiene una reference ai task di audit fire-and-forget finché non
-        # completano — senza, l'unica reference sarebbe quella interna al
-        # loop, che asyncio non garantisce contro la garbage collection
-        # prematura del task prima della sua schedulazione.
+        # Keeps a reference to fire-and-forget audit tasks until they
+        # complete — without it, the only reference would be the
+        # loop's internal one, which asyncio does not guarantee against
+        # premature garbage collection of the task before it's scheduled.
         self._audit_tasks: set[asyncio.Task[None]] = set()
 
     # ------------------------------------------------------------------
@@ -203,30 +203,30 @@ class ApiKeyManager:
         **kwargs: Any,
     ) -> "ApiKeyManager":
         """
-        Factory principale: crea un ApiKeyManager da un loader già costruito.
+        Main factory: creates an ApiKeyManager from an already-built loader.
 
-        Legge REDIS_URL e AUTH_KM_USE_REDIS dall'env se non specificati
-        esplicitamente, eliminando la necessità di gestire queste variabili
-        nel codice del server.
+        Reads REDIS_URL and AUTH_KM_USE_REDIS from the environment when
+        not explicitly specified, removing the need to handle these
+        variables in the server's code.
 
         Args:
-            loader:       Istanza ApiKeyLoader (StaticLoader, FileLoader, PostgresLoader).
-            redis_url:    URL Redis. Default: env REDIS_URL, poi redis://localhost:6379.
-            enable_cache: Abilita cache Redis. Default: env AUTH_KM_USE_REDIS (true).
-            audit_hook:   Hook di audit. Default: default_audit_hook().
-            namespace:    Namespace Redis per isolare le chiavi di questo loader.
-                          Default: derivato automaticamente dal tipo di loader
-                          (es. StaticLoader → "stls:static", FileLoader → "stls:file",
+            loader:       ApiKeyLoader instance (StaticLoader, FileLoader, PostgresLoader).
+            redis_url:    Redis URL. Default: env REDIS_URL, then redis://localhost:6379.
+            enable_cache: Enables the Redis cache. Default: env AUTH_KM_USE_REDIS (true).
+            audit_hook:   Audit hook. Default: default_audit_hook().
+            namespace:    Redis namespace to isolate this loader's keys.
+                          Default: automatically derived from the loader's
+                          type (e.g. StaticLoader → "stls:static", FileLoader → "stls:file",
                           PostgresLoader → "stls:pg").
-                          Passare un valore esplicito se si usano più istanze dello
-                          stesso tipo di loader sullo stesso Redis.
-                          Per un singolo manager in produzione usare il default "stls".
-            **kwargs:     Parametri aggiuntivi passati al costruttore.
+                          Pass an explicit value if multiple instances of the
+                          same loader type run on the same Redis.
+                          For a single production manager, use the default "stls".
+            **kwargs:     Extra parameters passed to the constructor.
 
         Returns:
-            ApiKeyManager configurato e pronto per await .start().
+            A configured ApiKeyManager, ready for await .start().
 
-        Esempio::
+        Example::
 
             static_manager = ApiKeyManager.from_loader(
                 StaticLoader.from_plaintext({raw_key: {...}}),
@@ -238,7 +238,7 @@ class ApiKeyManager:
                 PostgresLoader(dsn=os.getenv("AUTH_PG_DSN")),
             ) if os.getenv("AUTH_PG_DSN") else None
 
-            # Namespace esplicito (es. più FileLoader diversi):
+            # Explicit namespace (e.g. several distinct FileLoaders):
             keys_manager = ApiKeyManager.from_loader(loader, namespace="stls:keys-A")
         """
         _redis_url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6379")
@@ -247,8 +247,8 @@ class ApiKeyManager:
                 "AUTH_KM_USE_REDIS", "true"
             ).lower() not in ("false", "0", "no")
 
-        # Namespace auto-derivato dal tipo di loader se non specificato esplicitamente.
-        # Garantisce che loader distinti sullo stesso Redis non si sovrascrivano a vicenda.
+        # Namespace auto-derived from the loader's type if not explicitly specified.
+        # Guarantees that distinct loaders on the same Redis never overwrite each other.
         _ns = namespace or _namespace_for_loader(loader)
         cache = RedisKeyCache(url=_redis_url, namespace=_ns)
         return cls(
@@ -266,16 +266,16 @@ class ApiKeyManager:
         **kwargs: Any,
     ) -> "ApiKeyManager":
         """
-        Crea un ApiKeyManager leggendo tutta la configurazione dall'ambiente.
+        Creates an ApiKeyManager reading the entire configuration from the environment.
 
-        Env vars rilevanti:
+        Relevant env vars:
             AUTH_LOADER_BACKEND   static | file | postgres  (default: static)
-            AUTH_KEYS_FILE        path al file YAML/JSON    (per FileLoader)
-            AUTH_PG_DSN           DSN PostgreSQL            (per PostgresLoader)
-            AUTH_KEY_TTL          TTL Redis in secondi      (default: 3600)
-            AUTH_REFRESH_INTERVAL secondi tra refresh       (default: 300)
-            REDIS_URL             URL Redis                  (default: redis://localhost:6379)
-            AUTH_KM_USE_REDIS     abilita cache Redis        (default: true)
+            AUTH_KEYS_FILE        path to the YAML/JSON file (for FileLoader)
+            AUTH_PG_DSN           PostgreSQL DSN            (for PostgresLoader)
+            AUTH_KEY_TTL          Redis TTL in seconds       (default: 3600)
+            AUTH_REFRESH_INTERVAL seconds between refreshes  (default: 300)
+            REDIS_URL             Redis URL                  (default: redis://localhost:6379)
+            AUTH_KM_USE_REDIS     enables the Redis cache     (default: true)
         """
         loader = create_loader()
         return cls.from_loader(loader, audit_hook=audit_hook, **kwargs)
@@ -288,13 +288,13 @@ class ApiKeyManager:
         **kwargs: Any,
     ) -> "ApiKeyManager":
         """
-        Factory rapida per test/dev con chiavi in-memory.
+        Quick factory for tests/dev with in-memory keys.
 
         Args:
             keys:      dict {raw_key: {client_id, scopes, endpoints, ...}}
-            use_redis: Se False, usa enable_cache=False (nessun Redis necessario).
+            use_redis: If False, uses enable_cache=False (no Redis needed).
 
-        Esempio::
+        Example::
 
             manager = ApiKeyManager.from_static({
                 "my-dev-key": {"client_id": "dev", "scopes": ["secure-a2a"]},
@@ -312,12 +312,12 @@ class ApiKeyManager:
         **kwargs: Any,
     ) -> "ApiKeyManager":
         """
-        Factory di compatibilità con l'AuthConfig attuale di STLS.
+        Compatibility factory for STLS's current AuthConfig.
 
-        Migra le chiavi esistenti (api_keys + bearer_tokens) nel nuovo
-        sistema senza modifiche alla configurazione dell'utente.
+        Migrates existing keys (api_keys + bearer_tokens) into the new
+        system with no changes to the user's configuration.
 
-        Esempio in stls_core_integration.py::
+        Example in stls_core_integration.py::
 
             if auth_config:
                 manager = ApiKeyManager.from_auth_config(auth_config)
@@ -333,21 +333,22 @@ class ApiKeyManager:
 
     async def start(self) -> None:
         """
-        Inizializza Redis, esegue il primo bulk_reload sincrono,
-        avvia il BackgroundRefresher.
+        Initializes Redis, runs the first synchronous bulk_reload,
+        starts the BackgroundRefresher.
 
-        Da chiamare una sola volta all'avvio dell'applicazione
-        (es. in FastAPI lifespan o startup event).
+        To be called once at application startup
+        (e.g. in a FastAPI lifespan or startup event).
         """
         if self._enable_cache:
             await self._cache.initialize()
-            # primo caricamento sincrono prima di aprire il traffico
+            # first synchronous load before opening up to traffic
             await self._initial_load()
 
         distributed = os.environ.get("AUTH_REFRESH_DISTRIBUTED", "true").lower() \
             not in ("false", "0", "no")
-        # Passa il namespace al refresher: ogni refresher usa il proprio lock Redis
-        # indipendente, evitando che static/file/postgres si blocchino a vicenda.
+        # Passes the namespace to the refresher: each refresher uses its
+        # own independent Redis lock, so that static/file/postgres don't
+        # block each other.
         _ns = getattr(self._cache, "_namespace", "stls")
         self._refresher = BackgroundRefresher(
             loader=self._loader,
@@ -366,9 +367,9 @@ class ApiKeyManager:
 
     async def stop(self) -> None:
         """
-        Ferma il BackgroundRefresher e chiude le connessioni.
+        Stops the BackgroundRefresher and closes the connections.
 
-        Da chiamare nello shutdown dell'applicazione.
+        To be called at application shutdown.
         """
         if self._refresher:
             await self._refresher.stop()
@@ -385,7 +386,7 @@ class ApiKeyManager:
         await self.stop()
 
     # ------------------------------------------------------------------
-    # Validazione principale
+    # Main validation
     # ------------------------------------------------------------------
 
     async def validate(
@@ -396,31 +397,31 @@ class ApiKeyManager:
         request_id: str = "",
     ) -> ValidationResult:
         """
-        Valida una API key per un endpoint specifico.
+        Validates an API key for a specific endpoint.
 
         Args:
-            raw_key:     Valore grezzo della chiave (da header/query param).
-                         Viene hashato immediatamente; il plaintext non viene loggato.
-            endpoint:    Path dell'endpoint richiesto (es. "/secure-a2a").
-            remote_addr: IP del client, per l'audit log.
-            request_id:  Trace ID della request, per l'audit log.
+            raw_key:     Raw key value (from the header/query param).
+                         Hashed immediately; the plaintext is never logged.
+            endpoint:    Path of the requested endpoint (e.g. "/secure-a2a").
+            remote_addr: Client IP, for the audit log.
+            request_id:  Request trace ID, for the audit log.
 
         Returns:
-            ValidationResult con result, record (se OK), e audit entry.
+            ValidationResult with the result, the record (if OK), and the audit entry.
         """
         ts = datetime.now(timezone.utc)
 
-        # --- 1. hash immediato — plaintext scartato ---
+        # --- 1. hash immediately — plaintext discarded ---
         key_id = hash_key(raw_key)
 
-        # --- 2. revocation check (O(1), prima di qualsiasi altra op) ---
+        # --- 2. revocation check (O(1), before anything else) ---
         if self._enable_cache and await self._cache.is_revoked(key_id):
             return self._build_result(
                 AuthResult.REVOKED, None, key_id, None, endpoint,
                 remote_addr, request_id, ts,
             )
 
-        # --- 3. lookup record ---
+        # --- 3. record lookup ---
         record = await self._lookup(key_id)
 
         if record is None:
@@ -451,14 +452,14 @@ class ApiKeyManager:
 
     async def validate_request(self, request: Any) -> ValidationResult:
         """
-        Overload di comodità che estrae la chiave da una Starlette/FastAPI Request.
+        Convenience overload that extracts the key from a Starlette/FastAPI Request.
 
-        Cerca la chiave in ordine:
-            1. Header X-API-Key
-            2. Query param ?api_key=
+        Looks for the key in order:
+            1. X-API-Key header
+            2. ?api_key= query param
 
-        Se nessuna chiave è presente restituisce ValidationResult con
-        result=INVALID e record=None (trattato come 401 dal middleware).
+        If no key is present, returns a ValidationResult with
+        result=INVALID and record=None (treated as a 401 by the middleware).
         """
         raw_key = (
             request.headers.get("x-api-key")
@@ -486,33 +487,33 @@ class ApiKeyManager:
         return await self.validate(raw_key, endpoint, remote_addr, request_id)
 
     # ------------------------------------------------------------------
-    # Gestione manuale delle chiavi (admin API)
+    # Manual key management (admin API)
     # ------------------------------------------------------------------
 
     async def revoke(self, key_id: str) -> None:
-        """Revoca una chiave per key_id (SHA-256). Effetto immediato su Redis."""
+        """Revokes a key by key_id (SHA-256). Immediate effect on Redis."""
         if self._enable_cache:
             await self._cache.revoke(key_id)
         logger.info("ApiKeyManager: chiave %s... revocata", key_id[:12])
 
     async def add_key(self, record: KeyRecord) -> None:
-        """Aggiunge o aggiorna un KeyRecord in cache (senza toccare il loader)."""
+        """Adds or updates a KeyRecord in the cache (without touching the loader)."""
         if self._enable_cache:
             await self._cache.set(record)
 
     async def health(self) -> dict[str, Any]:
         """
-        Restituisce lo stato di salute del sistema di autenticazione.
+        Returns the health status of the authentication system.
 
-        Usabile da un endpoint /health o /readiness dell'applicazione.
-        Indica "ok" solo se Redis è raggiungibile (quando abilitato) e il
-        refresher è in esecuzione.
+        Usable from a /health or /readiness application endpoint.
+        Reports "ok" only if Redis is reachable (when enabled) and the
+        refresher is running.
         """
         redis_ok = await self._cache.ping() if self._enable_cache else None
         cache_stats = await self._cache.stats() if self._enable_cache else {}
         redis_status = "ok" if redis_ok else ("error" if redis_ok is False else "disabled")
         refresher_running = self._refresher.running if self._refresher else False
-        # Degraded se Redis è in errore (ma non se semplicemente disabilitato)
+        # Degraded if Redis is in error (but not if it's simply disabled)
         overall = "ok" if (redis_status in ("ok", "disabled") and refresher_running) else "degraded"
         return {
             "status": overall,
@@ -524,11 +525,11 @@ class ApiKeyManager:
         }
 
     # ------------------------------------------------------------------
-    # Helpers interni
+    # Internal helpers
     # ------------------------------------------------------------------
 
     async def _initial_load(self) -> None:
-        """Carica tutti i record dal loader → Redis prima di aprire il traffico."""
+        """Loads all records from the loader → Redis before opening up to traffic."""
         try:
             records = await self._loader.load_all()
             if records:
@@ -546,15 +547,15 @@ class ApiKeyManager:
 
     async def _lookup(self, key_id: str) -> KeyRecord | None:
         """
-        Cerca il record: prima in Redis (se abilitato), poi nel loader.
-        Su cache miss popola Redis per le prossime richieste.
+        Looks up the record: first in Redis (if enabled), then in the loader.
+        On a cache miss, populates Redis for subsequent requests.
         """
         if self._enable_cache:
             record = await self._cache.get(key_id)
             if record is not None:
                 return record
 
-        # cache miss (o cache disabilitata) → interroga il loader
+        # cache miss (or cache disabled) → query the loader
         record = await self._loader.load_one(key_id)
         if record is not None and self._enable_cache:
             await self._cache.set(record)
@@ -572,7 +573,7 @@ class ApiKeyManager:
         request_id: str,
         ts: datetime,
     ) -> ValidationResult:
-        """Costruisce ValidationResult, scrive il log e chiama l'audit hook."""
+        """Builds the ValidationResult, writes the log and calls the audit hook."""
         audit = AuditEntry(
             timestamp=ts,
             key_id=key_id,
@@ -583,7 +584,7 @@ class ApiKeyManager:
             request_id=request_id,
         )
 
-        # log strutturato (livello INFO per OK, WARNING per deny)
+        # structured log (INFO level for OK, WARNING for deny)
         if result == AuthResult.OK:
             logger.info(
                 "auth OK client=%s endpoint=%s key=%s...",
@@ -595,8 +596,8 @@ class ApiKeyManager:
                 result.value, client_id, endpoint, key_id[:12],
             )
 
-        # fire-and-forget dell'audit hook (non blocca la risposta), con
-        # reference trattenuta in self._audit_tasks finché non completa.
+        # fire-and-forget audit hook (doesn't block the response), with
+        # a reference kept in self._audit_tasks until it completes.
         if self._audit_hook:
             task = asyncio.ensure_future(self._emit_audit(audit))
             self._audit_tasks.add(task)
@@ -605,7 +606,7 @@ class ApiKeyManager:
         return ValidationResult(result=result, record=record, audit=audit)
 
     async def _emit_audit(self, audit: AuditEntry) -> None:
-        """Chiama l'audit hook con gestione eccezioni isolata."""
+        """Calls the audit hook with isolated exception handling."""
         if self._audit_hook:
             try:
                 await self._audit_hook(audit)
@@ -614,7 +615,7 @@ class ApiKeyManager:
 
     @staticmethod
     def _extract_remote_addr(request: Any) -> str:
-        """Estrae l'IP reale del client da X-Forwarded-For o client.host."""
+        """Extracts the client's real IP from X-Forwarded-For or client.host."""
         forwarded = request.headers.get("x-forwarded-for", "")
         if forwarded:
             return forwarded.split(",")[0].strip()
@@ -628,30 +629,31 @@ class ApiKeyManager:
 
 class ApiKeyManagerGroup:
     """
-    Gestisce il lifecycle di un insieme di ApiKeyManager.
+    Manages the lifecycle of a set of ApiKeyManagers.
 
-    Consente di avviare, fermare, fare health check e forzare refresh
-    su tutti i manager registrati con una sola chiamata.
+    Allows starting, stopping, health-checking and forcing a refresh
+    on all registered managers with a single call.
 
-    Manager ``None`` vengono ignorati silenziosamente — questo permette
-    di passare ``pg_manager`` anche quando Postgres non è configurato
-    (ritorna None) senza if aggiuntivi nel server.
+    ``None`` managers are silently ignored — this allows passing
+    ``pg_manager`` even when Postgres isn't configured (returns None)
+    with no extra ifs in the server code.
 
-    Uso come async context manager (pattern raccomandato nel lifespan FastAPI)::
+    Usage as an async context manager (the recommended pattern in a
+    FastAPI lifespan)::
 
         group = (
             ApiKeyManagerGroup()
             .add("static", static_manager)
             .add("file",   file_manager)
-            .add("postgres", pg_manager)   # può essere None → ignorato
+            .add("postgres", pg_manager)   # can be None → ignored
         )
 
         @asynccontextmanager
         async def lifespan(app):
-            async with group:          # start() all'ingresso, stop() all'uscita
+            async with group:          # start() on entry, stop() on exit
                 yield
 
-    Uso manuale::
+    Manual usage::
 
         await group.start()
         try:
@@ -664,7 +666,7 @@ class ApiKeyManagerGroup:
         self._managers: dict[str, ApiKeyManager] = {}
 
     # ------------------------------------------------------------------
-    # Registrazione
+    # Registration
     # ------------------------------------------------------------------
 
     def add(
@@ -673,14 +675,14 @@ class ApiKeyManagerGroup:
         manager: "ApiKeyManager | None",
     ) -> "ApiKeyManagerGroup":
         """
-        Aggiunge un manager al gruppo.
+        Adds a manager to the group.
 
         Args:
-            name:    Identificativo leggibile usato in log e health report.
-            manager: Istanza ApiKeyManager oppure None (viene ignorata).
+            name:    Human-readable identifier used in logs and the health report.
+            manager: ApiKeyManager instance, or None (ignored).
 
         Returns:
-            self — permette chaining fluente.
+            self — allows fluent chaining.
         """
         if manager is not None:
             self._managers[name] = manager
@@ -691,7 +693,7 @@ class ApiKeyManagerGroup:
         return self
 
     def get(self, name: str) -> "ApiKeyManager | None":
-        """Restituisce il manager con il nome dato, o None se non presente."""
+        """Returns the manager with the given name, or None if not present."""
         return self._managers.get(name)
 
     # ------------------------------------------------------------------
@@ -699,7 +701,7 @@ class ApiKeyManagerGroup:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Avvia tutti i manager registrati in ordine di inserimento."""
+        """Starts all registered managers in insertion order."""
         if not self._managers:
             logger.warning("ApiKeyManagerGroup.start(): nessun manager registrato")
             return
@@ -719,7 +721,7 @@ class ApiKeyManagerGroup:
                 raise
 
     async def stop(self) -> None:
-        """Ferma tutti i manager in ordine inverso di inserimento."""
+        """Stops all managers in reverse insertion order."""
         for name, mgr in reversed(list(self._managers.items())):
             try:
                 await mgr.stop()
@@ -737,19 +739,19 @@ class ApiKeyManagerGroup:
         await self.stop()
 
     # ------------------------------------------------------------------
-    # Health & diagnostica
+    # Health & diagnostics
     # ------------------------------------------------------------------
 
     async def health(self) -> dict[str, Any]:
         """
-        Stato di salute aggregato di tutti i manager.
+        Aggregated health status of all managers.
 
         Returns:
-            Dict con:
-                ``status``         → "ok" | "degraded" (aggregato)
-                ``{nome_manager}`` → health_dict per ciascun manager
+            A dict with:
+                ``status``         → "ok" | "degraded" (aggregated)
+                ``{manager_name}`` → that manager's health dict
 
-        Un singolo manager in stato "degraded" porta l'intero gruppo a "degraded".
+        A single manager in "degraded" state brings the whole group to "degraded".
         """
         results: dict[str, Any] = {}
         for name, mgr in self._managers.items():
@@ -757,7 +759,7 @@ class ApiKeyManagerGroup:
                 results[name] = await mgr.health()
             except Exception as exc:
                 results[name] = {"status": "error", "auth_manager": "error", "error": str(exc)}
-        # Stato aggregato: ok solo se TUTTI i manager sono ok
+        # Aggregated status: ok only if ALL managers are ok
         all_ok = all(
             r.get("status") == "ok"
             for r in results.values()
@@ -766,13 +768,13 @@ class ApiKeyManagerGroup:
 
     async def refresh_all(self) -> dict[str, int]:
         """
-        Forza un reload immediato delle chiavi da tutti i loader.
+        Forces an immediate reload of the keys from all loaders.
 
-        Utile da un endpoint admin ``POST /auth/refresh`` dopo una
-        rotazione di chiavi senza riavviare il server.
+        Useful from an admin ``POST /auth/refresh`` endpoint after a
+        key rotation, without restarting the server.
 
         Returns:
-            Dict ``{nome_manager: n_record_caricati}``.
+            Dict ``{manager_name: n_records_loaded}``.
         """
         results: dict[str, int] = {}
         for name, mgr in self._managers.items():
@@ -807,18 +809,18 @@ class ApiKeyManagerGroup:
 
 class BackgroundRefresher:
     """
-    Asyncio task che ricarica periodicamente tutte le chiavi
-    dal loader → Redis.
+    Asyncio task that periodically reloads all keys
+    from the loader → Redis.
 
-    Gestisce rotazioni di chiave, revoche e aggiornamenti di scope
-    senza riavvii del servizio.
+    Handles key rotations, revocations and scope updates
+    with no service restarts.
 
-    Il ciclo è best-effort: un'eccezione nel reload viene loggata
-    e il refresher riprende al prossimo intervallo.
+    The cycle is best-effort: an exception during a reload is logged
+    and the refresher resumes on the next interval.
 
-    Il lock Redis è per-namespace: più manager sullo stesso Redis
-    (es. static + file + postgres) competono solo con le proprie
-    repliche su altri nodi, non tra di loro.
+    The Redis lock is per-namespace: multiple managers on the same
+    Redis (e.g. static + file + postgres) only compete with their own
+    replicas on other nodes, not with each other.
     """
 
     def __init__(
@@ -834,11 +836,11 @@ class BackgroundRefresher:
         self._interval    = interval
         self._distributed = distributed
         self._namespace   = namespace
-        # Lock key per-namespace: ogni loader ha il proprio lock indipendente.
-        # Es.: stls:refresh:lock:stls:static  /  stls:refresh:lock:stls:pg
-        # Static, file e postgres non si bloccano a vicenda.
+        # Per-namespace lock key: each loader has its own independent lock.
+        # E.g.: stls:refresh:lock:stls:static  /  stls:refresh:lock:stls:pg
+        # Static, file and postgres don't block each other.
         self._lock_key = f"stls:refresh:lock:{namespace}"
-        # Identificativo univoco del nodo per il lock
+        # Unique node identifier for the lock
         self._node_id  = f"{socket.gethostname()}:{os.getpid()}"
         self._task: asyncio.Task[None] | None = None
         self._stop_event: asyncio.Event | None = None
@@ -848,7 +850,7 @@ class BackgroundRefresher:
         return self._task is not None and not self._task.done()
 
     async def start(self) -> None:
-        """Avvia il loop di refresh in background."""
+        """Starts the background refresh loop."""
         if self.running:
             return
         self._stop_event = asyncio.Event()
@@ -865,7 +867,7 @@ class BackgroundRefresher:
         )
 
     async def stop(self) -> None:
-        """Ferma il loop di refresh e attende la terminazione."""
+        """Stops the refresh loop and waits for it to terminate."""
         if self._stop_event:
             self._stop_event.set()
         if self._task and not self._task.done():
@@ -879,20 +881,20 @@ class BackgroundRefresher:
 
     async def trigger(self) -> int:
         """
-        Forza un reload immediato bypassando il lock distribuito.
-        Utile per: /auth/refresh admin endpoint, test, webhook di rotazione chiave.
+        Forces an immediate reload, bypassing the distributed lock.
+        Useful for: the /auth/refresh admin endpoint, tests, a key-rotation webhook.
 
         Returns:
-            Numero di record caricati.
+            Number of records loaded.
         """
         return await self._do_refresh(force=True)
 
     # ------------------------------------------------------------------
-    # Loop interno
+    # Internal loop
     # ------------------------------------------------------------------
 
     async def _loop(self) -> None:
-        """Loop principale: aspetta l'intervallo, esegue il refresh, ripete."""
+        """Main loop: waits for the interval, runs the refresh, repeats."""
         assert self._stop_event is not None
         while not self._stop_event.is_set():
             try:
@@ -900,28 +902,28 @@ class BackgroundRefresher:
                     self._stop_event.wait(),
                     timeout=self._interval,
                 )
-                # stop_event settato: uscita pulita
+                # stop_event set: clean exit
                 break
             except asyncio.TimeoutError:
-                # intervallo scaduto normalmente → refresh
+                # interval elapsed normally → refresh
                 pass
 
             await self._do_refresh()
 
     async def _do_refresh(self, force: bool = False) -> int:
         """
-        Esegue il caricamento e l'aggiornamento della cache.
+        Runs the load and the cache update.
 
-        In modalità distribuita (distributed=True, default) usa un Redis lock
-        per garantire che un solo nodo alla volta esegua il reload da Postgres/File.
-        Gli altri nodi vedono il lock, saltano il reload e leggono dalla cache
-        già aggiornata dal nodo leader.
+        In distributed mode (distributed=True, default) uses a Redis
+        lock to guarantee that only one node at a time reloads from
+        Postgres/File. The other nodes see the lock, skip the reload
+        and read from the cache already updated by the leader node.
 
         Args:
-            force: Se True bypassa il lock (usato da trigger() per admin reload).
+            force: If True, bypasses the lock (used by trigger() for admin reloads).
 
         Returns:
-            Numero di record caricati (0 se skippato o in caso di errore).
+            Number of records loaded (0 if skipped or on error).
         """
         if self._distributed and self._cache is not None and not force:
             acquired = await self._try_acquire_lock()
@@ -932,7 +934,7 @@ class BackgroundRefresher:
                 )
                 return 0
         else:
-            acquired = False  # nessun lock da rilasciare
+            acquired = False  # no lock to release
 
         try:
             records = await self._loader.load_all()
@@ -957,14 +959,14 @@ class BackgroundRefresher:
 
     async def _try_acquire_lock(self) -> bool:
         """
-        Tenta di acquisire il leader election lock in Redis.
+        Attempts to acquire the leader-election lock in Redis.
 
         SET stls:refresh:lock:{namespace} <node_id> NX EX <interval+30>
-        NX = solo se non esiste (atomico, nessuna race condition).
-        TTL = intervallo + 30s di buffer per gestire crash del leader.
+        NX = only if it doesn't already exist (atomic, no race condition).
+        TTL = interval + a 30s buffer to handle a leader crash.
 
         Returns:
-            True se il lock è stato acquisito, False se già detenuto.
+            True if the lock was acquired, False if already held.
         """
         try:
             result = await self._cache._client.set(
@@ -973,18 +975,18 @@ class BackgroundRefresher:
                 nx=True,
                 ex=self._interval + 30,
             )
-            return result is not None  # SET NX restituisce None se non acquisito
+            return result is not None  # SET NX returns None if not acquired
         except Exception as exc:
             logger.warning(
                 "BackgroundRefresher: errore acquisizione lock: %s — procedo senza lock",
                 exc,
             )
-            return True  # fail-open: se Redis non risponde, refresha comunque
+            return True  # fail-open: if Redis doesn't respond, refresh anyway
 
     async def _release_lock(self) -> None:
         """
-        Rilascia il lock solo se è ancora detenuto da questo nodo.
-        Usa uno script Lua per garantire atomicità (check + delete).
+        Releases the lock only if it's still held by this node.
+        Uses a Lua script to guarantee atomicity (check + delete).
         """
         lua_script = """
         if redis.call('get', KEYS[1]) == ARGV[1] then

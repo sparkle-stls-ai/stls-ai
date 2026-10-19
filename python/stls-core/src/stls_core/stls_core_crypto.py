@@ -1,20 +1,21 @@
 """
 stls_core_crypto.py
 -------------------
-Layer crittografico protocol-agnostic per STLS.
+Protocol-agnostic cryptographic layer for STLS.
 
-Implementa:
-  - AES-256-GCM per confidenzialità e autenticazione del ciphertext
-  - HMAC-SHA256 aggiuntivo sull'envelope completo (IV + ciphertext + GCM tag)
-  - HKDF-Expand (RFC 5869 §3.2) per derivare chiavi AES e HMAC distinte
-    dalla session key, usando domain separator come info label
+Implements:
+  - AES-256-GCM for ciphertext confidentiality and authentication
+  - An additional HMAC-SHA256 over the full envelope (IV + ciphertext + GCM tag)
+  - HKDF-Expand (RFC 5869 §3.2) to derive distinct AES and HMAC keys
+    from the session key, using a domain separator as the info label
 
-Dipendenze: cryptography>=46.0.5
+Dependencies: cryptography>=46.0.5
 
-Questo modulo non conosce A2A, MCP, FastAPI, httpx o qualsiasi protocollo
-di trasporto. Lavora esclusivamente su bytes e dict JSON-serializzabili.
+This module knows nothing about A2A, MCP, FastAPI, httpx or any
+transport protocol. It works exclusively on bytes and JSON-serializable
+dicts.
 
-Uso tipico:
+Typical usage:
     transport = StlsTransport(session_key=key, session_id=sid)
     envelope  = transport.encrypt(plaintext_bytes)
     recovered = transport.decrypt(envelope)
@@ -47,17 +48,17 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# StlsEnvelope — struttura dell'envelope cifrato
+# StlsEnvelope — encrypted envelope structure
 # ---------------------------------------------------------------------------
 
 class StlsEnvelope:
     """
-    Rappresentazione tipizzata dell'envelope STLS cifrato.
+    Typed representation of the encrypted STLS envelope.
 
-    Può essere serializzata in dict JSON per il trasporto HTTP
-    e ricostruita dal dict ricevuto.
+    Can be serialized into a JSON dict for HTTP transport and
+    reconstructed from the received dict.
 
-    Struttura wire:
+    Wire structure:
         {
             "version":    "1.0",
             "session_id": "<uuid>",
@@ -87,11 +88,11 @@ class StlsEnvelope:
         self.mac = mac
 
     # ------------------------------------------------------------------
-    # Serializzazione
+    # Serialization
     # ------------------------------------------------------------------
 
     def to_dict(self) -> dict[str, str]:
-        """Serializza in dict JSON-serializzabile (base64 per i bytes)."""
+        """Serializes into a JSON-serializable dict (base64 for the bytes fields)."""
         return {
             ENVELOPE_VERSION:    self.version,
             ENVELOPE_SESSION_ID: self.session_id,
@@ -103,7 +104,7 @@ class StlsEnvelope:
 
     @classmethod
     def from_dict(cls, data: dict[str, str]) -> "StlsEnvelope":
-        """Ricostruisce un envelope dal dict ricevuto via HTTP."""
+        """Reconstructs an envelope from the dict received over HTTP."""
         return cls(
             version=data.get(ENVELOPE_VERSION, STLS_VERSION),
             session_id=data[ENVELOPE_SESSION_ID],
@@ -121,47 +122,47 @@ class StlsEnvelope:
 
 
 # ---------------------------------------------------------------------------
-# StlsTransport — encrypt / decrypt su bytes puri
+# StlsTransport — encrypt / decrypt over plain bytes
 # ---------------------------------------------------------------------------
 
 class StlsTransport:
     """
-    Trasporto STLS: cifra e decifra payload arbitrari (bytes).
+    STLS transport: encrypts and decrypts arbitrary payloads (bytes).
 
-    Protocol-agnostic: non conosce A2A, MCP o altri protocolli.
-    I layer superiori (stls-a2a, stls-mcp) si occupano di serializzare
-    il proprio formato messaggio in bytes prima di chiamare encrypt(),
-    e di deserializzarlo dopo decrypt().
+    Protocol-agnostic: knows nothing about A2A, MCP or other protocols.
+    The layers above (stls-a2a, stls-mcp) are responsible for serializing
+    their own message format into bytes before calling encrypt(),
+    and deserializing it after decrypt().
 
-    Ciclo di vita:
-        1. Il server genera session_key via KeyProvider e la condivide
-           col client tramite handshake STLS (/stls/handshake).
-        2. Client e server istanziano ciascuno un StlsTransport con la
-           stessa session_key e session_id.
-        3. Ogni payload viene cifrato con encrypt() e decifrato con decrypt().
-        4. Le chiavi AES e HMAC sono derivate via HKDF-Expand dalla
-           session_key con domain separator distinti — non vengono mai
-           usate direttamente.
+    Lifecycle:
+        1. The server generates the session_key via KeyProvider and shares
+           it with the client through the STLS handshake (/stls/handshake).
+        2. Client and server each instantiate a StlsTransport with the
+           same session_key and session_id.
+        3. Every payload is encrypted with encrypt() and decrypted with decrypt().
+        4. The AES and HMAC keys are derived via HKDF-Expand from the
+           session_key with distinct domain separators — they are never
+           used directly.
 
-    Thread-safety: ogni istanza è stateless dopo __init__; encrypt/decrypt
-    non modificano lo stato interno e sono safe per chiamate concorrenti.
+    Thread-safety: each instance is stateless after __init__; encrypt/decrypt
+    do not mutate internal state and are safe for concurrent calls.
     """
 
     def __init__(self, session_key: bytes, session_id: str) -> None:
         """
-        Inizializza il trasporto.
+        Initializes the transport.
 
         Args:
-            session_key: Chiave di sessione condivisa (output del KeyProvider).
-                         Minimo 16 byte; tipicamente 32 byte (256 bit).
-            session_id:  Identificatore univoco della sessione STLS (UUID).
+            session_key: Shared session key (output of the KeyProvider).
+                         Minimum 16 bytes; typically 32 bytes (256 bit).
+            session_id:  Unique identifier of the STLS session (UUID).
         """
         self.session_id = session_id
 
-        # Deriva chiavi AES e HMAC via HKDF-Expand.
-        # La session_key SKA è già ad alta entropia → si usa solo Expand
-        # (nessuna fase Extract). I due info label fungono da domain separator:
-        # le due chiavi derivate non condividono mai materiale crittografico.
+        # Derives the AES and HMAC keys via HKDF-Expand.
+        # The SKA session_key is already high-entropy → only Expand is used
+        # (no Extract phase). The two info labels act as domain separators:
+        # the two derived keys never share cryptographic material.
         self._aes_key: bytes = HKDFExpand(
             algorithm=hashes.SHA256(),
             length=32,
@@ -179,26 +180,26 @@ class StlsTransport:
         )
 
     # ------------------------------------------------------------------
-    # API pubblica
+    # Public API
     # ------------------------------------------------------------------
 
     def encrypt(self, plaintext: bytes) -> StlsEnvelope:
         """
-        Cifra un payload arbitrario.
+        Encrypts an arbitrary payload.
 
         Pipeline:
-            1. Genera IV random 96-bit (12 byte).
-            2. Cifra con AES-256-GCM → ciphertext + GCM tag (128-bit).
-            3. Calcola HMAC-SHA256 su (IV ‖ ciphertext ‖ GCM tag).
-            4. Restituisce StlsEnvelope con tutti i componenti.
+            1. Generates a random 96-bit IV (12 bytes).
+            2. Encrypts with AES-256-GCM → ciphertext + GCM tag (128-bit).
+            3. Computes HMAC-SHA256 over (IV ‖ ciphertext ‖ GCM tag).
+            4. Returns a StlsEnvelope with all components.
 
         Args:
-            plaintext: Payload da cifrare (qualsiasi bytes).
+            plaintext: Payload to encrypt (any bytes).
 
         Returns:
-            StlsEnvelope pronto per la serializzazione e il trasporto.
+            StlsEnvelope ready for serialization and transport.
         """
-        iv = os.urandom(12)  # 96-bit per AES-GCM
+        iv = os.urandom(12)  # 96-bit for AES-GCM
 
         cipher = Cipher(
             algorithms.AES(self._aes_key),
@@ -225,23 +226,23 @@ class StlsTransport:
 
     def decrypt(self, envelope: StlsEnvelope) -> bytes:
         """
-        Decifra un envelope STLS.
+        Decrypts a STLS envelope.
 
         Pipeline:
-            1. Verifica session_id.
-            2. Verifica HMAC-SHA256 sull'envelope (IV ‖ ciphertext ‖ tag).
-            3. Decifra con AES-256-GCM (verifica il GCM tag internamente).
-            4. Restituisce il plaintext originale.
+            1. Verifies session_id.
+            2. Verifies HMAC-SHA256 over the envelope (IV ‖ ciphertext ‖ tag).
+            3. Decrypts with AES-256-GCM (verifies the GCM tag internally).
+            4. Returns the original plaintext.
 
         Args:
-            envelope: StlsEnvelope ricevuto dal peer.
+            envelope: StlsEnvelope received from the peer.
 
         Returns:
-            Plaintext originale come bytes.
+            Original plaintext as bytes.
 
         Raises:
-            ValueError: Se session_id non corrisponde o la verifica
-                        HMAC / GCM fallisce (integrità compromessa).
+            ValueError: If session_id doesn't match or the HMAC / GCM
+                        verification fails (integrity compromised).
         """
         if envelope.session_id != self.session_id:
             raise ValueError(
@@ -249,7 +250,7 @@ class StlsTransport:
                 f"ricevuto {envelope.session_id!r}"
             )
 
-        # Verifica HMAC prima di tentare la decifratura (fail-fast)
+        # Verifies the HMAC before attempting decryption (fail-fast)
         expected_mac = self._compute_mac(
             envelope.iv, envelope.ciphertext, envelope.tag
         )
@@ -258,7 +259,7 @@ class StlsTransport:
                 "MAC verification failed — integrità del messaggio compromessa"
             )
 
-        # Decifratura AES-256-GCM (verifica GCM tag internamente)
+        # AES-256-GCM decryption (verifies the GCM tag internally)
         cipher = Cipher(
             algorithms.AES(self._aes_key),
             modes.GCM(envelope.iv, envelope.tag),
@@ -279,38 +280,38 @@ class StlsTransport:
         return plaintext
 
     # ------------------------------------------------------------------
-    # Helpers JSON — convenienza per i layer superiori
+    # JSON helpers — convenience for the layers above
     # ------------------------------------------------------------------
 
     def encrypt_json(self, payload: Any) -> dict[str, str]:
         """
-        Serializza payload in JSON e cifra, restituisce dict wire-ready.
+        Serializes a payload to JSON and encrypts it, returns a wire-ready dict.
 
-        Shortcut usato da stls-a2a e stls-mcp per cifrare un dict/oggetto
-        senza gestire manualmente la serializzazione.
+        Shortcut used by stls-a2a and stls-mcp to encrypt a dict/object
+        without manually handling serialization.
 
         Args:
-            payload: Qualsiasi oggetto JSON-serializzabile.
+            payload: Any JSON-serializable object.
 
         Returns:
-            Dict (StlsEnvelope.to_dict()) pronto per essere inviato via HTTP.
+            Dict (StlsEnvelope.to_dict()) ready to be sent over HTTP.
         """
         plaintext = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         return self.encrypt(plaintext).to_dict()
 
     def decrypt_json(self, envelope_dict: dict[str, str]) -> Any:
         """
-        Ricostruisce l'envelope dal dict ricevuto, decifra e deserializza JSON.
+        Reconstructs the envelope from the received dict, decrypts and deserializes JSON.
 
         Args:
-            envelope_dict: Dict ricevuto via HTTP (output di encrypt_json).
+            envelope_dict: Dict received over HTTP (output of encrypt_json).
 
         Returns:
-            Oggetto Python deserializzato dal JSON originale.
+            Python object deserialized from the original JSON.
 
         Raises:
-            ValueError: Se la verifica crittografica fallisce.
-            json.JSONDecodeError: Se il plaintext non è JSON valido.
+            ValueError: If the cryptographic verification fails.
+            json.JSONDecodeError: If the plaintext is not valid JSON.
         """
         envelope = StlsEnvelope.from_dict(envelope_dict)
         plaintext = self.decrypt(envelope)
@@ -321,12 +322,12 @@ class StlsTransport:
     # ------------------------------------------------------------------
 
     def _compute_mac(self, iv: bytes, ciphertext: bytes, tag: bytes) -> bytes:
-        """Calcola HMAC-SHA256 su (IV ‖ ciphertext ‖ GCM tag)."""
+        """Computes HMAC-SHA256 over (IV ‖ ciphertext ‖ GCM tag)."""
         h = hmac.HMAC(self._hmac_key, hashes.SHA256())
         h.update(iv + ciphertext + tag)
         return h.finalize()
 
     @staticmethod
     def _constant_time_equal(a: bytes, b: bytes) -> bool:
-        """Confronto timing-safe tra due byte string."""
+        """Timing-safe comparison between two byte strings."""
         return _hmac.compare_digest(a, b)

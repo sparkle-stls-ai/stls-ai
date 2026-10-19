@@ -1,47 +1,47 @@
 """
 stls_core_providers_keystore.py
 --------------------------------
-Backend intercambiabili per lo store delle chiavi Arqit SKA-Platform™.
+Interchangeable backends for the Arqit SKA-Platform™ key store.
 
-Selezione tramite variabile d'ambiente:
+Selected via environment variable:
 
-    KEY_STORE_BACKEND=memory   (default) — dict in-process, adatto a
-                                          sviluppo e deployment single-instance.
-    KEY_STORE_BACKEND=redis    — Redis esterno, adatto a deployment
-                                          multi-istanza su Cloud Run / GKE.
+    KEY_STORE_BACKEND=memory   (default) — in-process dict, suited for
+                                          development and single-instance deployments.
+    KEY_STORE_BACKEND=redis    — external Redis, suited for
+                                          multi-instance deployments on Cloud Run / GKE.
 
-Ciclo di vita delle chiavi nel backend Redis
+Key lifecycle in the Redis backend
 --------------------------------------------
-Una chiave attraversa tre fasi:
+A key goes through three phases:
 
-  1. Pending (ricevuta, non ancora consegnata)
+  1. Pending (received, not yet delivered)
      stls:ks:{ns}:key:{kid}     → bytes (key_data)      TTL = KEY_PENDING_TTL
      stls:ks:{ns}:pending       → ZSET score=timestamp  (member = kid)
 
-  2. Delivered (consegnata a un handshake, in uso per una sessione attiva)
+  2. Delivered (handed to a handshake, in use for an active session)
      stls:ks:{ns}:key:{kid}     → bytes (key_data)      TTL = KEY_SESSION_TTL (idle timeout)
-     (rimossa da pending)
+     (removed from pending)
 
-     Il TTL viene rinnovato ad ogni get() (GETEX): KEY_SESSION_TTL è un
-     idle timeout, non un lifetime fisso. La chiave scade solo se non
-     acceduta per KEY_SESSION_TTL secondi consecutivi.
+     The TTL is renewed on every get() (GETEX): KEY_SESSION_TTL is an
+     idle timeout, not a fixed lifetime. The key expires only if it
+     hasn't been accessed for KEY_SESSION_TTL consecutive seconds.
 
-  3. Evicted (sessione scaduta)
-     Redis evict automaticamente alla scadenza del TTL — nessuna azione esplicita.
+  3. Evicted (session expired)
+     Redis evicts it automatically once the TTL expires — no explicit action needed.
 
-Il sorted set "pending" non ha TTL proprio: le entry scadute (il cui
-corrispondente stls:ks:{ns}:key:{kid} è già stato evicted da Redis) vengono
-pulite passivamente tramite ZRANGEBYSCORE al momento del polling —
-wait_for_new_key() filtra automaticamente i kid la cui key_data non è più
-presente in Redis.
+The "pending" sorted set has no TTL of its own: expired entries (whose
+corresponding stls:ks:{ns}:key:{kid} has already been evicted by Redis)
+are passively cleaned up via ZRANGEBYSCORE at polling time —
+wait_for_new_key() automatically filters out kids whose key_data is no
+longer present in Redis.
 
-Variabili d'ambiente (backend Redis)
+Environment variables (Redis backend)
 --------------------------------------
     KEY_STORE_REDIS_URL           redis://... (default: redis://localhost:6379)
-    KEY_STORE_REDIS_NAMESPACE     prefisso logico (default: "default")
-    KEY_STORE_PENDING_TTL         TTL chiave pending  in secondi (default: 300)
-    KEY_STORE_SESSION_TTL         TTL chiave consegnata in secondi (default: 3600)
-    KEY_STORE_POLL_INTERVAL       intervallo polling wait_for_new_key (default: 0.3s)
+    KEY_STORE_REDIS_NAMESPACE     logical prefix (default: "default")
+    KEY_STORE_PENDING_TTL         pending key TTL in seconds (default: 300)
+    KEY_STORE_SESSION_TTL         delivered key TTL in seconds (default: 3600)
+    KEY_STORE_POLL_INTERVAL       wait_for_new_key polling interval (default: 0.3s)
 """
 
 from __future__ import annotations
@@ -61,71 +61,72 @@ logger = logging.getLogger(__name__)
 
 class ArqitKeyStoreBase(ABC):
     """
-    Interfaccia comune per lo store delle chiavi Arqit SKA-Platform™.
+    Common interface for the Arqit SKA-Platform™ key store.
 
-    Implementazioni concrete: InMemoryArqitKeyStore, RedisArqitKeyStore.
-    Selezionate tramite ArqitKeyStoreFactory.build().
+    Concrete implementations: InMemoryArqitKeyStore, RedisArqitKeyStore.
+    Selected via ArqitKeyStoreFactory.build().
     """
 
     @abstractmethod
     def add(self, key_id: str, key_bytes: bytes) -> None:
-        """Aggiunge una chiave appena ricevuta dalla SKA-Platform."""
+        """Adds a key just received from the SKA-Platform."""
 
     @abstractmethod
     def get(self, key_id: str) -> Optional[bytes]:
-        """Restituisce i bytes della chiave dato il suo key_id, o None se assente."""
+        """Returns the key's bytes given its key_id, or None if absent."""
 
     @abstractmethod
     def get_last(self) -> Optional[tuple[str, bytes]]:
-        """Restituisce l'ultima chiave aggiunta (key_id, key_bytes), o None."""
+        """Returns the last added key (key_id, key_bytes), or None."""
 
     @abstractmethod
     def startup_seen_keys(self) -> set[str]:
-        """InMemory: nessuna persistenza — restituisce set() vuoto."""
+        """InMemory: no persistence — returns an empty set()."""
         return set()
 
     def wait_for_new_key(
         self, seen_key_ids: set[str], timeout: float = 30.0
     ) -> Optional[tuple[str, bytes]]:
         """
-        Blocca finché una chiave con key_id NON in seen_key_ids è disponibile,
-        oppure scade il timeout.
+        Blocks until a key with a key_id NOT in seen_key_ids is available,
+        or the timeout expires.
 
-        Usato da provider server long-running per ottenere una chiave fresca
-        per ogni nuovo round di handshake, evitando il riuso di chiavi già
-        consegnate a sessioni precedenti.
+        Used by long-running server providers to obtain a fresh key
+        for each new handshake round, avoiding the reuse of keys already
+        delivered to previous sessions.
         """
 
     @abstractmethod
     def mark_delivered(self, key_id: str) -> None:
         """
-        Segna una chiave come consegnata (usata in un handshake).
+        Marks a key as delivered (used in a handshake).
 
-        Il backend può usare questo segnale per:
-        - aggiornare il TTL dell'entry (Redis: da KEY_PENDING_TTL a KEY_SESSION_TTL)
-        - rimuovere la chiave dalla coda pending
+        The backend can use this signal to:
+        - update the entry's TTL (Redis: from KEY_PENDING_TTL to KEY_SESSION_TTL)
+        - remove the key from the pending queue
         """
 
     @abstractmethod
     def startup_seen_keys(self) -> set[str]:
         """
-        Restituisce il set di kid da considerare "già visti" al momento
-        dell'avvio del provider.
+        Returns the set of kids to be considered "already seen" at the
+        time the provider starts up.
 
-        Usato da KeySessionProviderArqitPy.__init__ per pre-popolare
-        _delivered_key_ids: in caso di riavvio del processo server, Redis
-        conserva le chiavi delle sessioni precedenti nel ZSET pending
-        (nessun ZREM per il server). Senza questa pre-popolazione, un server
-        riavviato troverebbe chiavi obsolete nel ZSET (con timestamp più basso
-        di quelle fresche) e le userebbe — causando un mismatch con il client
-        che ha una chiave nuova dalla propria sessione Arqit.
+        Used by KeySessionProviderArqitPy.__init__ to pre-populate
+        _delivered_key_ids: if the server process restarts, Redis
+        still holds the keys from previous sessions in the pending ZSET
+        (no ZREM for the server). Without this pre-population, a
+        restarted server would find stale keys in the ZSET (with a lower
+        timestamp than fresh ones) and would use them — causing a
+        mismatch with the client, which holds a new key from its own
+        Arqit session.
 
-        InMemoryArqitKeyStore: restituisce sempre set() (nessuna persistenza).
-        RedisArqitKeyStore server role: restituisce tutti i kid attualmente
-            nel ZSET pending, in modo che il server ignori le chiavi precedenti
-            e attenda chiavi fresche dal nuovo peering Arqit.
-        RedisArqitKeyStore client role: restituisce set() (namespace UUID per
-            istanza, sempre vuoto all'avvio perché il namespace è nuovo).
+        InMemoryArqitKeyStore: always returns set() (no persistence).
+        RedisArqitKeyStore server role: returns all kids currently in
+            the pending ZSET, so the server ignores the old keys
+            and waits for fresh keys from the new Arqit peering.
+        RedisArqitKeyStore client role: returns set() (per-instance UUID
+            namespace, always empty at startup since the namespace is new).
         """
 
 
@@ -135,10 +136,10 @@ class ArqitKeyStoreBase(ABC):
 
 class InMemoryArqitKeyStore(ArqitKeyStoreBase):
     """
-    Store in-process thread-safe (implementazione originale, ora con ABC).
+    Thread-safe in-process store (original implementation, now with an ABC).
 
-    Adatto per sviluppo, test, e deployment single-instance.
-    Non sopravvive a restart del processo né a scale-out multi-istanza.
+    Suited for development, testing, and single-instance deployment.
+    Does not survive a process restart nor a multi-instance scale-out.
     """
 
     def __init__(self) -> None:
@@ -166,11 +167,11 @@ class InMemoryArqitKeyStore(ArqitKeyStoreBase):
             return self._last_key_id, self._keys[self._last_key_id]
 
     def mark_delivered(self, key_id: str) -> None:
-        # In memory non serve aggiornare TTL — no-op.
+        # In-memory needs no TTL update — no-op.
         pass
 
     def startup_seen_keys(self) -> set[str]:
-        """InMemory: nessuna persistenza — restituisce set() vuoto."""
+        """InMemory: no persistence — returns an empty set()."""
         return set()
 
     def wait_for_new_key(
@@ -198,22 +199,22 @@ class InMemoryArqitKeyStore(ArqitKeyStoreBase):
 
 class RedisArqitKeyStore(ArqitKeyStoreBase):
     """
-    Store Redis-backed per deployment multi-istanza (Cloud Run, GKE, …).
+    Redis-backed store for multi-instance deployments (Cloud Run, GKE, …).
 
-    Strutture Redis utilizzate (prefisso = "stls:ks:{namespace}"):
+    Redis structures used (prefix = "stls:ks:{namespace}"):
 
       stls:ks:{ns}:key:{kid}   STRING  key_data (bytes)
-                                        TTL = KEY_PENDING_TTL mentre pending,
-                                        TTL = KEY_SESSION_TTL dopo mark_delivered()
+                                        TTL = KEY_PENDING_TTL while pending,
+                                        TTL = KEY_SESSION_TTL after mark_delivered()
 
-      stls:ks:{ns}:pending     ZSET    score = timestamp UNIX (float)
+      stls:ks:{ns}:pending     ZSET    score = UNIX timestamp (float)
                                         member = kid
-                                        Usato da wait_for_new_key() per trovare
-                                        chiavi arrivate dopo seen_key_ids.
-                                        Pulito passivamente: member senza
-                                        corrispondente :key:{kid} viene ignorato.
+                                        Used by wait_for_new_key() to find
+                                        keys that arrived after seen_key_ids.
+                                        Cleaned passively: a member with no
+                                        corresponding :key:{kid} is ignored.
 
-    Richiede redis>=7.4.0 installato nel virtualenv.
+    Requires redis>=7.4.0 installed in the virtualenv.
     """
 
     _PREFIX_KEY     = "stls:ks:{ns}:key:{kid}"
@@ -230,14 +231,14 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
     ) -> None:
         """
         Args:
-            zrem_on_deliver: se True, mark_delivered() rimuove il kid dal ZSET
-                pending dopo la consegna (comportamento corretto per client,
-                dove ogni processo è indipendente e la chiave non deve essere
-                riutilizzata da run successivi).
-                Se False (default per server), il kid rimane nel ZSET pending
-                in modo che istanze server sorelle (Cloud Run multi-replica)
-                possano trovarlo. La deduplicazione è garantita da
-                _delivered_key_ids in memoria per ogni istanza.
+            zrem_on_deliver: if True, mark_delivered() removes the kid from
+                the pending ZSET after delivery (correct behavior for the
+                client, where each process is independent and the key must
+                not be reused by subsequent runs).
+                If False (default for the server), the kid remains in the
+                pending ZSET so that sibling server instances (Cloud Run
+                multi-replica) can find it. Deduplication is guaranteed by
+                the in-memory _delivered_key_ids on each instance.
         """
         try:
             import redis as redis_lib
@@ -281,31 +282,31 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
         )
 
     def get(self, key_id: str) -> Optional[bytes]:
-        # GETEX: atomico — restituisce il valore E rinnova il TTL se la chiave
-        # esiste. KEY_STORE_SESSION_TTL diventa così un idle timeout (la chiave
-        # scade solo se non usata per TTL secondi consecutivi) anziché un
-        # lifetime fisso — semantica corretta per sessioni crittografiche attive.
+        # GETEX: atomic — returns the value AND renews the TTL if the key
+        # exists. KEY_STORE_SESSION_TTL thus becomes an idle timeout (the key
+        # expires only if unused for TTL consecutive seconds) rather than a
+        # fixed lifetime — the correct semantics for active cryptographic sessions.
         val = self._r.getex(self._key(key_id), ex=self._session_ttl)
         return bytes(val) if val is not None else None
 
     def get_last(self) -> Optional[tuple[str, bytes]]:
-        """Restituisce la chiave pending più recente (score massimo nel ZSET).
+        """Returns the most recent pending key (highest score in the ZSET).
 
-        Scansiona dal più recente al meno recente, rimuovendo passivamente le
-        entry scadute (il cui stls:ks:{ns}:key:{kid} non è più presente in Redis)
-        finché non ne trova una valida.
+        Scans from most recent to least recent, passively removing
+        expired entries (whose stls:ks:{ns}:key:{kid} is no longer present
+        in Redis) until it finds a valid one.
 
-        Usa self.get() internamente, che applica GETEX e rinnova il TTL.
+        Uses self.get() internally, which applies GETEX and renews the TTL.
         """
-        # ZREVRANGE restituisce tutti i member in ordine decrescente di score.
-        # Si scansiona dal più recente per trovare la prima entry ancora valida,
-        # rimuovendo passivamente quelle scadute lungo il percorso.
+        # ZREVRANGE returns all members in descending score order.
+        # Scanned from the most recent to find the first still-valid entry,
+        # passively removing expired ones along the way.
         members = self._r.zrevrange(self._pending(), 0, -1)
         for raw in members:
             kid = raw.decode() if isinstance(raw, bytes) else raw
-            key_data = self.get(kid)  # GETEX: rinnova TTL automaticamente
+            key_data = self.get(kid)  # GETEX: automatically renews the TTL
             if key_data is None:
-                # entry pending scaduta: pulizia passiva
+                # expired pending entry: passive cleanup
                 self._r.zrem(self._pending(), kid)
                 continue
             return kid, key_data
@@ -313,18 +314,18 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
 
     def mark_delivered(self, key_id: str) -> None:
         """
-        Aggiorna il TTL della chiave da pending_ttl a session_ttl.
+        Updates the key's TTL from pending_ttl to session_ttl.
 
-        Se zrem_on_deliver=True (client): rimuove il kid dal ZSET pending
-        in modo che run successivi del client non trovino chiavi già usate.
+        If zrem_on_deliver=True (client): removes the kid from the pending
+        ZSET so that subsequent client runs don't find already-used keys.
 
-        Se zrem_on_deliver=False (server, default): mantiene il kid nel ZSET
-        pending in modo che istanze server sorelle (Cloud Run multi-replica)
-        possano trovarlo. La deduplicazione è garantita da _delivered_key_ids
-        in memoria per ogni istanza.
+        If zrem_on_deliver=False (server, default): keeps the kid in the
+        pending ZSET so that sibling server instances (Cloud Run
+        multi-replica) can find it. Deduplication is guaranteed by
+        _delivered_key_ids in memory on each instance.
 
-        In entrambi i casi il TTL della key:{kid} viene esteso a session_ttl
-        per coprire la durata della sessione attiva.
+        In both cases the TTL of key:{kid} is extended to session_ttl
+        to cover the duration of the active session.
         """
         pipe = self._r.pipeline()
         pipe.expire(self._key(key_id), self._session_ttl)
@@ -338,15 +339,15 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
 
     def startup_seen_keys(self) -> set[str]:
         """
-        Legge il ZSET pending e restituisce tutti i kid attualmente presenti.
+        Reads the pending ZSET and returns all kids currently present.
 
-        Chiamato da KeySessionProviderArqitPy.__init__ (server role) per
-        pre-popolare _delivered_key_ids al riavvio del processo: il server
-        ignorerà le chiavi obsolete rimaste in Redis da sessioni precedenti
-        e aspetterà chiavi fresche dal nuovo peering Arqit.
+        Called by KeySessionProviderArqitPy.__init__ (server role) to
+        pre-populate _delivered_key_ids on process restart: the server
+        will ignore the stale keys left in Redis from previous sessions
+        and wait for fresh keys from the new Arqit peering.
 
-        Per il client role questo metodo non viene chiamato (ogni istanza ha
-        un namespace UUID unico, sempre vuoto all'avvio).
+        For the client role this method is never called (each instance
+        has a unique UUID namespace, always empty at startup).
         """
         try:
             members = self._r.zrange(self._pending(), 0, -1)
@@ -373,21 +374,21 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
         self, seen_key_ids: set[str], timeout: float = 30.0
     ) -> Optional[tuple[str, bytes]]:
         """
-        Polling su Redis finché una chiave pending con kid NON in seen_key_ids
-        è disponibile, oppure scade il timeout.
+        Polls Redis until a pending key with a kid NOT in seen_key_ids
+        becomes available, or the timeout expires.
 
-        Usa ZRANGEBYSCORE per ottenere solo i kid arrivati dopo
-        l'ultimo handshake (score > timestamp dell'ultimo kid noto),
-        poi filtra quelli già presenti in seen_key_ids.
+        Uses ZRANGEBYSCORE to get only the kids that arrived after
+        the last handshake (score > timestamp of the last known kid),
+        then filters out those already present in seen_key_ids.
         """
         deadline = _time.monotonic() + timeout
 
-        # score di riferimento = timestamp del kid più recente già visto,
-        # oppure 0 se seen_key_ids è vuoto (accetta qualunque chiave).
+        # Reference score = timestamp of the most recent already-seen kid,
+        # or 0 if seen_key_ids is empty (accepts any key).
         min_score = "-inf"
 
         while _time.monotonic() < deadline:
-            # Legge tutti i kid pending con score > min_score
+            # Reads all pending kids with score > min_score
             members = self._r.zrangebyscore(
                 self._pending(), min_score, "+inf", withscores=False
             )
@@ -397,7 +398,7 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
                     continue
                 key_data = self.get(kid)
                 if key_data is None:
-                    # chiave scaduta in pending — pulizia passiva
+                    # key expired while pending — passive cleanup
                     self._r.zrem(self._pending(), kid)
                     continue
                 return kid, key_data
@@ -417,11 +418,11 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
 
 class ArqitKeyStoreFactory:
     """
-    Costruisce il backend appropriato in base a KEY_STORE_BACKEND.
+    Builds the appropriate backend based on KEY_STORE_BACKEND.
 
-    Uso:
-        store = ArqitKeyStoreFactory.build()        # per-sessione (Option A)
-        store = ArqitKeyStoreFactory.build(ns="srv") # per-processo con namespace
+    Usage:
+        store = ArqitKeyStoreFactory.build()        # per-session (Option A)
+        store = ArqitKeyStoreFactory.build(ns="srv") # per-process with a namespace
     """
 
     @staticmethod
@@ -431,19 +432,19 @@ class ArqitKeyStoreFactory:
         instance_id: Optional[str] = None,
     ) -> ArqitKeyStoreBase:
         """
-        Costruisce il backend appropriato in base a KEY_STORE_BACKEND.
+        Builds the appropriate backend based on KEY_STORE_BACKEND.
 
         Args:
-            namespace: namespace Redis esplicito. Se None, letto da
+            namespace: Explicit Redis namespace. If None, read from
                 KEY_STORE_REDIS_NAMESPACE (default: "default").
-            role: "server" (default) o "client". Determina:
-                - sub-namespace Redis e comportamento ZREM.
-                - Server: {ns}:server — nessun ZREM, condiviso tra repliche.
-                - Client: {ns}:client:{instance_id} — namespace isolato per
-                  istanza, evita collisioni tra sessioni client concorrenti.
-            instance_id: UUID univoco per istanza client (generato da
-                KeyProviderClientArqitPy). Ignorato per il ruolo server.
-                Se None e role=client, viene generato automaticamente.
+            role: "server" (default) or "client". Determines:
+                - the Redis sub-namespace and the ZREM behavior.
+                - Server: {ns}:server — no ZREM, shared across replicas.
+                - Client: {ns}:client:{instance_id} — isolated namespace per
+                  instance, avoiding collisions between concurrent client sessions.
+            instance_id: Unique UUID per client instance (generated by
+                KeyProviderClientArqitPy). Ignored for the server role.
+                If None and role=client, one is generated automatically.
         """
         backend = os.getenv("KEY_STORE_BACKEND", "memory").strip().lower()
 
@@ -456,15 +457,16 @@ class ArqitKeyStoreFactory:
             poll        = float(os.getenv("KEY_STORE_POLL_INTERVAL", "0.3"))
 
             if role == "client":
-                # Namespace isolato per istanza: ogni sessione client concorrente
-                # ha il proprio ZSET pending → impossibile leggere kid altrui.
+                # Per-instance isolated namespace: each concurrent client
+                # session has its own pending ZSET → impossible to read
+                # another's kid.
                 iid = instance_id or str(_uuid.uuid4())
                 ns  = f"{base_ns}:client:{iid}"
-                zrem = True   # pulizia dopo consegna (processo indipendente)
+                zrem = True   # cleanup after delivery (independent process)
             else:
-                # Server: namespace condiviso tra repliche Cloud Run.
+                # Server: namespace shared across Cloud Run replicas.
                 ns   = f"{base_ns}:server"
-                zrem = False  # no ZREM: le repliche devono trovare lo stesso kid
+                zrem = False  # no ZREM: replicas must find the same kid
 
             return RedisArqitKeyStore(
                 redis_url=url,

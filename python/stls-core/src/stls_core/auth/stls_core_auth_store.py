@@ -1,24 +1,25 @@
 """
 stls_core_auth_store.py
 ----------------------
-Cache Redis per le API key di STLS.
+Redis cache for STLS API keys.
 
-Schema chiavi Redis (namespace configurabile, default "stls"):
-    {ns}:key:{key_id}   → JSON(KeyRecord), TTL = expires_at o AUTH_KEY_TTL
-    {ns}:revoked        → SET di key_id revocati (lookup O(1))
-    {ns}:keys:index     → SET di tutti i key_id noti (per bulk ops)
+Redis key schema (configurable namespace, default "stls"):
+    {ns}:key:{key_id}   → JSON(KeyRecord), TTL = expires_at or AUTH_KEY_TTL
+    {ns}:revoked        → SET of revoked key_ids (O(1) lookup)
+    {ns}:keys:index     → SET of all known key_ids (for bulk ops)
 
-Il namespace permette a più ApiKeyManager sullo stesso Redis di non
-collidere: ogni loader (static, file, postgres) usa il proprio namespace,
-evitando che bulk_reload di un loader cancelli le chiavi degli altri.
+The namespace lets multiple ApiKeyManagers on the same Redis avoid
+colliding: each loader (static, file, postgres) uses its own
+namespace, so that one loader's bulk_reload doesn't wipe out another's
+keys.
 
-Compatibile con:
+Compatible with:
     - GCP Memorystore (Redis 7+)
     - AWS ElastiCache standalone
     - Azure Cache for Redis (TLS via rediss://)
-    - Redis locale per sviluppo
+    - local Redis for development
 
-Dipendenza: redis>=7.4.0  (async client built-in, no redis[asyncio])
+Dependency: redis>=7.4.0  (built-in async client, no redis[asyncio] needed)
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ from .stls_core_auth_models import (
     KeyRecord,
 )
 
-# Default namespace (retrocompatibile con le versioni precedenti)
+# Default namespace (backward compatible with earlier versions)
 _DEFAULT_NAMESPACE = "stls"
 
 logger = logging.getLogger(__name__)
@@ -49,20 +50,20 @@ logger = logging.getLogger(__name__)
 
 class RedisKeyCache:
     """
-    Cache primaria per i KeyRecord, backed by Redis.
+    Primary cache for KeyRecords, backed by Redis.
 
     Lifecycle:
         cache = RedisKeyCache()
-        await cache.initialize()   # crea il client Redis
+        await cache.initialize()   # creates the Redis client
         ...
-        await cache.close()        # chiude la connessione
+        await cache.close()        # closes the connection
 
-    Oppure come async context manager:
+    Or as an async context manager:
         async with RedisKeyCache() as cache:
             record = await cache.get("abc123...")
 
-    Tutti i metodi sono safe per uso concorrente (asyncio).
-    Le operazioni bulk usano pipeline Redis per minimizzare i round-trip.
+    All methods are safe for concurrent (asyncio) use.
+    Bulk operations use Redis pipelines to minimize round-trips.
     """
 
     def __init__(
@@ -74,16 +75,16 @@ class RedisKeyCache:
     ) -> None:
         """
         Args:
-            url:              URL Redis. Default: env REDIS_URL, poi "redis://localhost:6379".
-                              Per TLS (Azure, ecc.): "rediss://..."
-            key_ttl:          TTL in secondi per i KeyRecord senza expires_at.
-                              Default: env AUTH_KEY_TTL, poi DEFAULT_KEY_TTL_SECONDS (3600).
-            decode_responses: Decodifica automatica bytes→str. Default True.
-            namespace:        Prefisso per le chiavi Redis. Default: env AUTH_REDIS_NS o "stls".
-                              Usare namespace diversi per isolare loader distinti sullo stesso
-                              Redis (es. "stls:static", "stls:file", "stls:pg").
-                              Più istanze della stessa app devono condividere lo stesso
-                              namespace per beneficiare della cache distribuita.
+            url:              Redis URL. Default: env REDIS_URL, then "redis://localhost:6379".
+                              For TLS (Azure, etc.): "rediss://..."
+            key_ttl:          TTL in seconds for KeyRecords with no expires_at.
+                              Default: env AUTH_KEY_TTL, then DEFAULT_KEY_TTL_SECONDS (3600).
+            decode_responses: Automatic bytes→str decoding. Default True.
+            namespace:        Prefix for the Redis keys. Default: env AUTH_REDIS_NS or "stls".
+                              Use different namespaces to isolate distinct loaders on the same
+                              Redis (e.g. "stls:static", "stls:file", "stls:pg").
+                              Multiple instances of the same app must share the same
+                              namespace to benefit from the distributed cache.
         """
         self._url = url or os.environ.get("REDIS_URL", "redis://localhost:6379")
         self._key_ttl = key_ttl or int(
@@ -92,20 +93,20 @@ class RedisKeyCache:
         self._decode = decode_responses
         self._client: Any = None  # redis.asyncio.Redis, lazy init
 
-        # Namespace: isola le chiavi di questo loader dagli altri sullo stesso Redis.
-        # Priorità: parametro esplicito > env AUTH_REDIS_NS > "stls"
+        # Namespace: isolates this loader's keys from the others on the same Redis.
+        # Priority: explicit parameter > AUTH_REDIS_NS env > "stls"
         ns = namespace or os.environ.get("AUTH_REDIS_NS") or _DEFAULT_NAMESPACE
         self._namespace   = ns
         self._key_prefix  = f"{ns}:key:"        # {ns}:key:{key_id}
-        self._revoked_set = f"{ns}:revoked"     # SET dei key_id revocati
-        self._index_set   = f"{ns}:keys:index"  # SET di tutti i key_id noti
+        self._revoked_set = f"{ns}:revoked"     # SET of revoked key_ids
+        self._index_set   = f"{ns}:keys:index"  # SET of all known key_ids
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     async def initialize(self) -> None:
-        """Crea il client Redis. Chiamare prima di qualsiasi operazione."""
+        """Creates the Redis client. Call before any other operation."""
         if self._client is not None:
             return
         try:
@@ -123,12 +124,12 @@ class RedisKeyCache:
             socket_connect_timeout=5,
             retry_on_timeout=True,
         )
-        # verifica connessione al primo utilizzo
+        # verifies the connection on first use
         await self._client.ping()
         logger.info("RedisKeyCache: connesso a %s", self._sanitize_url(self._url))
 
     async def close(self) -> None:
-        """Chiude la connessione Redis."""
+        """Closes the Redis connection."""
         if self._client is not None:
             await self._client.aclose()
             self._client = None
@@ -142,16 +143,16 @@ class RedisKeyCache:
         await self.close()
 
     # ------------------------------------------------------------------
-    # Operazioni singole
+    # Single-record operations
     # ------------------------------------------------------------------
 
     async def get(self, key_id: str) -> KeyRecord | None:
         """
-        Recupera un KeyRecord dalla cache.
+        Retrieves a KeyRecord from the cache.
 
         Returns:
-            KeyRecord se presente e non scaduto (Redis gestisce il TTL),
-            None se assente.
+            KeyRecord if present and not expired (Redis handles the TTL),
+            None if absent.
         """
         await self._ensure_connected()
         redis_key = f"{self._key_prefix}{key_id}"
@@ -166,18 +167,18 @@ class RedisKeyCache:
 
     async def set(self, record: KeyRecord) -> None:
         """
-        Scrive un KeyRecord in cache con TTL appropriato.
+        Writes a KeyRecord to the cache with the appropriate TTL.
 
-        TTL calcolato come:
-            - Se record.expires_at è impostato: secondi rimanenti fino alla scadenza.
-            - Altrimenti: AUTH_KEY_TTL (default 3600s).
-        In entrambi i casi non superiore a AUTH_KEY_TTL per limitare
-        la finestra di validità di chiavi con scadenza lontana nel tempo.
+        TTL computed as:
+            - If record.expires_at is set: remaining seconds until expiry.
+            - Otherwise: AUTH_KEY_TTL (default 3600s).
+        In both cases capped at AUTH_KEY_TTL, to limit the validity
+        window of keys with a far-off expiry.
         """
         await self._ensure_connected()
         ttl = self._compute_ttl(record)
         if ttl <= 0:
-            # chiave già scaduta: non scrivere in cache
+            # key already expired: don't write it to the cache
             logger.debug("RedisKeyCache.set: chiave %s... già scaduta, skip", record.key_id[:12])
             return
         try:
@@ -189,7 +190,7 @@ class RedisKeyCache:
             logger.error("RedisKeyCache.set(%s...): %s", record.key_id[:12], exc)
 
     async def delete(self, key_id: str) -> None:
-        """Rimuove un KeyRecord dalla cache (senza revocarlo)."""
+        """Removes a KeyRecord from the cache (without revoking it)."""
         await self._ensure_connected()
         try:
             pipe = self._client.pipeline()
@@ -205,11 +206,11 @@ class RedisKeyCache:
 
     async def revoke(self, key_id: str) -> None:
         """
-        Revoca una API key.
+        Revokes an API key.
 
-        Aggiunge il key_id al SET {ns}:revoked E rimuove la entry
-        dalla cache. Il SET non ha TTL: le revoche sono permanenti
-        finché non vengono esplicitamente cancellate.
+        Adds the key_id to the {ns}:revoked SET AND removes its cache
+        entry. The SET has no TTL: revocations are permanent until
+        explicitly cleared.
         """
         await self._ensure_connected()
         try:
@@ -224,25 +225,25 @@ class RedisKeyCache:
 
     async def is_revoked(self, key_id: str) -> bool:
         """
-        Verifica se un key_id è nel SET di revoca.
+        Checks whether a key_id is in the revocation SET.
 
-        Operazione O(1). Chiamata come primo check in ApiKeyManager.validate()
-        prima ancora di consultare la cache del record.
+        O(1) operation. Called as the first check in
+        ApiKeyManager.validate(), before even consulting the record cache.
         """
         await self._ensure_connected()
         try:
             return bool(await self._client.sismember(self._revoked_set, key_id))
         except Exception as exc:
             logger.error("RedisKeyCache.is_revoked(%s...): %s", key_id[:12], exc)
-            # fail-open: in caso di errore Redis non blocchiamo il servizio
+            # fail-open: on a Redis error we don't block the service
             return False
 
     async def unrevoke(self, key_id: str) -> None:
         """
-        Rimuove un key_id dal SET di revoca (operazione di emergenza).
+        Removes a key_id from the revocation SET (an emergency operation).
 
-        Non ripristina la cache: il record verrà ricaricato dal loader
-        al prossimo accesso.
+        Does not restore the cache entry: the record will be reloaded
+        from the loader on the next access.
         """
         await self._ensure_connected()
         try:
@@ -252,23 +253,23 @@ class RedisKeyCache:
             logger.error("RedisKeyCache.unrevoke(%s...): %s", key_id[:12], exc)
 
     # ------------------------------------------------------------------
-    # Bulk operations (usate dal BackgroundRefresher)
+    # Bulk operations (used by the BackgroundRefresher)
     # ------------------------------------------------------------------
 
     async def bulk_reload(self, records: list[KeyRecord]) -> int:
         """
-        Sostituisce atomicamente tutti i KeyRecord in cache del namespace corrente.
+        Atomically replaces all KeyRecords in the cache for the current namespace.
 
-        Algoritmo:
-            1. Recupera l'indice corrente ({ns}:keys:index).
-            2. Scrive tutti i nuovi record in pipeline.
-            3. Rimuove i record non più presenti nel nuovo set.
-            4. Aggiorna l'indice.
+        Algorithm:
+            1. Retrieves the current index ({ns}:keys:index).
+            2. Writes all the new records in a pipeline.
+            3. Removes records no longer present in the new set.
+            4. Updates the index.
 
-        Non tocca mai il SET di revoca né le chiavi di altri namespace.
+        Never touches the revocation SET nor other namespaces' keys.
 
         Returns:
-            Numero di record scritti.
+            Number of records written.
         """
         await self._ensure_connected()
         if not records:
@@ -278,10 +279,10 @@ class RedisKeyCache:
         new_ids = {r.key_id for r in records}
 
         try:
-            # 1. indice corrente (solo del namespace corrente)
+            # 1. current index (only for the current namespace)
             old_ids: set[str] = await self._client.smembers(self._index_set) or set()
 
-            # 2. scrivi tutti i nuovi record in pipeline
+            # 2. write all the new records in a pipeline
             pipe = self._client.pipeline()
             for record in records:
                 ttl = self._compute_ttl(record)
@@ -290,7 +291,7 @@ class RedisKeyCache:
                 pipe.setex(f"{self._key_prefix}{record.key_id}", ttl, json.dumps(record.to_dict()))
                 pipe.sadd(self._index_set, record.key_id)
 
-            # 3. rimuovi record obsoleti (presenti prima, assenti ora)
+            # 3. remove stale records (present before, absent now)
             stale_ids = old_ids - new_ids
             for stale_id in stale_ids:
                 pipe.delete(f"{self._key_prefix}{stale_id}")
@@ -314,7 +315,7 @@ class RedisKeyCache:
             return 0
 
     async def list_all_ids(self) -> set[str]:
-        """Restituisce tutti i key_id nell'indice del namespace corrente (per diagnostica/admin)."""
+        """Returns all key_ids in the current namespace's index (for diagnostics/admin)."""
         await self._ensure_connected()
         try:
             return await self._client.smembers(self._index_set) or set()
@@ -323,7 +324,7 @@ class RedisKeyCache:
             return set()
 
     async def list_revoked_ids(self) -> set[str]:
-        """Restituisce tutti i key_id revocati nel namespace corrente (per diagnostica/admin)."""
+        """Returns all revoked key_ids in the current namespace (for diagnostics/admin)."""
         await self._ensure_connected()
         try:
             return await self._client.smembers(self._revoked_set) or set()
@@ -333,10 +334,10 @@ class RedisKeyCache:
 
     async def flush_all_keys(self) -> None:
         """
-        Rimuove tutti i KeyRecord e l'indice dalla cache del namespace corrente.
+        Removes all KeyRecords and the index from the current namespace's cache.
 
-        NON tocca il SET di revoca né le chiavi di altri namespace.
-        Utile per forzare un reload completo dal loader.
+        Does NOT touch the revocation SET nor other namespaces' keys.
+        Useful to force a full reload from the loader.
         """
         await self._ensure_connected()
         try:
@@ -351,11 +352,11 @@ class RedisKeyCache:
             logger.error("RedisKeyCache.flush_all_keys(): %s", exc)
 
     # ------------------------------------------------------------------
-    # Diagnostica
+    # Diagnostics
     # ------------------------------------------------------------------
 
     async def ping(self) -> bool:
-        """Health check: True se Redis risponde."""
+        """Health check: True if Redis responds."""
         try:
             await self._ensure_connected()
             return await self._client.ping()
@@ -364,14 +365,14 @@ class RedisKeyCache:
 
     async def stats(self) -> dict[str, Any]:
         """
-        Statistiche sintetiche della cache.
+        Summary cache statistics.
 
-        Returns dict con:
-            cached_keys:   numero di record in cache nel namespace corrente
-            revoked_keys:  numero di key_id revocati nel namespace corrente
-            redis_url:     URL sanitizzato (password oscurata)
-            key_ttl:       TTL di default configurato
-            namespace:     namespace Redis usato da questa istanza
+        Returns a dict with:
+            cached_keys:   number of records cached in the current namespace
+            revoked_keys:  number of revoked key_ids in the current namespace
+            redis_url:     sanitized URL (password redacted)
+            key_ttl:       configured default TTL
+            namespace:     Redis namespace used by this instance
         """
         await self._ensure_connected()
         cached = len(await self.list_all_ids())
@@ -385,21 +386,21 @@ class RedisKeyCache:
         }
 
     # ------------------------------------------------------------------
-    # Helpers interni
+    # Internal helpers
     # ------------------------------------------------------------------
 
     async def _ensure_connected(self) -> None:
-        """Garantisce che il client Redis sia inizializzato."""
+        """Ensures the Redis client is initialized."""
         if self._client is None:
             await self.initialize()
 
     def _compute_ttl(self, record: KeyRecord) -> int:
         """
-        Calcola il TTL in secondi da assegnare al record in Redis.
+        Computes the TTL in seconds to assign to the record in Redis.
 
-        Usa il minore tra:
-            - secondi rimanenti a expires_at (se impostato)
-            - AUTH_KEY_TTL (ceiling di sicurezza)
+        Uses the smaller of:
+            - the seconds remaining until expires_at (if set)
+            - AUTH_KEY_TTL (a safety ceiling)
         """
         if record.expires_at is None:
             return self._key_ttl
@@ -410,7 +411,7 @@ class RedisKeyCache:
 
     @staticmethod
     def _sanitize_url(url: str) -> str:
-        """Oscura la password nell'URL Redis per i log."""
+        """Redacts the password in the Redis URL for logging."""
         try:
             from urllib.parse import urlparse, urlunparse
             parsed = urlparse(url)
@@ -425,9 +426,9 @@ class RedisKeyCache:
 
 
 # ---------------------------------------------------------------------------
-# Helpers interni al modulo (mantenuti per retrocompatibilità)
+# Module-internal helpers (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 
 def _rkey(key_id: str) -> str:
-    """Costruisce la chiave Redis per un KeyRecord col namespace di default: stls:key:{key_id}."""
+    """Builds the Redis key for a KeyRecord under the default namespace: stls:key:{key_id}."""
     return f"{REDIS_KEY_PREFIX}{key_id}"

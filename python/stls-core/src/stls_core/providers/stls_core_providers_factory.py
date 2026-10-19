@@ -1,26 +1,26 @@
 """
 stls_core_providers_factory.py
 -------------------------------
-Factory singleton per la selezione e l'istanziazione del key provider STLS.
+Singleton factory for selecting and instantiating the STLS key provider.
 
-Contenuto:
-  - KeyProviderFactory        : seleziona KeyProvider da KEY_PROVIDER_NAME
-  - KeySessionProviderFactory : crea e avvia KeySessionProvider completo
+Contents:
+  - KeyProviderFactory        : selects a KeyProvider based on KEY_PROVIDER_NAME
+  - KeySessionProviderFactory : creates and starts a full KeySessionProvider
 
-Providers supportati:
-  base      → KeyProviderBase       (zero dipendenze, chiave fissa)
-  arqit_py  → KeyProviderArqitPy   (wheel Arqit SKA-Platform nativi)
-  pqc       → KeyProviderPQC       (ibrido X25519 + ML-KEM-768, liboqs-python)
+Supported providers:
+  base      → KeyProviderBase       (zero dependencies, fixed key)
+  arqit_py  → KeyProviderArqitPy   (native Arqit SKA-Platform wheels)
+  pqc       → KeyProviderPQC       (hybrid X25519 + ML-KEM-768, liboqs-python)
 
-Uso tipico (server):
+Typical usage (server):
     factory  = KeySessionProviderFactory()
     provider = factory.get_session_provider(
         session_type=KeySessionProvider.KeySessionProviderType.SERVER,
         port=int(os.getenv("KEY_SESSION_PORT", "8091")),
     )
-    # provider è già avviato e pronto per perform_handshake()
+    # provider is already started and ready for perform_handshake()
 
-Uso tipico (client):
+Typical usage (client):
     factory  = KeySessionProviderFactory()
     provider = factory.get_session_provider(
         session_type=KeySessionProvider.KeySessionProviderType.CLIENT,
@@ -52,14 +52,14 @@ logger = logging.getLogger(__name__)
 
 class KeyProviderFactory:
     """
-    Singleton factory per la selezione del KeyProvider.
+    Singleton factory for selecting the KeyProvider.
 
-    Legge KEY_PROVIDER_NAME dall'ambiente per determinare
-    quale provider istanziare. Supporta "base" e "arqit_py".
+    Reads KEY_PROVIDER_NAME from the environment to determine
+    which provider to instantiate. Supports "base" and "arqit_py".
 
-    Il singleton garantisce che il provider venga costruito
-    una sola volta per processo — rilevante per arqit_py che
-    inizializza connessioni esterne.
+    The singleton guarantees that the provider is built
+    only once per process — relevant for arqit_py, which
+    initializes external connections.
     """
 
     _instance: Optional["KeyProviderFactory"] = None
@@ -71,17 +71,17 @@ class KeyProviderFactory:
 
     def get_provider(self, name: str) -> KeyProvider:
         """
-        Restituisce il KeyProvider corrispondente al nome.
+        Returns the KeyProvider corresponding to the given name.
 
         Args:
             name: "base" | "arqit_py" | "pqc"
 
         Returns:
-            Istanza KeyProvider pronta per create_provider_client/server().
+            KeyProvider instance ready for create_provider_client/server().
 
         Raises:
-            ValueError: Se il nome non è riconosciuto.
-            ImportError: Se arqit_py è richiesto ma i wheel non sono installati.
+            ValueError: If the name is not recognized.
+            ImportError: If arqit_py is requested but the wheels are not installed.
         """
         if name == "base":
             return KeyProviderBase()
@@ -133,14 +133,14 @@ class KeyProviderFactory:
 
 class KeySessionProviderFactory:
     """
-    Singleton factory che crea, avvia e restituisce un KeySessionProvider
-    completamente operativo.
+    Singleton factory that creates, starts and returns a fully operational
+    KeySessionProvider.
 
-    Combina KeyProviderFactory + create_provider_client/server + start()
-    in un'unica chiamata, gestendo correttamente la risoluzione dei
-    risultati async/sync/Java-future.
+    Combines KeyProviderFactory + create_provider_client/server + start()
+    into a single call, correctly handling the resolution of
+    async/sync/Java-future results.
 
-    Uso:
+    Usage:
         provider = KeySessionProviderFactory().get_session_provider(
             session_type=KeySessionProvider.KeySessionProviderType.SERVER,
             port=8091,
@@ -162,20 +162,20 @@ class KeySessionProviderFactory:
         name: Optional[str] = None,
     ) -> KeySessionProvider:
         """
-        Crea e avvia il KeySessionProvider.
+        Creates and starts the KeySessionProvider.
 
         Args:
-            session_type: CLIENT o SERVER.
-            host:         Host del server (solo CLIENT).
-            port:         Porta del provider (CLIENT e SERVER).
-            name:         Nome provider override. Se None legge KEY_PROVIDER_NAME.
+            session_type: CLIENT or SERVER.
+            host:         Server host (CLIENT only).
+            port:         Provider port (both CLIENT and SERVER).
+            name:         Provider name override. If None, reads KEY_PROVIDER_NAME.
 
         Returns:
-            KeySessionProvider avviato e pronto per getSessionKeyIdentifier().
+            KeySessionProvider, started and ready for getSessionKeyIdentifier().
 
         Raises:
-            ValueError: Se KEY_PROVIDER_NAME non è impostato né passato.
-            ImportError: Se arqit_py è richiesto ma i wheel mancano.
+            ValueError: If KEY_PROVIDER_NAME is neither set nor passed explicitly.
+            ImportError: If arqit_py is requested but the wheels are missing.
         """
         provider_name = name or os.getenv("KEY_PROVIDER_NAME")
         if not provider_name:
@@ -190,7 +190,7 @@ class KeySessionProviderFactory:
             server = key_provider.create_provider_server(
                 port=port, options={}
             )
-            # start() può essere sync o async a seconda del provider
+            # start() can be sync or async depending on the provider
             result = server.start()
             resolved = self._resolve(result)
             if hasattr(resolved, "block"):
@@ -206,14 +206,14 @@ class KeySessionProviderFactory:
     @staticmethod
     def resolve_if_awaitable(result: Any) -> Any:
         """
-        Normalizza un risultato che può essere:
-          - coroutine asyncio  → esegue con asyncio.run()
-          - valore diretto     → restituisce as-is
+        Normalizes a result that may be:
+          - an asyncio coroutine  → run with asyncio.run()
+          - a direct value        → returned as-is
 
-        Metodo pubblico di utilità, usabile anche fuori da get_session_provider()
-        per risolvere manualmente risultati di getSessionKeyIdentifier()/
-        getSessionKeyData() che potrebbero essere awaitable (es. arqit_py)
-        o valori diretti (es. base).
+        Public utility method, usable outside get_session_provider() too,
+        to manually resolve results from getSessionKeyIdentifier()/
+        getSessionKeyData() that may be awaitable (e.g. arqit_py)
+        or direct values (e.g. base).
         """
         if inspect.isawaitable(result):
             logger.debug(
@@ -223,5 +223,5 @@ class KeySessionProviderFactory:
             return asyncio.run(result)
         return result
 
-    # Alias interno mantenuto per chiarezza nelle chiamate di get_session_provider()
+    # Internal alias kept for clarity in get_session_provider() calls
     _resolve = resolve_if_awaitable

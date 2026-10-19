@@ -1,47 +1,48 @@
 """
 stls_core_providers_pqc.py
 --------------------------
-Provider PQC (Post-Quantum Cryptography) per STLS.
+PQC (Post-Quantum Cryptography) provider for STLS.
 
-Implementa key agreement ibrido X25519 + ML-KEM-768 (NIST FIPS 203):
-  - X25519 (ECDH su Curve25519): via pyca/cryptography, già dipendenza
-    di stls-core. Sicuro contro computer classici.
-  - ML-KEM-768 (ex Kyber768, NIST FIPS 203): via liboqs-python,
-    dipendenza opzionale [pqc]. Sicuro contro computer quantistici
-    (lattice-based — resistente a Shor's algorithm).
+Implements a hybrid X25519 + ML-KEM-768 key agreement (NIST FIPS 203):
+  - X25519 (ECDH over Curve25519): via pyca/cryptography, already a
+    dependency of stls-core. Secure against classical computers.
+  - ML-KEM-768 (formerly Kyber768, NIST FIPS 203): via liboqs-python,
+    an optional [pqc] dependency. Secure against quantum computers
+    (lattice-based — resistant to Shor's algorithm).
 
-La combinazione ibrida garantisce che rompere entrambi gli algoritmi
-contemporaneamente sia necessario: se X25519 cedesse a un computer
-quantistico, ML-KEM-768 protegge. Se ML-KEM-768 avesse una vulnerabilità
-ignota, X25519 protegge.
+The hybrid combination guarantees that breaking both algorithms
+simultaneously is necessary: if X25519 fell to a quantum computer,
+ML-KEM-768 still protects the session. If ML-KEM-768 had an unknown
+vulnerability, X25519 still protects it.
 
-Selezione: KEY_PROVIDER_NAME=pqc
-Dipendenza opzionale: pip install 'stls-core[pqc]' (installa liboqs-python)
+Selection: KEY_PROVIDER_NAME=pqc
+Optional dependency: pip install 'stls-core[pqc]' (installs liboqs-python)
 
-A differenza di arqit_py, non esiste un servizio di peering esterno:
-la chiave è derivata localmente durante ogni handshake tramite KEM.
-La stessa SessionCache (memory o redis) degli altri provider conserva
-la session_key derivata associata al session_id.
+Unlike arqit_py, there is no external peering service: the key is
+derived locally during every handshake via the KEM.
+The same SessionCache (memory or redis) used by the other providers
+holds the derived session_key associated with the session_id.
 
-Quantum safety — nota sull'entropia:
-  La quantum-safety viene dall'algoritmo lattice-based (ML-KEM), non
-  dalla "qualità quantistica" del random. os.urandom() via CSPRNG del
-  kernel (ChaCha20 su Linux) fornisce 256 bit di entropia — sufficiente
-  per sicurezza NIST Level 3 (ML-KEM-768). QRNG hardware è un futuro
-  miglioramento iniettabile via HKDF-Extract come salt esterno.
+Quantum safety — a note on entropy:
+  Quantum-safety comes from the lattice-based algorithm (ML-KEM), not
+  from the "quantum quality" of the randomness. os.urandom() via the
+  kernel's CSPRNG (ChaCha20 on Linux) provides 256 bits of entropy —
+  sufficient for NIST Level 3 security (ML-KEM-768). Hardware QRNG is a
+  future improvement that can be injected via HKDF-Extract as an
+  external salt.
 
-Struttura:
-  PQCKeyStore               — dict thread-safe per le chiavi derivate
-  KeySessionProviderPQC     — implementa KeySessionProvider
-  KeyProviderClientPQC      — implementa KeyProviderClient
-  KeyProviderServerPQC      — implementa KeyProviderServer
-  KeyProviderPQC            — implementa KeyProvider (factory)
-  mlkem_generate_keypair()  — genera keypair ML-KEM-768
-  mlkem_encap()             — KEM encapsulation (server con pubkey client)
-  mlkem_decap()             — KEM decapsulation (client con ciphertext server)
-  x25519_generate_keypair() — genera keypair X25519
-  x25519_exchange()         — calcola X25519 shared secret
-  derive_hybrid_key()       — HKDF dai due shared secret
+Structure:
+  PQCKeyStore               — thread-safe dict for the derived keys
+  KeySessionProviderPQC     — implements KeySessionProvider
+  KeyProviderClientPQC      — implements KeyProviderClient
+  KeyProviderServerPQC      — implements KeyProviderServer
+  KeyProviderPQC            — implements KeyProvider (factory)
+  mlkem_generate_keypair()  — generates an ML-KEM-768 keypair
+  mlkem_encap()             — KEM encapsulation (server, with the client's pubkey)
+  mlkem_decap()             — KEM decapsulation (client, with the server's ciphertext)
+  x25519_generate_keypair() — generates an X25519 keypair
+  x25519_exchange()         — computes the X25519 shared secret
+  derive_hybrid_key()       — HKDF from the two shared secrets
 """
 
 from __future__ import annotations
@@ -62,7 +63,7 @@ from .stls_core_providers_base import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Algoritmo ML-KEM-768 — nomi supportati da liboqs
+# ML-KEM-768 algorithm — names supported by liboqs
 # ---------------------------------------------------------------------------
 
 _MLKEM_CANDIDATES = ("ML-KEM-768", "Kyber768")
@@ -70,19 +71,19 @@ _MLKEM_ALG_CACHE: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
-# PQCKeyStore — store in-memory per le chiavi derivate via KEM
+# PQCKeyStore — in-memory store for keys derived via the KEM
 # ---------------------------------------------------------------------------
 
 class PQCKeyStore:
     """
-    Store thread-safe in-memory per le chiavi di sessione derivate via PQC.
+    Thread-safe in-memory store for session keys derived via PQC.
 
-    Diversamente da ArqitKeyStoreBase (che gestisce chiavi asincrone da
-    un peering esterno), PQCKeyStore è un semplice dict perché le chiavi
-    PQC sono derivate localmente e sincrono durante l'handshake.
+    Unlike ArqitKeyStoreBase (which handles asynchronous keys from
+    external peering), PQCKeyStore is a plain dict because PQC keys
+    are derived locally and synchronously during the handshake.
 
-    Il TTL è gestito dalla SessionCache a livello superiore — questa
-    classe mantiene solo la correlazione kid → bytes per il lookup in
+    The TTL is managed by the SessionCache at a higher level — this
+    class only maintains the kid → bytes correlation for the lookup in
     getSessionKeyData().
     """
 
@@ -91,18 +92,18 @@ class PQCKeyStore:
         self._keys: dict[str, bytes] = {}
 
     def put(self, kid: str, key_bytes: bytes) -> None:
-        """Salva una chiave derivata tramite KEM."""
+        """Saves a key derived via the KEM."""
         with self._lock:
             self._keys[kid] = key_bytes
         logger.debug("[PQCKeyStore] chiave salvata: kid=%s len=%d", kid, len(key_bytes))
 
     def get(self, kid: str) -> Optional[bytes]:
-        """Recupera la chiave associata al kid, o None."""
+        """Retrieves the key associated with the kid, or None."""
         with self._lock:
             return self._keys.get(kid)
 
     def remove(self, kid: str) -> bool:
-        """Rimuove la chiave. Restituisce True se esisteva."""
+        """Removes the key. Returns True if it existed."""
         with self._lock:
             return bool(self._keys.pop(kid, None))
 
@@ -117,15 +118,15 @@ class PQCKeyStore:
 
 class KeySessionProviderPQC(KeySessionProvider):
     """
-    KeySessionProvider per il provider PQC.
+    KeySessionProvider for the PQC provider.
 
-    SERVER: la chiave viene iniettata via inject_key() da
-    perform_pqc_handshake() dopo il KEM exchange. getSessionKeyIdentifier()
-    e getSessionKeyData() la espongono alla pipeline standard.
+    SERVER: the key is injected via inject_key() by
+    perform_pqc_handshake() after the KEM exchange. getSessionKeyIdentifier()
+    and getSessionKeyData() expose it to the standard pipeline.
 
-    CLIENT: tiene i keypair X25519 e ML-KEM generati da
-    KeyProviderClientPQC.start(), esposti come property per il KEM
-    lato client (decap + DH) dopo la PQCHandshakeResponse.
+    CLIENT: holds the X25519 and ML-KEM keypairs generated by
+    KeyProviderClientPQC.start(), exposed as properties for the client-side
+    KEM (decap + DH) after the PQCHandshakeResponse.
     """
 
     def __init__(
@@ -138,7 +139,7 @@ class KeySessionProviderPQC(KeySessionProvider):
         self._session_type = session_type
         self._key_store = key_store
         self._kid: Optional[str] = None
-        # Client only — keypair per KEM lato client
+        # Client only — keypair for the client-side KEM
         self._x25519_private_key_bytes = x25519_private_key_bytes
         self._mlkem_secret_key_bytes = mlkem_secret_key_bytes
 
@@ -147,12 +148,12 @@ class KeySessionProviderPQC(KeySessionProvider):
 
     async def getSessionKeyIdentifier(self) -> str:
         """
-        Restituisce il kid della sessione corrente.
+        Returns the kid of the current session.
 
-        SERVER: il kid viene iniettato da inject_key() da
-        perform_pqc_handshake() prima che questa venga chiamata.
-        CLIENT: il kid è impostato via setSessionKeyIdentifier()
-        dopo la ricezione della PQCHandshakeResponse.
+        SERVER: the kid is injected by inject_key() from
+        perform_pqc_handshake() before this is called.
+        CLIENT: the kid is set via setSessionKeyIdentifier()
+        after receiving the PQCHandshakeResponse.
         """
         if self._kid is None:
             raise RuntimeError(
@@ -166,7 +167,7 @@ class KeySessionProviderPQC(KeySessionProvider):
         logger.debug("[KeySessionProviderPQC] kid impostato: %s", kid)
 
     async def getSessionKeyData(self, session_key_identifier: str) -> bytes:
-        """Restituisce la chiave derivata tramite KEM per il kid dato."""
+        """Returns the key derived via the KEM for the given kid."""
         key = self._key_store.get(session_key_identifier)
         if key is None:
             raise KeyError(
@@ -177,12 +178,12 @@ class KeySessionProviderPQC(KeySessionProvider):
 
     def inject_key(self, kid: str, session_key: bytes) -> None:
         """
-        Inietta la chiave derivata da perform_pqc_handshake() nel key store.
+        Injects the key derived by perform_pqc_handshake() into the key store.
 
-        Chiamato dal server dopo ogni KEM exchange per rendere la chiave
-        disponibile a getSessionKeyData() e aggiornare il kid corrente.
-        Ogni handshake PQC produce un kid distinto (UUID), quindi questa
-        istanza può servire handshake successivi senza rischio di riuso.
+        Called by the server after every KEM exchange to make the key
+        available to getSessionKeyData() and update the current kid.
+        Every PQC handshake produces a distinct kid (UUID), so this
+        instance can serve subsequent handshakes with no reuse risk.
         """
         self._key_store.put(kid, session_key)
         self._kid = kid
@@ -194,16 +195,16 @@ class KeySessionProviderPQC(KeySessionProvider):
     def getPeerIdentity(self) -> Optional[str]:
         return None
 
-    # ── Proprietà client-only ─────────────────────────────────────────────────
+    # ── Client-only properties ─────────────────────────────────────────────────
 
     @property
     def x25519_private_key_bytes(self) -> Optional[bytes]:
-        """Chiave privata X25519 del client — usata in x25519_exchange()."""
+        """Client's X25519 private key — used in x25519_exchange()."""
         return self._x25519_private_key_bytes
 
     @property
     def mlkem_secret_key_bytes(self) -> Optional[bytes]:
-        """Secret key ML-KEM-768 del client — usata in mlkem_decap()."""
+        """Client's ML-KEM-768 secret key — used in mlkem_decap()."""
         return self._mlkem_secret_key_bytes
 
 
@@ -213,14 +214,14 @@ class KeySessionProviderPQC(KeySessionProvider):
 
 class KeyProviderClientPQC(KeyProviderClient):
     """
-    KeyProviderClient PQC — lato client.
+    KeyProviderClient PQC — client side.
 
-    start(): genera keypair X25519 e ML-KEM-768 per questa sessione.
-    Le pubkey vengono incluse nella PQCHandshakeRequest; le chiavi
-    private rimangono locali per il decap + DH dopo la risposta.
+    start(): generates the X25519 and ML-KEM-768 keypairs for this session.
+    The pubkeys are included in the PQCHandshakeRequest; the private
+    keys stay local for the decap + DH after the response.
 
-    createProviderSession(): espone i keypair tramite KeySessionProviderPQC
-    in modo che il codice client possa derivare la session_key.
+    createProviderSession(): exposes the keypairs via KeySessionProviderPQC
+    so the client code can derive the session_key.
     """
 
     def __init__(self) -> None:
@@ -230,7 +231,7 @@ class KeyProviderClientPQC(KeyProviderClient):
         self._mlkem_public_key_bytes: Optional[bytes] = None
 
     def start(self) -> None:
-        """Genera keypair X25519 + ML-KEM-768 per questa sessione."""
+        """Generates the X25519 + ML-KEM-768 keypairs for this session."""
         x25519_priv, x25519_pub = x25519_generate_keypair()
         mlkem_pub, mlkem_sec = mlkem_generate_keypair()
 
@@ -251,7 +252,7 @@ class KeyProviderClientPQC(KeyProviderClient):
         return self._session
 
     def stop(self) -> None:
-        """Azzera le chiavi private in memoria (best-effort in Python)."""
+        """Zeroes out the private keys in memory (best-effort in Python)."""
         if self._session is not None:
             if self._session._x25519_private_key_bytes:
                 self._session._x25519_private_key_bytes = (
@@ -265,14 +266,14 @@ class KeyProviderClientPQC(KeyProviderClient):
 
     @property
     def x25519_public_key_bytes(self) -> bytes:
-        """Pubkey X25519 da includere nella PQCHandshakeRequest."""
+        """X25519 pubkey to include in the PQCHandshakeRequest."""
         if self._x25519_public_key_bytes is None:
             raise RuntimeError("[KeyProviderClientPQC] start() non ancora chiamato")
         return self._x25519_public_key_bytes
 
     @property
     def mlkem_public_key_bytes(self) -> bytes:
-        """Pubkey ML-KEM-768 da includere nella PQCHandshakeRequest."""
+        """ML-KEM-768 pubkey to include in the PQCHandshakeRequest."""
         if self._mlkem_public_key_bytes is None:
             raise RuntimeError("[KeyProviderClientPQC] start() non ancora chiamato")
         return self._mlkem_public_key_bytes
@@ -284,15 +285,15 @@ class KeyProviderClientPQC(KeyProviderClient):
 
 class KeyProviderServerPQC(KeyProviderServer):
     """
-    KeyProviderServer PQC — lato server.
+    KeyProviderServer PQC — server side.
 
-    Non avvia thread di peering: la chiave è derivata per ogni handshake
-    da perform_pqc_handshake() che chiama inject_key() sulla stessa istanza
-    KeySessionProviderPQC. start() è un no-op (nessun servizio esterno).
+    Starts no peering thread: the key is derived for every handshake by
+    perform_pqc_handshake(), which calls inject_key() on the same
+    KeySessionProviderPQC instance. start() is a no-op (no external service).
 
-    La stessa istanza serve tutti gli handshake nel corso della vita del
-    processo, coerente con il pattern di arqit_py. Ogni handshake produce
-    un kid distinto (UUID) — nessun riuso di chiavi tra sessioni diverse.
+    The same instance serves every handshake over the process's lifetime,
+    consistent with the arqit_py pattern. Every handshake produces a
+    distinct kid (UUID) — no key reuse between different sessions.
     """
 
     def __init__(self) -> None:
@@ -300,7 +301,7 @@ class KeyProviderServerPQC(KeyProviderServer):
         self._session: Optional[KeySessionProviderPQC] = None
 
     async def start(self) -> BlockableResult:
-        """Inizializza la sessione provider. Nessun thread di peering."""
+        """Initializes the provider session. No peering thread."""
         self._session = KeySessionProviderPQC(
             session_type=KeySessionProvider.KeySessionProviderType.SERVER,
             key_store=self._key_store,
@@ -326,15 +327,15 @@ class KeyProviderServerPQC(KeyProviderServer):
 
 class KeyProviderPQC(KeyProvider):
     """
-    KeyProvider PQC — ibrido X25519 + ML-KEM-768.
+    KeyProvider PQC — hybrid X25519 + ML-KEM-768.
 
-    Selezione: KEY_PROVIDER_NAME=pqc
-    Richiede liboqs-python installato via [pqc] extra.
+    Selection: KEY_PROVIDER_NAME=pqc
+    Requires liboqs-python installed via the [pqc] extra.
 
-    L'handshake PQC usa un endpoint dedicato (/stls/pqc/handshake) con
-    wire format esteso (PQCHandshakeRequest / PQCHandshakeResponse) rispetto
-    all'handshake standard. I layer stls-a2a e stls-mcp registrano
-    entrambi gli endpoint quando KEY_PROVIDER_NAME=pqc.
+    The PQC handshake uses a dedicated endpoint (/stls/pqc/handshake) with
+    an extended wire format (PQCHandshakeRequest / PQCHandshakeResponse)
+    compared to the standard handshake. Both stls-a2a and stls-mcp register
+    both endpoints when KEY_PROVIDER_NAME=pqc.
     """
 
     def get_name(self) -> str:
@@ -354,18 +355,18 @@ class KeyProviderPQC(KeyProvider):
 
 
 # ---------------------------------------------------------------------------
-# Funzioni crittografiche PQC — public API
+# PQC cryptographic functions — public API
 # ---------------------------------------------------------------------------
 
 def _check_liboqs() -> None:
     """
-    Verifica che liboqs-python sia installato E compatibile con la C library.
+    Verifies that liboqs-python is installed AND compatible with the C library.
 
-    Un mismatch di versione tra liboqs-python (wrapper) e liboqs C library
-    (sistema) causa AttributeError a import time — non ImportError.
-    Esempio: liboqs-python 0.15.0 + liboqs C 0.11.0 → AttributeError su
-    OQS_SIG_supports_ctx_str. Entrambi i casi vengono normalizzati in
-    ImportError con istruzioni chiare.
+    A version mismatch between liboqs-python (the wrapper) and the
+    liboqs C library (system-installed) causes an AttributeError at
+    import time — not an ImportError. Example: liboqs-python 0.15.0 +
+    liboqs C 0.11.0 → AttributeError on OQS_SIG_supports_ctx_str. Both
+    cases are normalized into an ImportError with clear instructions.
     """
     try:
         import oqs  # noqa: F401
@@ -388,11 +389,11 @@ def _check_liboqs() -> None:
 
 def _mlkem_alg_name() -> str:
     """
-    Restituisce il nome ML-KEM-768 supportato da questa versione di liboqs.
+    Returns the ML-KEM-768 name supported by this version of liboqs.
 
-    Tenta "ML-KEM-768" (liboqs >= 0.10, post-standardizzazione NIST)
-    poi "Kyber768" (liboqs < 0.10, nome pre-standard).
-    Il risultato è memoizzato per evitare probe ripetuti.
+    Tries "ML-KEM-768" (liboqs >= 0.10, post NIST standardization)
+    then "Kyber768" (liboqs < 0.10, pre-standard name).
+    The result is memoized to avoid repeated probing.
     """
     global _MLKEM_ALG_CACHE
     if _MLKEM_ALG_CACHE is not None:
@@ -418,14 +419,14 @@ def _mlkem_alg_name() -> str:
 
 def mlkem_generate_keypair() -> tuple[bytes, bytes]:
     """
-    Genera keypair ML-KEM-768.
+    Generates an ML-KEM-768 keypair.
 
-    Usata dal client per generare le chiavi da includere nella
+    Used by the client to generate the keys to include in the
     PQCHandshakeRequest.
 
     Returns:
-        (public_key_bytes, secret_key_bytes) — public key da inviare al server,
-        secret key da conservare localmente per la decapsulation.
+        (public_key_bytes, secret_key_bytes) — the public key to send to
+        the server, the secret key to keep locally for decapsulation.
     """
     import oqs
     alg = _mlkem_alg_name()
@@ -445,20 +446,20 @@ def mlkem_generate_keypair() -> tuple[bytes, bytes]:
 
 def mlkem_encap(client_mlkem_public_key: bytes) -> tuple[bytes, bytes]:
     """
-    ML-KEM encapsulation — eseguita dal SERVER con la pubkey del client.
+    ML-KEM encapsulation — run by the SERVER with the client's pubkey.
 
-    Produce un ciphertext (da inviare al client) e uno shared secret
-    (usato localmente per derivare la session_key). Solo chi possiede
-    la corrispondente secret key ML-KEM può ricavare lo stesso secret
-    dal ciphertext.
+    Produces a ciphertext (to send to the client) and a shared secret
+    (used locally to derive the session_key). Only whoever holds the
+    matching ML-KEM secret key can derive the same secret from the
+    ciphertext.
 
     Args:
-        client_mlkem_public_key: Pubkey ML-KEM-768 del client (bytes).
+        client_mlkem_public_key: Client's ML-KEM-768 pubkey (bytes).
 
     Returns:
         (ciphertext_bytes, shared_secret_bytes).
         ciphertext → PQCHandshakeResponse.mlkem_ciphertext.
-        shared_secret → input per derive_hybrid_key().
+        shared_secret → input to derive_hybrid_key().
     """
     import oqs
     alg = _mlkem_alg_name()
@@ -480,19 +481,19 @@ def mlkem_decap(
     ciphertext: bytes,
 ) -> bytes:
     """
-    ML-KEM decapsulation — eseguita dal CLIENT con il ciphertext del server.
+    ML-KEM decapsulation — run by the CLIENT with the server's ciphertext.
 
-    Recupera lo stesso shared secret prodotto dal server durante
-    mlkem_encap(). Il risultato coincide con shared_secret del server
-    solo se il ciphertext è stato prodotto con la pubkey corrispondente
-    a questa secret key.
+    Recovers the same shared secret produced by the server during
+    mlkem_encap(). The result matches the server's shared_secret only
+    if the ciphertext was produced with the pubkey matching this secret
+    key.
 
     Args:
-        client_mlkem_secret_key: Secret key ML-KEM-768 del client (bytes).
-        ciphertext:              Ciphertext ricevuto nella PQCHandshakeResponse.
+        client_mlkem_secret_key: Client's ML-KEM-768 secret key (bytes).
+        ciphertext:              Ciphertext received in the PQCHandshakeResponse.
 
     Returns:
-        shared_secret (bytes) — stesso valore del server.
+        shared_secret (bytes) — same value as the server's.
     """
     import oqs
     alg = _mlkem_alg_name()
@@ -508,12 +509,12 @@ def mlkem_decap(
 
 def x25519_generate_keypair() -> tuple[bytes, bytes]:
     """
-    Genera keypair X25519.
+    Generates an X25519 keypair.
 
     Returns:
-        (private_key_bytes, public_key_bytes) — entrambi 32 byte.
-        private_key → usata in x25519_exchange().
-        public_key → inviata nella PQCHandshakeRequest / PQCHandshakeResponse.
+        (private_key_bytes, public_key_bytes) — both 32 bytes.
+        private_key → used in x25519_exchange().
+        public_key → sent in the PQCHandshakeRequest / PQCHandshakeResponse.
     """
     from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
     from cryptography.hazmat.primitives.serialization import (
@@ -532,17 +533,17 @@ def x25519_exchange(
     peer_public_key_bytes: bytes,
 ) -> bytes:
     """
-    Calcola lo shared secret X25519 (Diffie-Hellman su Curve25519).
+    Computes the X25519 shared secret (Diffie-Hellman over Curve25519).
 
-    Eseguita da entrambi i lati con chiave privata locale e pubkey del peer:
-    il risultato è lo stesso per client e server.
+    Run by both sides with their local private key and the peer's
+    pubkey: the result is the same for both client and server.
 
     Args:
-        private_key_bytes:      32 byte chiave privata X25519.
-        peer_public_key_bytes:  32 byte chiave pubblica X25519 del peer.
+        private_key_bytes:      32-byte X25519 private key.
+        peer_public_key_bytes:  32-byte X25519 public key of the peer.
 
     Returns:
-        32 byte shared secret.
+        32-byte shared secret.
     """
     from cryptography.hazmat.primitives.asymmetric.x25519 import (
         X25519PrivateKey,
@@ -564,30 +565,30 @@ def derive_hybrid_key(
     length: int = 32,
 ) -> bytes:
     """
-    Deriva la session_key finale dai due shared secret via HKDF-SHA256.
+    Derives the final session_key from the two shared secrets via HKDF-SHA256.
 
-    Schema (RFC 5869 completo — Extract + Expand):
-        IKM  = x25519_secret ‖ mlkem_secret   (64 byte)
-        salt = nonce                           (32 byte random per-sessione)
+    Scheme (full RFC 5869 — Extract + Expand):
+        IKM  = x25519_secret ‖ mlkem_secret   (64 bytes)
+        salt = nonce                           (32 random bytes, per session)
         info = b"stls-pqc-hybrid-v1"          (domain separator)
-        len  = 32 byte
+        len  = 32 bytes
 
-    Proprietà di sicurezza:
-      - Il nonce come salt garantisce freshness per ogni sessione.
-      - La concatenazione IKM è sufficiente per il modello ibrido:
-        rompere entrambi gli algoritmi contemporaneamente è necessario.
-      - L'info label separa questa chiave da quelle AES/HMAC derivate
-        successivamente da StlsTransport (via HKDFExpand).
+    Security properties:
+      - The nonce as salt guarantees freshness for every session.
+      - Concatenating the IKM is sufficient for the hybrid model:
+        breaking both algorithms simultaneously is required.
+      - The info label separates this key from the AES/HMAC keys
+        subsequently derived by StlsTransport (via HKDFExpand).
 
     Args:
-        x25519_secret: 32 byte shared secret X25519.
-        mlkem_secret:  Shared secret ML-KEM-768 (tipicamente 32 byte).
-        nonce:         Nonce della PQCHandshakeRequest (≥ 16 byte).
+        x25519_secret: 32-byte X25519 shared secret.
+        mlkem_secret:  ML-KEM-768 shared secret (typically 32 bytes).
+        nonce:         Nonce from the PQCHandshakeRequest (≥ 16 bytes).
         info:          Domain separator (default b"stls-pqc-hybrid-v1").
-        length:        Byte della chiave derivata (default 32 = AES-256).
+        length:        Bytes of the derived key (default 32 = AES-256).
 
     Returns:
-        `length` byte session_key da passare a StlsTransport.
+        `length` bytes of session_key to pass to StlsTransport.
     """
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
     from cryptography.hazmat.primitives import hashes

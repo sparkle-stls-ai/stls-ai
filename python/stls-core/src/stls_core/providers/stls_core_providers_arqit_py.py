@@ -1,23 +1,23 @@
 """
 stls_core_providers_arqit_py.py
 --------------------------------
-Provider Arqit SKA-Platform™ tramite SDK Python nativo (uk.arqit.device.*).
+Arqit SKA-Platform™ provider via the native Python SDK (uk.arqit.device.*).
 
-Nessuna JVM, nessun JPype. Usa i wheel Arqit installati via:
+No JVM, no JPype. Uses the Arqit wheels installed via:
     uv pip install -e ".[arqit_py]" --find-links arqit_wheels/...
 
-Variabili d'ambiente:
-    ARQIT_PY_CLIENT_CONFIG  → path al config JSON del client (initiator)
-    ARQIT_PY_SERVER_CONFIG  → path al config JSON del server (receiver)
+Environment variables:
+    ARQIT_PY_CLIENT_CONFIG  → path to the client (initiator) JSON config
+    ARQIT_PY_SERVER_CONFIG  → path to the server (receiver) JSON config
     ARQIT_PY_TRANSPORT      → "socket" (default) | "mqtt"
 
-Architettura 1:1 (Option A):
-    Ogni sessione STLS ha il proprio KeyProviderClient/Server e il proprio
-    ArqitKeyStoreBase. create_provider_client() è chiamato una volta per
-    sessione — il binding kid ↔ session_key è esclusivo per sessione.
+1:1 architecture (Option A):
+    Each STLS session has its own KeyProviderClient/Server and its own
+    ArqitKeyStoreBase. create_provider_client() is called once per
+    session — the kid ↔ session_key binding is exclusive to that session.
 
-Il peering Arqit avviene in thread daemon separati per non bloccare
-il loop asyncio del server FastAPI/Starlette.
+Arqit peering runs in separate daemon threads so it doesn't block
+the asyncio event loop of the FastAPI/Starlette server.
 """
 
 from __future__ import annotations
@@ -47,16 +47,16 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# _ArqitPyKeyNotifier — callback SDK Arqit
+# _ArqitPyKeyNotifier — Arqit SDK callback
 # ---------------------------------------------------------------------------
 
 class _ArqitPyKeyNotifier:
     """
-    Implementa KeyNotifierBase dell'SDK Python Arqit.
+    Implements the Arqit Python SDK's KeyNotifierBase.
 
-    Riceve le chiavi negoziate durante il peering e le salva
-    nello store condiviso. Se receiver, le aggiunge anche al
-    KeyManager SDK per la gestione interna.
+    Receives the keys negotiated during peering and saves them
+    into the shared store. If receiver, also adds them to the
+    SDK's KeyManager for internal management.
     """
 
     def __init__(
@@ -71,7 +71,7 @@ class _ArqitPyKeyNotifier:
         self._last_typed_key = None
 
     def notify_key(self, key: object) -> None:
-        """Callback invocato dall'SDK per ogni chiave negoziata."""
+        """Callback invoked by the SDK for every negotiated key."""
         from uk.arqit.device.peering.key_manager import KeyType
 
         logger.info(
@@ -87,23 +87,24 @@ class _ArqitPyKeyNotifier:
 
 
 # ---------------------------------------------------------------------------
-# KeySessionProviderArqitPy — interfaccia KeySessionProvider per ArqitPy
+# KeySessionProviderArqitPy — KeySessionProvider interface for ArqitPy
 # ---------------------------------------------------------------------------
 
 class KeySessionProviderArqitPy(KeySessionProvider):
     """
-    KeySessionProvider che delega al key store popolato dal peering Arqit.
+    KeySessionProvider that delegates to the key store populated by Arqit peering.
 
-    getSessionKeyIdentifier() attende una chiave dal peering (async, con
-    timeout 30s). Lato CLIENT, ogni istanza serve tipicamente una sola
-    sessione, e la prima chiave disponibile è quella corretta. Lato
-    SERVER (long-running, vedi KeyProviderServerArqitPy.createProviderSession,
-    che restituisce sempre la stessa istanza per l'intera vita del
-    processo), il provider deve invece poter servire più handshake nel
-    tempo: ogni chiamata attende una chiave NON ANCORA CONSEGNATA in una
-    chiamata precedente, così da non riusare per sempre il kid del primo
-    handshake quando il peering ha negoziato chiavi nuove nel frattempo.
-    getSessionKeyData() legge dallo store per key_id.
+    getSessionKeyIdentifier() waits for a key from peering (async, with a
+    30s timeout). On the CLIENT side, each instance typically serves a
+    single session, and the first available key is the correct one. On
+    the SERVER side (long-running, see
+    KeyProviderServerArqitPy.createProviderSession, which always returns
+    the same instance for the entire life of the process), the provider
+    must instead be able to serve multiple handshakes over time: each
+    call waits for a key NOT YET DELIVERED in a previous call, so it
+    never reuses the first handshake's kid forever once peering has
+    negotiated new keys in the meantime.
+    getSessionKeyData() reads from the store by key_id.
     """
 
     def __init__(
@@ -115,30 +116,32 @@ class KeySessionProviderArqitPy(KeySessionProvider):
         self._session_type = session_type
         self._key_store = key_store
         self._peer_identity = peer_identity
-        # Impostato SOLO da una chiamata esplicita a setSessionKeyIdentifier()
-        # (uso lato client per fissare una sessione nota in anticipo).
-        # getSessionKeyIdentifier() risolto automaticamente NON lo imposta:
-        # farlo lo fisserebbe per sempre anche per le chiamate successive,
-        # che è esattamente il bug che questo fix risolve.
+        # Set ONLY by an explicit call to setSessionKeyIdentifier()
+        # (used on the client side to pin a session known in advance).
+        # getSessionKeyIdentifier(), when auto-resolving, does NOT set
+        # it: doing so would pin it forever for subsequent calls too,
+        # which is exactly the bug this fix resolves.
         self._pinned_key_identifier: Optional[str] = None
-        # Tutti i kid già restituiti da getSessionKeyIdentifier() nel corso
-        # della vita di questa istanza — usato solo lato SERVER per evitare
-        # di riconsegnare lo stesso kid a un nuovo handshake (vedi docstring
-        # della classe). Lato CLIENT resta tipicamente con un solo elemento:
-        # una singola sessione client risolve una volta sola.
-        # Pre-popolato con startup_seen_keys(): in caso di riavvio del
-        # processo server con KEY_STORE_BACKEND=redis, il ZSET conserva
-        # chiavi di sessioni precedenti. Senza pre-popolazione il server
-        # le userebbe per nuovi handshake → mismatch con il client.
+        # All kids ever returned by getSessionKeyIdentifier() over the
+        # lifetime of this instance — used only on the SERVER side to
+        # avoid re-delivering the same kid to a new handshake (see the
+        # class docstring). On the CLIENT side this typically holds a
+        # single element: a single client session resolves only once.
+        # Pre-populated with startup_seen_keys(): if the server process
+        # restarts with KEY_STORE_BACKEND=redis, the ZSET still holds
+        # keys from previous sessions. Without pre-population the
+        # server would use them for new handshakes → mismatch with the
+        # client.
         self._delivered_key_ids: set[str] = set(key_store.startup_seen_keys())
-        # Ultimo kid risolto automaticamente da getSessionKeyIdentifier()
-        # (non pinned) — usato SOLO come fallback in getSessionKeyData()
-        # quando il lookup diretto fallisce, per retrocompatibilità con
-        # stls-a2a (flusso lazy, pre-handshake esplicito): lì il middleware
-        # chiama getSessionKeyData(session_id) passando il session_id STLS
-        # (UUID client-generated) anziché il kid Arqit, perché non esegue
-        # ancora un vero handshake — vedi CHANGELOG stls-a2a 0.1.1, fix
-        # "KeySessionProviderArqitPy.getSessionKeyData() lookup errato".
+        # Last kid auto-resolved by getSessionKeyIdentifier()
+        # (not pinned) — used ONLY as a fallback in getSessionKeyData()
+        # when the direct lookup fails, for backward compatibility with
+        # stls-a2a (its lazy flow, pre-explicit-handshake): there, the
+        # middleware calls getSessionKeyData(session_id) passing the
+        # STLS session_id (a client-generated UUID) instead of the
+        # Arqit kid, because at that point in the flow it doesn't yet
+        # know the kid — see stls-a2a's CHANGELOG 0.1.1, the fix for
+        # "KeySessionProviderArqitPy.getSessionKeyData() wrong lookup".
         self._last_resolved_key_identifier: Optional[str] = None
 
     def getSessionType(self) -> KeySessionProvider.KeySessionProviderType:
@@ -146,16 +149,16 @@ class KeySessionProviderArqitPy(KeySessionProvider):
 
     async def getSessionKeyIdentifier(self) -> str:
         """
-        Attende una chiave dal peering e restituisce il kid.
+        Waits for a key from peering and returns the kid.
 
-        Se setSessionKeyIdentifier() è già stato chiamato esplicitamente
-        (uso lato client per fissare una sessione nota), usa quello senza
-        attendere — chiamabile ripetutamente, restituisce sempre lo stesso
-        valore pinned. Altrimenti attende una chiave NON ANCORA consegnata
-        in precedenza da questa stessa istanza — fondamentale per provider
-        SERVER long-running che servono più handshake nel tempo (vedi
-        stls-mcp: un'unica istanza serve l'intera vita del processo
-        uvicorn, una chiamata per ogni nuovo handshake in arrivo).
+        If setSessionKeyIdentifier() has already been called explicitly
+        (client-side use, to pin a session known in advance), it is used
+        with no waiting — callable repeatedly, always returning the same
+        pinned value. Otherwise it waits for a key NOT previously
+        delivered by this same instance — essential for long-running
+        SERVER providers that serve multiple handshakes over time (see
+        stls-mcp: a single instance serves the entire lifetime of the
+        uvicorn process, one call per incoming handshake).
         """
         if self._pinned_key_identifier is not None:
             return self._pinned_key_identifier
@@ -194,20 +197,20 @@ class KeySessionProviderArqitPy(KeySessionProvider):
 
     async def getSessionKeyData(self, session_key_identifier: str) -> bytes:
         """
-        Restituisce la chiave dal key store.
+        Returns the key from the key store.
 
-        Lookup primario sul kid esplicito passato dal chiamante (sempre
-        corretto nel flusso con handshake esplicito, vedi
-        stls_core_handshake.perform_handshake). Fallback sull'ultimo kid
-        risolto automaticamente da getSessionKeyIdentifier() se il lookup
-        diretto fallisce — necessario per retrocompatibilità con il
-        flusso lazy di stls-a2a (pre-handshake esplicito), dove il
-        chiamante passa il session_id STLS (UUID client-generated) invece
-        del kid Arqit, perché a quel punto del flusso il kid non è ancora
-        noto al chiamante. Il fallback usa SEMPRE l'ultimo kid risolto
-        dinamicamente, mai un valore fissato in modo permanente — per non
-        reintrodurre il bug per cui un provider SERVER long-running
-        servirebbe per sempre la chiave del primissimo handshake.
+        Primary lookup on the explicit kid passed by the caller (always
+        correct in the explicit-handshake flow, see
+        stls_core_handshake.perform_handshake). Falls back to the last
+        auto-resolved kid if the direct lookup fails — needed for
+        backward compatibility with stls-a2a's lazy flow (pre-explicit
+        handshake), where the caller passes the STLS session_id (a
+        client-generated UUID) instead of the Arqit kid, because at
+        that point in the flow the kid isn't yet known to the caller.
+        The fallback ALWAYS uses the last dynamically resolved kid,
+        never a permanently pinned value — so as not to reintroduce the
+        bug where a long-running SERVER provider would forever serve
+        the very first handshake's key.
         """
         key_bytes = self._key_store.get(session_key_identifier)
         if key_bytes is None and self._last_resolved_key_identifier is not None:
@@ -230,22 +233,22 @@ class KeySessionProviderArqitPy(KeySessionProvider):
 
 
 # ---------------------------------------------------------------------------
-# KeyProviderClientArqitPy — lato initiator
+# KeyProviderClientArqitPy — initiator side
 # ---------------------------------------------------------------------------
 
 class KeyProviderClientArqitPy(KeyProviderClient):
     """
-    CLIENT (initiator): avvia il peering Arqit Python nativo e negozia
-    bilocation + P2P keys in un thread daemon dedicato.
+    CLIENT (initiator): starts native Python Arqit peering and negotiates
+    the bilocation + P2P keys in a dedicated daemon thread.
     """
 
     def __init__(self, config_path: str, transport: str) -> None:
         import uuid as _uuid
         self._config_path = config_path
         self._transport = transport.lower()
-        # UUID univoco per questa istanza client: garantisce che sessioni
-        # client concorrenti (asyncio.gather) non condividano lo stesso
-        # namespace Redis e non leggano kid l'una dell'altra.
+        # Unique UUID for this client instance: guarantees that
+        # concurrent client sessions (asyncio.gather) don't share the
+        # same Redis namespace and don't read each other's kid.
         self._instance_id = str(_uuid.uuid4())
         self._key_store = ArqitKeyStoreFactory.build(role="client", instance_id=self._instance_id)
         self._session: Optional[KeySessionProviderArqitPy] = None
@@ -321,13 +324,13 @@ class KeyProviderClientArqitPy(KeyProviderClient):
 
 
 # ---------------------------------------------------------------------------
-# KeyProviderServerArqitPy — lato receiver
+# KeyProviderServerArqitPy — receiver side
 # ---------------------------------------------------------------------------
 
 class KeyProviderServerArqitPy(KeyProviderServer):
     """
-    SERVER (receiver): mette in ascolto il peering Arqit Python nativo
-    in un thread daemon dedicato.
+    SERVER (receiver): listens for native Python Arqit peering
+    in a dedicated daemon thread.
     """
 
     def __init__(self, config_path: str, transport: str) -> None:
@@ -434,10 +437,10 @@ class KeyProviderServerArqitPy(KeyProviderServer):
 
 class KeyProviderArqitPy(KeyProvider):
     """
-    KeyProvider Arqit Python nativo.
+    Native Python Arqit KeyProvider.
 
-    Selezione: KEY_PROVIDER_NAME=arqit_py
-    Richiede i wheel Arqit SKA-Platform installati via [arqit_py] extra.
+    Selection: KEY_PROVIDER_NAME=arqit_py
+    Requires the Arqit SKA-Platform wheels installed via the [arqit_py] extra.
     """
 
     def get_name(self) -> str:
