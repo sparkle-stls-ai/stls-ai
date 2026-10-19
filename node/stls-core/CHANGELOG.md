@@ -11,6 +11,17 @@ of which this package is the TypeScript port.
 
 ## [0.1.2] — 2026-10-18
 
+### Added (follow-up, 2026-10-19)
+
+- **`.env.example`** — this package had none; added, documenting every
+  environment variable actually read by `src/` and `tests/` (Key
+  Provider, Arqit sidecar, Session Cache, Auth, Redis/PostgreSQL,
+  live/interop test-script variables), mirroring
+  [`python/stls-core/.env.example`](../../python/stls-core/.env.example)
+  where the variable is shared, and documenting Node-specific ones
+  (`ARQIT_SIDECAR_SOCKET*`, `TEST_REDIS_URL`, `ARQIT_N_CLIENTS`) where
+  it isn't.
+
 ### Fixed — CI: Arqit sidecar step always failed, for a structural reason that can't be fixed in CI
 
 First real run of `.github/workflows/stls-core-node-interop.yml` against
