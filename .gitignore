@@ -1,5 +1,5 @@
-notes.md
-notes.txt
+notes*.md
+notes*.txt
 
 # ---- Python ----
 __pycache__/
@@ -16,6 +16,14 @@ dist/
 python/stls-a2a/arqit_wheels
 python/stls-core/arqit_wheels
 python/stls-mcp/arqit_wheels
+
+# Arqit device/identity credential files (contain realm/MQTT secrets)
+aq-*.json
+
+# Arqit SKA-Platform proprietary example utilities (Copyright Arqit Limited,
+# "cannot be copied and/or distributed without the express permission of
+# Arqit Limited") — must never be committed to this repository.
+arqit_utility/
 downloads/
 eggs/
 .eggs/
@@ -31,6 +39,7 @@ wheels/
 
 # Virtual environments
 .venv/
+.venv-*/
 venv/
 env/
 ENV/
