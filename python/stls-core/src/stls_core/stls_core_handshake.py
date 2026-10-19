@@ -171,20 +171,20 @@ async def perform_handshake(
         nonce = base64.b64decode(request.nonce)
         if len(nonce) < 16:
             raise HandshakeError(
-                f"Nonce troppo corto: {len(nonce)} byte (minimo 16)",
+                f"Nonce too short: {len(nonce)} bytes (minimum 16)",
                 code=-32600,
             )
     except HandshakeError:
         raise
     except Exception as exc:
         raise HandshakeError(
-            f"Nonce non è base64 valido: {exc}", code=-32600
+            f"Nonce is not valid base64: {exc}", code=-32600
         ) from exc
 
     session_id = str(uuid.uuid4())
 
     logger.info(
-        "Handshake avviato: client_id=%s session_id=%s",
+        "Handshake started: client_id=%s session_id=%s",
         request.client_id, session_id,
     )
 
@@ -194,12 +194,12 @@ async def perform_handshake(
         kid = await _resolve(kid_result)
         if not kid:
             raise HandshakeError(
-                "getSessionKeyIdentifier() ha restituito None o stringa vuota"
+                "getSessionKeyIdentifier() returned None or an empty string"
             )
     except HandshakeError:
         raise
     except Exception as exc:
-        raise HandshakeError(f"Errore nel recupero del kid: {exc}") from exc
+        raise HandshakeError(f"Error retrieving the kid: {exc}") from exc
 
     # ── 3. Get the session_key from the provider ─────────────────────────────
     try:
@@ -209,24 +209,24 @@ async def perform_handshake(
         raise
     except Exception as exc:
         raise HandshakeError(
-            f"Errore nel recupero della session key (kid={kid!r}): {exc}"
+            f"Error retrieving the session key (kid={kid!r}): {exc}"
         ) from exc
 
     if raw_key is None:
         raise HandshakeError(
-            f"getSessionKeyData({kid!r}) ha restituito None"
+            f"getSessionKeyData({kid!r}) returned None"
         )
 
     try:
         session_key = bytes(raw_key)
     except Exception as exc:
         raise HandshakeError(
-            f"Impossibile convertire session key in bytes "
+            f"Unable to convert session key to bytes "
             f"(type={type(raw_key).__name__}): {exc}"
         ) from exc
 
     if not session_key:
-        raise HandshakeError("Session key vuota")
+        raise HandshakeError("Empty session key")
 
     # ── 4. Compute proof = HMAC-SHA256(session_key, nonce) ───────────────────
     proof_bytes = _hmac.new(session_key, nonce, sha256).digest()
@@ -240,11 +240,11 @@ async def perform_handshake(
         session_cache.put(session_id, kid, session_key)
     except Exception as exc:
         raise HandshakeError(
-            f"Errore nella registrazione della sessione in cache: {exc}"
+            f"Error registering the session in the cache: {exc}"
         ) from exc
 
     logger.info(
-        "Handshake completato: session_id=%s kid=%s client_id=%s "
+        "Handshake completed: session_id=%s kid=%s client_id=%s "
         "key_len=%d cache_size=%d",
         session_id, kid, request.client_id,
         len(session_key), len(session_cache),

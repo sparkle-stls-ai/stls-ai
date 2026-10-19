@@ -75,7 +75,7 @@ class _ArqitPyKeyNotifier:
         from uk.arqit.device.peering.key_manager import KeyType
 
         logger.info(
-            "[ArqitPyKeyNotifier] tipo=%s id=%s peer=%s ttl=%s",
+            "[ArqitPyKeyNotifier] type=%s id=%s peer=%s ttl=%s",
             key.key_type, key.key_id, key.peer_duid, key.ttl,
         )
 
@@ -172,8 +172,8 @@ class KeySessionProviderArqitPy(KeySessionProvider):
         )
         if result is None:
             raise TimeoutError(
-                "[KeySessionProviderArqitPy] Nessuna chiave nuova disponibile entro 30s "
-                f"({len(self._delivered_key_ids)} già consegnate in precedenza)"
+                "[KeySessionProviderArqitPy] No new key available within 30s "
+                f"({len(self._delivered_key_ids)} already delivered previously)"
             )
 
         key_id, _ = result
@@ -181,7 +181,7 @@ class KeySessionProviderArqitPy(KeySessionProvider):
         self._last_resolved_key_identifier = key_id
         self._key_store.mark_delivered(key_id)
         logger.info(
-            "[KeySessionProviderArqitPy] session_key_identifier=%s (totale consegnate=%d)",
+            "[KeySessionProviderArqitPy] session_key_identifier=%s (total delivered=%d)",
             key_id, len(self._delivered_key_ids),
         )
         return key_id
@@ -217,7 +217,7 @@ class KeySessionProviderArqitPy(KeySessionProvider):
             key_bytes = self._key_store.get(self._last_resolved_key_identifier)
         if key_bytes is None:
             raise KeyError(
-                f"[KeySessionProviderArqitPy] chiave non trovata: "
+                f"[KeySessionProviderArqitPy] key not found: "
                 f"session_key_identifier={session_key_identifier!r} "
                 f"(fallback last_resolved={self._last_resolved_key_identifier!r})"
             )
@@ -277,7 +277,7 @@ class KeyProviderClientArqitPy(KeyProviderClient):
         auth_manager = AuthenticationSessionManager(qc_config, reprovision_handler=None)
         auth_manager.set_auto_refresh(True)
         auth_manager.authenticate_device()
-        logger.info("[KeyProviderClientArqitPy] autenticazione completata")
+        logger.info("[KeyProviderClientArqitPy] authentication completed")
 
         if self._transport == "mqtt":
             client = MqttClientInitiator(qc_config)
@@ -295,7 +295,7 @@ class KeyProviderClientArqitPy(KeyProviderClient):
                         client.agree_p2p_key(notifier._last_typed_key, notifier)
             except Exception as exc:
                 logger.error(
-                    "[KeyProviderClientArqitPy] errore negoziazione: %s",
+                    "[KeyProviderClientArqitPy] negotiation error: %s",
                     exc, exc_info=True,
                 )
 
@@ -303,7 +303,7 @@ class KeyProviderClientArqitPy(KeyProviderClient):
             target=_negotiate, daemon=True, name="arqit-py-client-negotiate"
         )
         t.start()
-        logger.info("[KeyProviderClientArqitPy] thread negoziazione avviato")
+        logger.info("[KeyProviderClientArqitPy] negotiation thread started")
 
         peer_identity = getattr(qc_config, "socket_receiver_ip_address", None)
         self._session = KeySessionProviderArqitPy(
@@ -315,7 +315,7 @@ class KeyProviderClientArqitPy(KeyProviderClient):
     def createProviderSession(self) -> KeySessionProvider:
         if self._session is None:
             raise RuntimeError(
-                "[KeyProviderClientArqitPy] start() non ancora chiamato"
+                "[KeyProviderClientArqitPy] start() not yet called"
             )
         return self._session
 
@@ -380,7 +380,7 @@ class KeyProviderServerArqitPy(KeyProviderServer):
         auth_manager = AuthenticationSessionManager(qc_config, reprovision_handler=None)
         auth_manager.set_auto_refresh(True)
         auth_manager.authenticate_device()
-        logger.info("[KeyProviderServerArqitPy] autenticazione completata")
+        logger.info("[KeyProviderServerArqitPy] authentication completed")
 
         if self._transport == "mqtt":
             server = MqttClientReceiver(qc_config, policy_client)
@@ -388,7 +388,7 @@ class KeyProviderServerArqitPy(KeyProviderServer):
         else:
             server = SocketClientReceiver(qc_config, policy_client)
             logger.info(
-                "[KeyProviderServerArqitPy] in ascolto su porta %s",
+                "[KeyProviderServerArqitPy] listening on port %s",
                 qc_config.socket_listening_port,
             )
 
@@ -407,7 +407,7 @@ class KeyProviderServerArqitPy(KeyProviderServer):
                     _time.sleep(2.0)
             except Exception as exc:
                 logger.error(
-                    "[KeyProviderServerArqitPy] errore ascolto: %s",
+                    "[KeyProviderServerArqitPy] listen error: %s",
                     exc, exc_info=True,
                 )
 
@@ -415,7 +415,7 @@ class KeyProviderServerArqitPy(KeyProviderServer):
             target=_listen, daemon=True, name="arqit-py-server-listen"
         )
         t.start()
-        logger.info("[KeyProviderServerArqitPy] thread ascolto avviato")
+        logger.info("[KeyProviderServerArqitPy] listen thread started")
 
         self._session = KeySessionProviderArqitPy(
             KeySessionProvider.KeySessionProviderType.SERVER,
@@ -427,7 +427,7 @@ class KeyProviderServerArqitPy(KeyProviderServer):
     def createProviderSession(self) -> KeySessionProvider:
         if self._session is None:
             raise RuntimeError(
-                "[KeyProviderServerArqitPy] start() non ancora chiamato"
+                "[KeyProviderServerArqitPy] start() not yet called"
             )
         return self._session
 
@@ -455,8 +455,8 @@ class KeyProviderServerArqitPy(KeyProviderServer):
                 self._sdk_receiver.end_key_negotiation()
             except Exception as exc:
                 logger.warning(
-                    "[KeyProviderServerArqitPy] stop(): errore chiusura "
-                    "listener SDK (probabilmente mai avviato): %s", exc,
+                    "[KeyProviderServerArqitPy] stop(): error closing "
+                    "SDK listener (probably never started): %s", exc,
                 )
 
 
@@ -484,7 +484,7 @@ class KeyProviderArqitPy(KeyProvider):
         config_path = os.getenv("ARQIT_PY_CLIENT_CONFIG")
         if not config_path:
             raise ValueError(
-                "[KeyProviderArqitPy] ARQIT_PY_CLIENT_CONFIG non impostato"
+                "[KeyProviderArqitPy] ARQIT_PY_CLIENT_CONFIG not set"
             )
         logger.info(
             "[KeyProviderArqitPy] create_provider_client config=%s", config_path
@@ -499,7 +499,7 @@ class KeyProviderArqitPy(KeyProvider):
         config_path = os.getenv("ARQIT_PY_SERVER_CONFIG")
         if not config_path:
             raise ValueError(
-                "[KeyProviderArqitPy] ARQIT_PY_SERVER_CONFIG non impostato"
+                "[KeyProviderArqitPy] ARQIT_PY_SERVER_CONFIG not set"
             )
         logger.info(
             "[KeyProviderArqitPy] create_provider_server config=%s", config_path

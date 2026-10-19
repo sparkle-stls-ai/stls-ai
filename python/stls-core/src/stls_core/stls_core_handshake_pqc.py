@@ -206,41 +206,41 @@ async def perform_pqc_handshake(
         nonce = base64.b64decode(request.nonce)
         if len(nonce) < 16:
             raise PQCHandshakeError(
-                f"Nonce troppo corto: {len(nonce)} byte (minimo 16)",
+                f"Nonce too short: {len(nonce)} bytes (minimum 16)",
                 code=-32600,
             )
     except PQCHandshakeError:
         raise
     except Exception as exc:
-        raise PQCHandshakeError(f"Nonce non è base64 valido: {exc}", code=-32600) from exc
+        raise PQCHandshakeError(f"Nonce is not valid base64: {exc}", code=-32600) from exc
 
     try:
         client_x25519_pub = base64.b64decode(request.x25519_public_key)
         if len(client_x25519_pub) != 32:
             raise PQCHandshakeError(
-                f"x25519_public_key deve essere 32 byte, "
-                f"ricevuto {len(client_x25519_pub)}",
+                f"x25519_public_key must be 32 bytes, "
+                f"got {len(client_x25519_pub)}",
                 code=-32600,
             )
     except PQCHandshakeError:
         raise
     except Exception as exc:
         raise PQCHandshakeError(
-            f"x25519_public_key non è base64 valido: {exc}", code=-32600
+            f"x25519_public_key is not valid base64: {exc}", code=-32600
         ) from exc
 
     try:
         client_mlkem_pub = base64.b64decode(request.mlkem_public_key)
     except Exception as exc:
         raise PQCHandshakeError(
-            f"mlkem_public_key non è base64 valido: {exc}", code=-32600
+            f"mlkem_public_key is not valid base64: {exc}", code=-32600
         ) from exc
 
     session_id = str(uuid.uuid4())
     kid = str(uuid.uuid4())   # PQC kid = fresh UUID, distinct for every session
 
     logger.info(
-        "PQC Handshake avviato: client_id=%s session_id=%s",
+        "PQC Handshake started: client_id=%s session_id=%s",
         request.client_id, session_id,
     )
 
@@ -248,19 +248,19 @@ async def perform_pqc_handshake(
     try:
         server_x25519_priv, server_x25519_pub = x25519_generate_keypair()
     except Exception as exc:
-        raise PQCHandshakeError(f"Errore generazione keypair X25519: {exc}") from exc
+        raise PQCHandshakeError(f"X25519 keypair generation error: {exc}") from exc
 
     # ── 3. X25519 DH exchange ─────────────────────────────────────────────────
     try:
         x25519_secret = x25519_exchange(server_x25519_priv, client_x25519_pub)
     except Exception as exc:
-        raise PQCHandshakeError(f"X25519 DH exchange fallito: {exc}") from exc
+        raise PQCHandshakeError(f"X25519 DH exchange failed: {exc}") from exc
 
     # ── 4. ML-KEM-768 encapsulation ───────────────────────────────────────────
     try:
         mlkem_ciphertext, mlkem_secret = mlkem_encap(client_mlkem_pub)
     except Exception as exc:
-        raise PQCHandshakeError(f"ML-KEM encapsulation fallita: {exc}") from exc
+        raise PQCHandshakeError(f"ML-KEM encapsulation failed: {exc}") from exc
 
     # ── 5. Derive the hybrid session_key via HKDF ─────────────────────────────
     try:
@@ -270,7 +270,7 @@ async def perform_pqc_handshake(
             nonce=nonce,
         )
     except Exception as exc:
-        raise PQCHandshakeError(f"HKDF derivazione fallita: {exc}") from exc
+        raise PQCHandshakeError(f"HKDF derivation failed: {exc}") from exc
 
     # ── 6. Compute proof = HMAC-SHA256(session_key, nonce) ────────────────────
     proof_bytes = _hmac.new(session_key, nonce, sha256).digest()
@@ -280,10 +280,10 @@ async def perform_pqc_handshake(
     try:
         session_cache.put(session_id, kid, session_key)
     except Exception as exc:
-        raise PQCHandshakeError(f"Errore registrazione sessione in cache: {exc}") from exc
+        raise PQCHandshakeError(f"Error registering the session in the cache: {exc}") from exc
 
     logger.info(
-        "PQC Handshake completato: session_id=%s kid=%s client_id=%s key_len=%d",
+        "PQC Handshake completed: session_id=%s kid=%s client_id=%s key_len=%d",
         session_id, kid, request.client_id, len(session_key),
     )
 
@@ -344,7 +344,7 @@ def derive_session_key_client(
         nonce=nonce_bytes,
     )
 
-    logger.debug("[PQC client] session_key derivata: len=%d", len(session_key))
+    logger.debug("[PQC client] session_key derived: len=%d", len(session_key))
     return session_key
 
 

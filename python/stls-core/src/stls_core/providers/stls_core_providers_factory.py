@@ -91,8 +91,8 @@ class KeyProviderFactory:
                 import uk.arqit.device.common  # noqa: F401
             except ImportError:
                 raise ImportError(
-                    "Il provider 'arqit_py' richiede i wheel Arqit SKA-Platform™.\n"
-                    "Installazione:\n"
+                    "The 'arqit_py' provider requires the Arqit SKA-Platform™ wheels.\n"
+                    "Installation:\n"
                     "  uv pip install -e '.[arqit_py]' \\\n"
                     "    --find-links arqit_wheels/arqit-skaplatform-common/ \\\n"
                     "    --find-links arqit_wheels/arqit-skaplatform-policy/ \\\n"
@@ -111,19 +111,19 @@ class KeyProviderFactory:
                 import oqs  # noqa: F401
             except ImportError:
                 raise ImportError(
-                    "Il provider 'pqc' richiede liboqs-python.\n"
-                    "Installazione:\n"
+                    "The 'pqc' provider requires liboqs-python.\n"
+                    "Installation:\n"
                     "  uv pip install -e '.[pqc]'\n"
-                    "  oppure: pip install liboqs-python"
+                    "  or: pip install liboqs-python"
                 ) from None
 
             from .stls_core_providers_pqc import KeyProviderPQC
             return KeyProviderPQC()
 
-        logger.error("KeyProviderFactory: provider non trovato: %s", name)
+        logger.error("KeyProviderFactory: provider not found: %s", name)
         raise ValueError(
-            f"Provider non supportato: {name!r}. "
-            f"Valori validi: 'base', 'arqit_py'"
+            f"Unsupported provider: {name!r}. "
+            f"Valid values: 'base', 'arqit_py'"
         )
 
 
@@ -180,8 +180,8 @@ class KeySessionProviderFactory:
         provider_name = name or os.getenv("KEY_PROVIDER_NAME")
         if not provider_name:
             raise ValueError(
-                "KEY_PROVIDER_NAME non impostato. "
-                "Imposta la variabile d'ambiente o passa name= esplicitamente."
+                "KEY_PROVIDER_NAME not set. "
+                "Set the environment variable or pass name= explicitly."
             )
 
         key_provider: KeyProvider = KeyProviderFactory().get_provider(provider_name)
@@ -217,8 +217,8 @@ class KeySessionProviderFactory:
         """
         if inspect.isawaitable(result):
             logger.debug(
-                "KeySessionProviderFactory: risultato awaitable, "
-                "risolvo con asyncio.run()"
+                "KeySessionProviderFactory: awaitable result, "
+                "resolving with asyncio.run()"
             )
             return asyncio.run(result)
         return result

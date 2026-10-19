@@ -359,7 +359,7 @@ class ApiKeyManager:
         )
         await self._refresher.start()
         logger.info(
-            "ApiKeyManager avviato (loader=%s, cache=%s, refresh=%ds)",
+            "ApiKeyManager started (loader=%s, cache=%s, refresh=%ds)",
             type(self._loader).__name__,
             self._enable_cache,
             self._refresh_interval,
@@ -376,7 +376,7 @@ class ApiKeyManager:
         if self._enable_cache:
             await self._cache.close()
         await self._loader.close()
-        logger.info("ApiKeyManager fermato (loader=%s)", type(self._loader).__name__)
+        logger.info("ApiKeyManager stopped (loader=%s)", type(self._loader).__name__)
 
     async def __aenter__(self) -> "ApiKeyManager":
         await self.start()
@@ -494,7 +494,7 @@ class ApiKeyManager:
         """Revokes a key by key_id (SHA-256). Immediate effect on Redis."""
         if self._enable_cache:
             await self._cache.revoke(key_id)
-        logger.info("ApiKeyManager: chiave %s... revocata", key_id[:12])
+        logger.info("ApiKeyManager: key %s... revoked", key_id[:12])
 
     async def add_key(self, record: KeyRecord) -> None:
         """Adds or updates a KeyRecord in the cache (without touching the loader)."""
@@ -535,15 +535,15 @@ class ApiKeyManager:
             if records:
                 await self._cache.bulk_reload(records)
                 logger.info(
-                    "ApiKeyManager: caricati %d record dal loader all'avvio", len(records)
+                    "ApiKeyManager: loaded %d records from the loader at startup", len(records)
                 )
             else:
                 logger.warning(
-                    "ApiKeyManager: nessun record caricato all'avvio "
+                    "ApiKeyManager: no records loaded at startup "
                     "(loader=%s)", type(self._loader).__name__
                 )
         except Exception as exc:
-            logger.error("ApiKeyManager._initial_load() fallito: %s", exc)
+            logger.error("ApiKeyManager._initial_load() failed: %s", exc)
 
     async def _lookup(self, key_id: str) -> KeyRecord | None:
         """
@@ -611,7 +611,7 @@ class ApiKeyManager:
             try:
                 await self._audit_hook(audit)
             except Exception as exc:
-                logger.error("ApiKeyManager: audit hook fallito: %s", exc)
+                logger.error("ApiKeyManager: audit hook failed: %s", exc)
 
     @staticmethod
     def _extract_remote_addr(request: Any) -> str:
@@ -688,7 +688,7 @@ class ApiKeyManagerGroup:
             self._managers[name] = manager
         else:
             logger.debug(
-                "ApiKeyManagerGroup.add('%s'): manager None, ignorato", name
+                "ApiKeyManagerGroup.add('%s'): manager is None, ignored", name
             )
         return self
 
@@ -703,20 +703,20 @@ class ApiKeyManagerGroup:
     async def start(self) -> None:
         """Starts all registered managers in insertion order."""
         if not self._managers:
-            logger.warning("ApiKeyManagerGroup.start(): nessun manager registrato")
+            logger.warning("ApiKeyManagerGroup.start(): no manager registered")
             return
         logger.info(
-            "ApiKeyManagerGroup: avvio %d manager (%s)…",
+            "ApiKeyManagerGroup: starting %d manager(s) (%s)…",
             len(self._managers),
             ", ".join(self._managers),
         )
         for name, mgr in self._managers.items():
             try:
                 await mgr.start()
-                logger.info("ApiKeyManagerGroup: '%s' avviato", name)
+                logger.info("ApiKeyManagerGroup: '%s' started", name)
             except Exception as exc:
                 logger.error(
-                    "ApiKeyManagerGroup: errore avvio '%s': %s", name, exc
+                    "ApiKeyManagerGroup: error starting '%s': %s", name, exc
                 )
                 raise
 
@@ -725,10 +725,10 @@ class ApiKeyManagerGroup:
         for name, mgr in reversed(list(self._managers.items())):
             try:
                 await mgr.stop()
-                logger.info("ApiKeyManagerGroup: '%s' fermato", name)
+                logger.info("ApiKeyManagerGroup: '%s' stopped", name)
             except Exception as exc:
                 logger.warning(
-                    "ApiKeyManagerGroup: errore stop '%s': %s", name, exc
+                    "ApiKeyManagerGroup: error stopping '%s': %s", name, exc
                 )
 
     async def __aenter__(self) -> "ApiKeyManagerGroup":
@@ -858,7 +858,7 @@ class BackgroundRefresher:
             self._loop(), name=f"stls-auth-key-refresher-{self._namespace}"
         )
         logger.info(
-            "BackgroundRefresher avviato (ns=%s, interval=%ds, cache=%s, distributed=%s, node=%s)",
+            "BackgroundRefresher started (ns=%s, interval=%ds, cache=%s, distributed=%s, node=%s)",
             self._namespace,
             self._interval,
             "enabled" if self._cache else "disabled",
@@ -877,7 +877,7 @@ class BackgroundRefresher:
             except asyncio.CancelledError:
                 pass
         self._task = None
-        logger.info("BackgroundRefresher fermato")
+        logger.info("BackgroundRefresher stopped")
 
     async def trigger(self) -> int:
         """
@@ -929,7 +929,7 @@ class BackgroundRefresher:
             acquired = await self._try_acquire_lock()
             if not acquired:
                 logger.debug(
-                    "BackgroundRefresher [%s]: lock detenuto da altro nodo — skip",
+                    "BackgroundRefresher [%s]: lock held by another node — skip",
                     self._node_id,
                 )
                 return 0
@@ -943,13 +943,13 @@ class BackgroundRefresher:
             else:
                 count = len(records)
             logger.debug(
-                "BackgroundRefresher [%s]: refresh completato, %d record",
+                "BackgroundRefresher [%s]: refresh completed, %d records",
                 self._node_id, count,
             )
             return count
         except Exception as exc:
             logger.error(
-                "BackgroundRefresher [%s]: refresh fallito: %s",
+                "BackgroundRefresher [%s]: refresh failed: %s",
                 self._node_id, exc,
             )
             return 0
@@ -978,7 +978,7 @@ class BackgroundRefresher:
             return result is not None  # SET NX returns None if not acquired
         except Exception as exc:
             logger.warning(
-                "BackgroundRefresher: errore acquisizione lock: %s — procedo senza lock",
+                "BackgroundRefresher: error acquiring lock: %s — proceeding without lock",
                 exc,
             )
             return True  # fail-open: if Redis doesn't respond, refresh anyway
@@ -1000,4 +1000,4 @@ class BackgroundRefresher:
                 lua_script, 1, self._lock_key, self._node_id
             )
         except Exception as exc:
-            logger.warning("BackgroundRefresher: errore rilascio lock: %s", exc)
+            logger.warning("BackgroundRefresher: error releasing lock: %s", exc)

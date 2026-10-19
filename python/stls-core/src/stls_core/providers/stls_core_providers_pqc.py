@@ -95,7 +95,7 @@ class PQCKeyStore:
         """Saves a key derived via the KEM."""
         with self._lock:
             self._keys[kid] = key_bytes
-        logger.debug("[PQCKeyStore] chiave salvata: kid=%s len=%d", kid, len(key_bytes))
+        logger.debug("[PQCKeyStore] key saved: kid=%s len=%d", kid, len(key_bytes))
 
     def get(self, kid: str) -> Optional[bytes]:
         """Retrieves the key associated with the kid, or None."""
@@ -157,21 +157,21 @@ class KeySessionProviderPQC(KeySessionProvider):
         """
         if self._kid is None:
             raise RuntimeError(
-                "[KeySessionProviderPQC] kid non disponibile — "
-                "inject_key() o setSessionKeyIdentifier() non ancora chiamati"
+                "[KeySessionProviderPQC] kid not available — "
+                "inject_key() or setSessionKeyIdentifier() not yet called"
             )
         return self._kid
 
     def setSessionKeyIdentifier(self, kid: str) -> None:
         self._kid = kid
-        logger.debug("[KeySessionProviderPQC] kid impostato: %s", kid)
+        logger.debug("[KeySessionProviderPQC] kid set: %s", kid)
 
     async def getSessionKeyData(self, session_key_identifier: str) -> bytes:
         """Returns the key derived via the KEM for the given kid."""
         key = self._key_store.get(session_key_identifier)
         if key is None:
             raise KeyError(
-                f"[KeySessionProviderPQC] chiave non trovata: "
+                f"[KeySessionProviderPQC] key not found: "
                 f"kid={session_key_identifier!r}"
             )
         return key
@@ -188,7 +188,7 @@ class KeySessionProviderPQC(KeySessionProvider):
         self._key_store.put(kid, session_key)
         self._kid = kid
         logger.debug(
-            "[KeySessionProviderPQC] chiave iniettata: kid=%s len=%d",
+            "[KeySessionProviderPQC] key injected: kid=%s len=%d",
             kid, len(session_key),
         )
 
@@ -244,11 +244,11 @@ class KeyProviderClientPQC(KeyProviderClient):
             x25519_private_key_bytes=x25519_priv,
             mlkem_secret_key_bytes=mlkem_sec,
         )
-        logger.info("[KeyProviderClientPQC] keypair X25519 + ML-KEM-768 generati")
+        logger.info("[KeyProviderClientPQC] X25519 + ML-KEM-768 keypairs generated")
 
     def createProviderSession(self) -> KeySessionProvider:
         if self._session is None:
-            raise RuntimeError("[KeyProviderClientPQC] start() non ancora chiamato")
+            raise RuntimeError("[KeyProviderClientPQC] start() not yet called")
         return self._session
 
     def stop(self) -> None:
@@ -262,20 +262,20 @@ class KeyProviderClientPQC(KeyProviderClient):
                 self._session._mlkem_secret_key_bytes = (
                     b"\x00" * len(self._session._mlkem_secret_key_bytes)
                 )
-        logger.debug("[KeyProviderClientPQC] stop() — chiavi private azzerate")
+        logger.debug("[KeyProviderClientPQC] stop() — private keys zeroed")
 
     @property
     def x25519_public_key_bytes(self) -> bytes:
         """X25519 pubkey to include in the PQCHandshakeRequest."""
         if self._x25519_public_key_bytes is None:
-            raise RuntimeError("[KeyProviderClientPQC] start() non ancora chiamato")
+            raise RuntimeError("[KeyProviderClientPQC] start() not yet called")
         return self._x25519_public_key_bytes
 
     @property
     def mlkem_public_key_bytes(self) -> bytes:
         """ML-KEM-768 pubkey to include in the PQCHandshakeRequest."""
         if self._mlkem_public_key_bytes is None:
-            raise RuntimeError("[KeyProviderClientPQC] start() non ancora chiamato")
+            raise RuntimeError("[KeyProviderClientPQC] start() not yet called")
         return self._mlkem_public_key_bytes
 
 
@@ -307,14 +307,14 @@ class KeyProviderServerPQC(KeyProviderServer):
             key_store=self._key_store,
         )
         logger.info(
-            "[KeyProviderServerPQC] avviato — "
-            "key agreement KEM per-handshake (nessun peering esterno)"
+            "[KeyProviderServerPQC] started — "
+            "per-handshake KEM key agreement (no external peering)"
         )
         return BlockableResult()
 
     def createProviderSession(self) -> KeySessionProvider:
         if self._session is None:
-            raise RuntimeError("[KeyProviderServerPQC] start() non ancora chiamato")
+            raise RuntimeError("[KeyProviderServerPQC] start() not yet called")
         return self._session
 
     async def stop(self) -> None:
@@ -372,18 +372,18 @@ def _check_liboqs() -> None:
         import oqs  # noqa: F401
     except ImportError:
         raise ImportError(
-            "Il provider 'pqc' richiede liboqs-python.\n"
-            "Installazione:\n"
+            "The 'pqc' provider requires liboqs-python.\n"
+            "Installation:\n"
             "  uv pip install -e '.[pqc]'\n"
-            "  oppure: pip install liboqs-python==0.11.0"
+            "  or: pip install liboqs-python==0.11.0"
         ) from None
     except (AttributeError, OSError) as exc:
         raise ImportError(
-            f"liboqs-python è installato ma incompatibile con la C library di sistema: {exc}\n"
-            "La versione del wrapper Python deve corrispondere alla liboqs C library.\n"
+            f"liboqs-python is installed but incompatible with the system's C library: {exc}\n"
+            "The Python wrapper's version must match the liboqs C library.\n"
             "Fix:\n"
             "  uv pip install liboqs-python==0.11.0\n"
-            "  (sostituire 0.11.0 con la versione della C library installata)"
+            "  (replace 0.11.0 with the installed C library's version)"
         ) from exc
 
 
@@ -405,15 +405,15 @@ def _mlkem_alg_name() -> str:
             kem = oqs.KeyEncapsulation(candidate)
             kem.free()
             _MLKEM_ALG_CACHE = candidate
-            logger.debug("[PQC] algoritmo ML-KEM selezionato: %s", candidate)
+            logger.debug("[PQC] ML-KEM algorithm selected: %s", candidate)
             return candidate
         except Exception:
             pass
 
     raise RuntimeError(
-        f"Nessun algoritmo ML-KEM-768 disponibile in liboqs. "
-        f"Tentati: {list(_MLKEM_CANDIDATES)}. "
-        f"Verifica l'installazione di liboqs-python."
+        f"No ML-KEM-768 algorithm available in liboqs. "
+        f"Tried: {list(_MLKEM_CANDIDATES)}. "
+        f"Check the liboqs-python installation."
     )
 
 
@@ -603,7 +603,7 @@ def derive_hybrid_key(
     ).derive(ikm)
 
     logger.debug(
-        "[PQC] HKDF ibrido: ikm_len=%d salt_len=%d → key_len=%d",
+        "[PQC] hybrid HKDF: ikm_len=%d salt_len=%d → key_len=%d",
         len(ikm), len(nonce), len(key),
     )
     return key

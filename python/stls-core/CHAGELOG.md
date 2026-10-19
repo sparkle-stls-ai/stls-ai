@@ -15,6 +15,21 @@ No wire-format or public API changes; all 250 unit/e2e tests (+ 80 PQC
 tests with real `liboqs`) and the full Node↔Python interoperability
 suite pass unchanged.
 
+### Changed (follow-up, 2026-10-19)
+
+- **Finished translating docstrings, comments and log/error strings from
+  Italian to English** across `auth/stls_core_auth_manager.py`,
+  `auth/stls_core_auth_store.py`, `providers/stls_core_providers_arqit_py.py`,
+  `providers/stls_core_providers_factory.py`,
+  `providers/stls_core_providers_keystore.py`,
+  `providers/stls_core_providers_pqc.py`, `stls_core_handshake.py` and
+  `stls_core_handshake_pqc.py`. These 8 files were missed by the
+  original translation pass even though it was recorded as complete:
+  most of the Italian text left behind was in `logger.info/debug/warning`
+  calls and exception messages rather than docstrings, which a
+  docstring-focused review had skipped over. No code logic changed,
+  only string literals.
+
 ### Fixed
 
 - **`stls_core_handshake.py`: a new `ThreadPoolExecutor` was created and

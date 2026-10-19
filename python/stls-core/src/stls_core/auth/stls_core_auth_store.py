@@ -113,8 +113,8 @@ class RedisKeyCache:
             from redis.asyncio import Redis  # type: ignore
         except ImportError as exc:
             raise RuntimeError(
-                "RedisKeyCache richiede redis>=7.4.0. "
-                "Installa con: uv add 'redis>=7.4.0'"
+                "RedisKeyCache requires redis>=7.4.0. "
+                "Install it with: uv add 'redis>=7.4.0'"
             ) from exc
 
         self._client = Redis.from_url(
@@ -126,14 +126,14 @@ class RedisKeyCache:
         )
         # verifies the connection on first use
         await self._client.ping()
-        logger.info("RedisKeyCache: connesso a %s", self._sanitize_url(self._url))
+        logger.info("RedisKeyCache: connected to %s", self._sanitize_url(self._url))
 
     async def close(self) -> None:
         """Closes the Redis connection."""
         if self._client is not None:
             await self._client.aclose()
             self._client = None
-            logger.info("RedisKeyCache: connessione chiusa")
+            logger.info("RedisKeyCache: connection closed")
 
     async def __aenter__(self) -> "RedisKeyCache":
         await self.initialize()
@@ -179,7 +179,7 @@ class RedisKeyCache:
         ttl = self._compute_ttl(record)
         if ttl <= 0:
             # key already expired: don't write it to the cache
-            logger.debug("RedisKeyCache.set: chiave %s... già scaduta, skip", record.key_id[:12])
+            logger.debug("RedisKeyCache.set: key %s... already expired, skip", record.key_id[:12])
             return
         try:
             pipe = self._client.pipeline()
@@ -219,7 +219,7 @@ class RedisKeyCache:
             pipe.delete(f"{self._key_prefix}{key_id}")
             pipe.srem(self._index_set, key_id)
             await pipe.execute()
-            logger.info("RedisKeyCache: revocata chiave %s...", key_id[:12])
+            logger.info("RedisKeyCache: revoked key %s...", key_id[:12])
         except Exception as exc:
             logger.error("RedisKeyCache.revoke(%s...): %s", key_id[:12], exc)
 
@@ -248,7 +248,7 @@ class RedisKeyCache:
         await self._ensure_connected()
         try:
             await self._client.srem(self._revoked_set, key_id)
-            logger.info("RedisKeyCache: revoca rimossa per %s...", key_id[:12])
+            logger.info("RedisKeyCache: revocation removed for %s...", key_id[:12])
         except Exception as exc:
             logger.error("RedisKeyCache.unrevoke(%s...): %s", key_id[:12], exc)
 
@@ -273,7 +273,7 @@ class RedisKeyCache:
         """
         await self._ensure_connected()
         if not records:
-            logger.warning("RedisKeyCache.bulk_reload: lista vuota, operazione annullata")
+            logger.warning("RedisKeyCache.bulk_reload: empty list, operation aborted")
             return 0
 
         new_ids = {r.key_id for r in records}
@@ -301,11 +301,11 @@ class RedisKeyCache:
 
             if stale_ids:
                 logger.info(
-                    "RedisKeyCache[%s].bulk_reload: rimossi %d record obsoleti",
+                    "RedisKeyCache[%s].bulk_reload: removed %d stale records",
                     self._namespace, len(stale_ids),
                 )
             logger.info(
-                "RedisKeyCache[%s].bulk_reload: scritti %d record",
+                "RedisKeyCache[%s].bulk_reload: wrote %d records",
                 self._namespace, len(records),
             )
             return len(records)
@@ -347,7 +347,7 @@ class RedisKeyCache:
                 pipe.delete(f"{self._key_prefix}{kid}")
             pipe.delete(self._index_set)
             await pipe.execute()
-            logger.info("RedisKeyCache[%s].flush_all_keys: rimossi %d record", self._namespace, len(ids))
+            logger.info("RedisKeyCache[%s].flush_all_keys: removed %d records", self._namespace, len(ids))
         except Exception as exc:
             logger.error("RedisKeyCache.flush_all_keys(): %s", exc)
 

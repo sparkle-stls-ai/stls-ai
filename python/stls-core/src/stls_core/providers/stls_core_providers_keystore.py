@@ -152,7 +152,7 @@ class InMemoryArqitKeyStore(ArqitKeyStoreBase):
             self._keys[key_id] = key_bytes
             self._last_key_id = key_id
             logger.debug(
-                "[InMemoryKeyStore] chiave aggiunta: id=%s len=%d",
+                "[InMemoryKeyStore] key added: id=%s len=%d",
                 key_id, len(key_bytes),
             )
 
@@ -187,8 +187,8 @@ class InMemoryArqitKeyStore(ArqitKeyStoreBase):
                     return self._last_key_id, self._keys[self._last_key_id]
             _time.sleep(0.2)
         logger.warning(
-            "[InMemoryKeyStore] timeout (%ss) in attesa di una nuova chiave "
-            "(escluse %d già viste)", timeout, len(seen_key_ids),
+            "[InMemoryKeyStore] timeout (%ss) waiting for a new key "
+            "(excluding %d already seen)", timeout, len(seen_key_ids),
         )
         return None
 
@@ -244,8 +244,8 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
             import redis as redis_lib
         except ImportError as exc:
             raise ImportError(
-                "redis>=7.4.0 è necessario per KEY_STORE_BACKEND=redis. "
-                "Installare con: pip install 'redis>=7.4.0'"
+                "redis>=7.4.0 is required for KEY_STORE_BACKEND=redis. "
+                "Install it with: pip install 'redis>=7.4.0'"
             ) from exc
 
         self._r = redis_lib.Redis.from_url(redis_url, decode_responses=False)
@@ -277,7 +277,7 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
         pipe.zadd(self._pending(), {key_id: now})
         pipe.execute()
         logger.debug(
-            "[RedisKeyStore] chiave aggiunta: id=%s len=%d pending_ttl=%ds",
+            "[RedisKeyStore] key added: id=%s len=%d pending_ttl=%ds",
             key_id, len(key_bytes), self._pending_ttl,
         )
 
@@ -333,7 +333,7 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
             pipe.zrem(self._pending(), key_id)
         pipe.execute()
         logger.debug(
-            "[RedisKeyStore] chiave consegnata: id=%s session_ttl=%ds zrem=%s",
+            "[RedisKeyStore] key delivered: id=%s session_ttl=%ds zrem=%s",
             key_id, self._session_ttl, self._zrem_on_deliver,
         )
 
@@ -357,16 +357,16 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
                 keys.add(kid)
             if keys:
                 logger.info(
-                    "[RedisKeyStore] startup_seen_keys: %d chiavi obsolete trovate "
-                    "nel ZSET pending — saranno ignorate dal provider server riavviato.",
+                    "[RedisKeyStore] startup_seen_keys: %d stale keys found "
+                    "in the pending ZSET — will be ignored by the restarted server provider.",
                     len(keys),
                 )
             return keys
         except Exception as exc:
             logger.warning(
-                "[RedisKeyStore] startup_seen_keys: errore lettura ZSET: %s — "
-                "il provider inizia con seen_key_ids={}. Potrebbero essere usate "
-                "chiavi obsolete.", exc,
+                "[RedisKeyStore] startup_seen_keys: error reading ZSET: %s — "
+                "the provider starts with seen_key_ids={}. Stale keys "
+                "may be used.", exc,
             )
             return set()
 
@@ -406,8 +406,8 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
             _time.sleep(self._poll_interval)
 
         logger.warning(
-            "[RedisKeyStore] timeout (%ss) in attesa di una nuova chiave "
-            "(escluse %d già viste)", timeout, len(seen_key_ids),
+            "[RedisKeyStore] timeout (%ss) waiting for a new key "
+            "(excluding %d already seen)", timeout, len(seen_key_ids),
         )
         return None
 
@@ -481,6 +481,6 @@ class ArqitKeyStoreFactory:
             return InMemoryArqitKeyStore()
 
         raise ValueError(
-            f"KEY_STORE_BACKEND='{backend}' non riconosciuto. "
-            "Valori supportati: 'memory' (default), 'redis'."
+            f"KEY_STORE_BACKEND='{backend}' not recognized. "
+            "Supported values: 'memory' (default), 'redis'."
         )
