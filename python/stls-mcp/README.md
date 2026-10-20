@@ -538,6 +538,7 @@ through `/mcp-stls`.
 
 ## License
 
-AGPL v3 + commercial (dual licensing), consistent with `stls-a2a` and
-`stls-core`. The Arqit SKA-Platform™ wheels remain subject to the
+Dual-licensed under the [GNU AGPLv3](LICENSE) and a
+[commercial license](LICENSE-COMMERCIAL.md), consistent with `stls-a2a`
+and `stls-core`. The Arqit SKA-Platform™ wheels remain subject to the
 proprietary Arqit license.

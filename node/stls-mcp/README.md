@@ -333,5 +333,6 @@ full MCP protocol stack (initialize, tool/resource/prompt calls).
 
 ## License
 
-AGPL v3 + commercial (dual licensing), consistent with `stls-core`,
-`stls-a2a` and `python/stls-mcp`.
+Dual-licensed under the [GNU AGPLv3](LICENSE) and a
+[commercial license](LICENSE-COMMERCIAL.md), consistent with
+`stls-core`, `stls-a2a` and `python/stls-mcp`.

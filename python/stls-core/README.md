@@ -163,3 +163,10 @@ STLS_SESSION_TTL=3600           # session idle TTL (seconds)
 
 See `.env.example` for the full list, organized into 6 sections (Key
 Provider, Arqit, Session Cache, Auth, Redis, PostgreSQL).
+
+## License
+
+Dual-licensed under the [GNU AGPLv3](LICENSE) and a
+[commercial license](LICENSE-COMMERCIAL.md), consistent with `stls-a2a`
+and `stls-mcp`. The Arqit SKA-Platform™ wheels remain subject to the
+proprietary Arqit license.

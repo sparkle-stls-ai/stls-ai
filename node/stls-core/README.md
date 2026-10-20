@@ -589,3 +589,9 @@ a cryptographic change fails before a live test even runs), and
 generating the shared constants (`ENVELOPE_*`, the `X-STLS-*` headers)
 from a neutral spec instead of duplicating them by hand in
 `constants.py` and `constants.ts`.
+
+## License
+
+Dual-licensed under the [GNU AGPLv3](LICENSE) and a
+[commercial license](LICENSE-COMMERCIAL.md), consistent with
+`python/stls-core`, `stls-a2a` and `stls-mcp`.

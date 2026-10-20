@@ -8,6 +8,10 @@ version = "0.1.2"
 description = "Core cryptographic transport layer for STLS — protocol-agnostic symmetric encryption, quantum-safe key providers and API key auth"
 readme = "README.md"
 requires-python = ">=3.12"
+license = { text = "AGPL-3.0-or-later OR LicenseRef-Commercial" }
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+]
 dependencies = [
     # Crypto primitives: AES-256-GCM, HMAC-SHA256, HKDF-Expand
     "cryptography>=46.0.5",

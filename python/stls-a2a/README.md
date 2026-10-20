@@ -922,6 +922,10 @@ Operational suggestions:
 - stopping flows with `Ctrl+C` when using Arqit is still listed as an open point in the working notes
 - session establishment for `base` and `arqit_py` is currently lazy (`session_id` embedded in the client's first encrypted request, resolved against the provider on cache miss); for `pqc`, the explicit HMAC challenge/response handshake from `stls-core` is wired via `/stls/pqc/handshake` — session_id is server-generated and the key never transits on the wire. Extending the explicit handshake to `base` and `arqit_py` is tracked as follow-up work
 - multi-agent PQC with `SESSION_CACHE_BACKEND=memory`: the `/stls/pqc/handshake` endpoint is tied to the first agent's `SessionCache`; clients calling other agents with the same session need `SESSION_CACHE_BACKEND=redis` (standard requirement for any multi-replica deployment)
+- `ContextualSecureRemoteA2aAgent`/`SecureSessionManager` (`stls_a2a_secure_remote.py`) — the drop-in encrypted replacement for ADK's `RemoteA2aAgent` — now supports all three key providers via an opt-in `provider_name=` argument (`SecureSessionManager(provider_name="base" | "arqit_py" | "pqc")`, or `ContextualSecureRemoteA2aAgent(..., provider_name=...)` when not sharing a manager). The default stays `pqc`, exactly as before adding this — no behavior change for existing callers that don't pass it.
+  - `pqc`: unchanged — lazy KEM handshake against `/stls/pqc/handshake` on first call.
+  - `base`: resolves instantly through `KeySessionProviderFactory().get_session_provider(...)` (fixed pre-shared key, no handshake round-trip) — no server-side change needed, `create_secure_a2a_endpoint()` already serves `/secure-a2a` regardless of provider.
+  - `arqit_py`: same generic `KeySessionProviderFactory` path, but `create_provider_client()` reads `ARQIT_PY_CLIENT_CONFIG` straight from the process environment (`host`/`port` are accepted but ignored — see `stls_core_providers_arqit_py.py`), one config for the whole process. Works today only if the process ever talks to a single arqit_py-secured counterpart; talking to several different ones discovered at runtime would require them to share a config, which defeats the point. Tracked open point: extend the agent card (STLS security-scheme extension, alongside today's `keyProvider` field) to carry per-agent arqit_py peering info (device identity / config reference), so a `base_url → config` mapping could be resolved from the card itself instead of a single process-wide env var — no design or implementation yet.
 
 ## Useful Files in This Folder
 
@@ -952,3 +956,10 @@ At the moment, the module covers:
 - adapter layer split into per-framework modules (`google`, `langchain`, `sk`, `custom`)
 - crypto, session, provider, and auth internals shared with `stls-mcp` through the `stls-core` package
 - crypto, session, provider, and auth internals shared with `stls-mcp` through the `stls-core` package
+
+## License
+
+Dual-licensed under the [GNU AGPLv3](LICENSE) and a
+[commercial license](LICENSE-COMMERCIAL.md), consistent with `stls-core`
+and `stls-mcp`. The Arqit SKA-Platform™ wheels remain subject to the
+proprietary Arqit license.

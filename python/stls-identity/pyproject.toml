@@ -7,6 +7,10 @@ name = "stls-identity"
 version = "0.1.0"
 description = "DID + Verifiable Credential identity layer for the STLS AI ecosystem"
 requires-python = ">=3.12"
+license = { text = "AGPL-3.0-or-later OR LicenseRef-Commercial" }
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+]
 dependencies = [
     "stls_core>=0.1.1",
     "pydantic>=2",

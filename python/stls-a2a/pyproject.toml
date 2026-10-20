@@ -8,6 +8,10 @@ version = "0.1.5"
 description = "SDK for building Agentic A2A comunication using quantum-safe encrypted channels"
 readme = "README.md"
 requires-python = ">=3.12"
+license = { text = "AGPL-3.0-or-later OR LicenseRef-Commercial" }
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+]
 dependencies = [
     # Crittografia, session cache, handshake, key provider (base/arqit_py) e
     # API key auth ora vivono in stls-core — condiviso con stls-mcp.

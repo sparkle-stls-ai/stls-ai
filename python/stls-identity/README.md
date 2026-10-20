@@ -133,3 +133,8 @@ src/stls_identity/
 examples/    tre script eseguibili, dati reali generati dal codice
 tests/       67 test, stessa disciplina "contro infrastruttura vera" del resto del monorepo
 ```
+
+## Licenza
+
+Doppia licenza: [GNU AGPLv3](LICENSE) oppure [licenza commerciale](LICENSE-COMMERCIAL.md),
+coerente con `stls-core`, `stls-a2a` e `stls-mcp`.

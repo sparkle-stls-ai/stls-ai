@@ -8,6 +8,10 @@ version = "0.1.2"
 description = "STLS extension of the Model Context Protocol — transparent application-layer symmetric encryption over Streamable HTTP, sharing the stls-core crypto/session/handshake/provider/auth layer with stls-a2a"
 readme = "README.md"
 requires-python = ">=3.12"
+license = { text = "AGPL-3.0-or-later OR LicenseRef-Commercial" }
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+]
 dependencies = [
     # Crittografia, session cache, handshake, key provider (base/arqit_py) e
     # API key auth — condivisi con stls-a2a. Risolto come pacchetto locale
