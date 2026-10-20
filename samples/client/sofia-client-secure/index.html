@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✦</text></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sofia Secure Chat</title>
+    <script>
+      // Apply the saved theme before first paint, to avoid a flash of the
+      // wrong theme. Mirrors the resolution logic in src/hooks/useSettings.ts
+      // (which keeps this in sync afterwards, including live OS changes when
+      // the preference is "system") — same storage key, same default.
+      (function () {
+        try {
+          var raw = localStorage.getItem('sofia_settings_v1');
+          var theme = (raw && JSON.parse(raw).theme) || 'dark';
+          var resolved = theme === 'system'
+            ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+            : theme;
+          document.documentElement.setAttribute('data-theme', resolved);
+        } catch (e) {
+          // localStorage unavailable / bad JSON — fall back to the default
+          // dark theme already baked into :root, nothing to do.
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

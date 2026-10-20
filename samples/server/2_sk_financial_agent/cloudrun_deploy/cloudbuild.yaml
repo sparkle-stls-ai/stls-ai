@@ -1,0 +1,80 @@
+# cloudbuild.yaml
+# Triggered manually or via Cloud Build trigger (push to main branch).
+#
+# Required substitutions (set in trigger or --substitutions flag):
+#   _REGION          e.g. europe-west8
+#   _SERVICE         e.g. stls-a2a-sk-agent
+#   _AR_REPO         e.g. stls-images          (Artifact Registry repo name)
+#   _BASE_URL        e.g. https://<cloudrun-url>
+#
+# Secrets managed in Secret Manager:
+#   CLASSPATH        mounted at runtime via --set-secrets
+
+substitutions:
+  _REGION:  europe-west8
+  _SERVICE: stls-a2a-sk-agent
+  _AR_REPO: stls-images
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+
+  # ── 1. Build the Docker image ───────────────────────────────
+  - name: gcr.io/cloud-builders/docker
+    id: build
+    args:
+      - build
+      - --tag
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$BUILD_ID"
+      - --tag
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:latest"
+      - --cache-from
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:latest"
+      - .
+
+  # ── 2. Push to Artifact Registry ───────────────────────────
+  - name: gcr.io/cloud-builders/docker
+    id: push
+    args:
+      - push
+      - --all-tags
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}"
+
+  # ── 3. Deploy to Cloud Run ──────────────────────────────────
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$BUILD_ID
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --concurrency=80
+      - --cpu=2
+      - --memory=2Gi
+      - --timeout=300
+      # Cloud Run injects PORT automatically; no need to set it here.
+      # CLASSPATH is baked into the image at /opt/stls/lib/ — no secret needed.
+      # BASE_URL is derived at runtime from the K_SERVICE / Cloud Run metadata.
+      - --set-env-vars=KEY_PROVIDER_NAME=base,BASE_URL=https://stls-a2a-sk-agent-94838045615.europe-west8.run.app
+      - --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest
+
+  # ── 4. Print the live service URL ──────────────────────────
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: url
+    entrypoint: gcloud
+    args:
+      - run
+      - services
+      - describe
+      - ${_SERVICE}
+      - --region=${_REGION}
+      - --format=value(status.url)
+
+images:
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:$BUILD_ID"
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE}:latest"

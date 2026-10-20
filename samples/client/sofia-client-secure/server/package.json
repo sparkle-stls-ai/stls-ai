@@ -1,0 +1,6 @@
+{
+  "name": "sofia-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dependencies are managed by the root package.json. Run 'npm install' from the project root."
+}

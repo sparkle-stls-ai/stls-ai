@@ -1,0 +1,21 @@
+[
+  {
+    "raw_key":    "stls_adk_test_key_change_me_in_production",
+    "client_id":  "adk-test-client",
+    "scopes":     ["secure-a2a"],
+    "endpoints":  [
+      "/agents/adk-agent/secure-a2a",
+      "/agents/adk-agent/a2a",
+      "/agents/adk-agent/a2a/stream",
+      "/agents/adk-agent/secure-a2a/stream"
+    ],
+    "description": "Chiave di test per adk-agent (formato JSON)"
+  },
+  {
+    "raw_key":    "stls_admin_key_change_me_in_production",
+    "client_id":  "admin-file-loader",
+    "scopes":     ["*"],
+    "endpoints":  [],
+    "description": "Chiave admin — accesso completo"
+  }
+]

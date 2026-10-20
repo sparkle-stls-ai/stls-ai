@@ -1,0 +1,13 @@
+node_modules
+server/node_modules
+dist
+server/dist
+.env
+.env.local
+.env.*.local
+*.log
+.git
+.gitignore
+.claude
+.venv
+README.md

@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# terraform.tfvars.example
+# Copia in terraform.tfvars e compila i valori. NON committare terraform.tfvars.
+# ---------------------------------------------------------------------------
+
+# ── Progetto ──────────────────────────────────────────────────────────────
+project_id = "aichemy-dev-01"
+region     = "europe-west8"
+
+# ── Immagini Docker ───────────────────────────────────────────────────────
+# Tag usato per tutti i servizi se non specificato individualmente
+default_image_tag = "1.0.0"
+
+# Override per singolo servizio (opzionale)
+# image_tags = {
+#   api-keys   = "1.0.1"
+#   monitoring = "1.0.0"
+#   redis      = "1.0.0"
+# }
+
+# ── Cloud SQL ─────────────────────────────────────────────────────────────
+db_instance_name       = "sofia-pg"
+db_tier                = "db-g1-small"   # dev: db-f1-micro
+db_availability_type   = "ZONAL"         # prod: REGIONAL
+db_name                = "sofia"
+db_user                = "spk_sofia"
+db_password            = "CHANGE_ME_STRONG_PASSWORD"
+db_deletion_protection = true
+
+# ── Redis ─────────────────────────────────────────────────────────────────
+redis_instance_name = "sofia-redis"
+redis_memory_gb     = 1
+redis_tier          = "BASIC"            # prod: STANDARD_HA
+redis_version       = "REDIS_7_0"
+
+# ── Rete ──────────────────────────────────────────────────────────────────
+vpc_name       = "sofia-network"
+subnet_cidr    = "10.8.0.0/24"
+connector_cidr = "10.8.1.0/28"
+
+# ── Cloud Run ─────────────────────────────────────────────────────────────
+cloud_run_cpu    = "1"
+cloud_run_memory = "512Mi"
+min_instances    = 0     # scale-to-zero. Usa 1 per eliminare cold start.
+max_instances    = 5
+
+# true = endpoint pubblici senza autenticazione GCP (protezione via ApiKeyManager)
+cloud_run_invoker_public = true
+
+# ── Secrets ───────────────────────────────────────────────────────────────
+openai_api_key = "sk-proj-XXXX"
+google_api_key = "AIzaSy-XXXX"
+
+base_urls = {
+  api-keys   = "https://sofia-api-keys-xxxxxxxxxxxx-ew.a.run.app"
+  monitoring = "https://sofia-monitoring-xxxxxxxxxxxx-ew.a.run.app"
+  redis      = "https://sofia-redis-xxxxxxxxxxxx-ew.a.run.app"
+}

@@ -10,15 +10,19 @@ __pycache__/
 build/
 develop-eggs/
 dist/
-!python/stls-a2a/dist/
-!python/stls-core/dist/
-!python/stls-mcp/dist/
 python/stls-a2a/arqit_wheels
 python/stls-core/arqit_wheels
 python/stls-mcp/arqit_wheels
 
+# Large build artifacts (e.g. bundled JARs for Cloud Run deploy samples)
+*.jar
+
 # Arqit device/identity credential files (contain realm/MQTT secrets)
 aq-*.json
+
+# Internal Server
+samples/server/server*
+samples/server/wheels
 
 # Arqit SKA-Platform proprietary example utilities (Copyright Arqit Limited,
 # "cannot be copied and/or distributed without the express permission of
@@ -107,3 +111,6 @@ coverage/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Claude Code local state (worktrees spawned for background agents, etc.)
+.claude/

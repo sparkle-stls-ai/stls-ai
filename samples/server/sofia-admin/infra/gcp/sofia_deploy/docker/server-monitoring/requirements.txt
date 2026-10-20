@@ -1,0 +1,26 @@
+# ---------------------------------------------------------------------------
+# requirements.txt — dipendenze applicative server Sofia
+# Il wheel stls_a2a è installato separatamente da wheels/ nel Dockerfile.
+# ---------------------------------------------------------------------------
+
+# ── Web framework ────────────────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+
+# ── Config ───────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+
+# ── PostgreSQL ───────────────────────────────────────────────────────────────
+# psycopg2-binary: wheel pre-compilato, nessuna dipendenza da libpq-dev
+psycopg2-binary>=2.9.0
+# asyncpg: usato da PostgresLoader di stls_a2a per connessioni async
+asyncpg>=0.30.0
+
+# ── Redis ────────────────────────────────────────────────────────────────────
+redis>=7.4.0
+
+# ── HTTP client ──────────────────────────────────────────────────────────────
+httpx>=0.27.0
+
+# ── Pydantic v2 ──────────────────────────────────────────────────────────────
+pydantic>=2.0.0
