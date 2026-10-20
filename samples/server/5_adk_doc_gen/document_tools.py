@@ -1,10 +1,10 @@
 """
 document_tools.py
 -----------------------
-Google ADK FunctionTools per la generazione on-demand di documenti
-(docx, xlsx, md, pdf) e grafici (png, html, pdf) compatibili con STLS A2A.
+Google ADK FunctionTools for on-demand generation of documents
+(docx, xlsx, md, pdf) and charts (png, html, pdf) compatible with STLS A2A.
 
-Dipendenze: python-docx, openpyxl, matplotlib, plotly, reportlab.
+Dependencies: python-docx, openpyxl, matplotlib, plotly, reportlab.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ _PENDING_KEY = "temp:_pending_doc_artifacts"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BUILDER DOCUMENTI
+# DOCUMENT BUILDERS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_docx(title: str, sections: list[dict]) -> bytes:
@@ -36,7 +36,7 @@ def _build_docx(title: str, sections: list[dict]) -> bytes:
     h = doc.add_heading(title, level=0)
     h.runs[0].font.color.rgb = RGBColor(0x1F, 0x49, 0x7D)
 
-    ts = doc.add_paragraph(f"Generato: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    ts = doc.add_paragraph(f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
     ts.runs[0].font.size = Pt(9)
     ts.runs[0].font.color.rgb = RGBColor(0x88, 0x88, 0x88)
     doc.add_paragraph()
@@ -100,7 +100,7 @@ def _build_xlsx(title: str, sheets: list[dict]) -> bytes:
 
         ws.cell(row=1, column=1, value=title).font = Font(name="Arial", bold=True, size=13, color="1F497D")
         ws.cell(row=2, column=1, value=(
-            f"Generato: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+            f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
         )).font = Font(name="Arial", size=9, color="888888")
 
         for col_idx, h in enumerate(headers, 1):
@@ -130,7 +130,7 @@ def _build_xlsx(title: str, sheets: list[dict]) -> bytes:
 def _build_md(title: str, sections: list[dict]) -> bytes:
     lines = [
         f"# {title}", "",
-        f"_Generato: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}_", "",
+        f"_Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}_", "",
     ]
     for section in sections:
         heading_text = section.get("heading", "")
@@ -159,11 +159,11 @@ def _build_md(title: str, sections: list[dict]) -> bytes:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BUILDER GRAFICI
+# CHART BUILDERS
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _apply_matplotlib_chart(ax, chart_type: str, categories: list, series: list[dict]) -> None:
-    """Disegna il grafico sull'asse matplotlib dato."""
+    """Draws the chart on the given matplotlib axis."""
     import numpy as np
 
     if chart_type == "pie":
@@ -292,7 +292,7 @@ def _build_chart_pdf(
         ax.set_xlabel(x_label, fontsize=11)
     if y_label:
         ax.set_ylabel(y_label, fontsize=11)
-    fig.text(0.99, 0.01, f"Generato: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
+    fig.text(0.99, 0.01, f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
              ha="right", va="bottom", fontsize=8, color="gray")
     plt.tight_layout()
     buf = io.BytesIO()
@@ -303,7 +303,7 @@ def _build_chart_pdf(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BUILDER PDF REPORT (testo + grafici nella stessa pagina)
+# PDF REPORT BUILDER (text + charts on the same page)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_pdf_report(
@@ -312,20 +312,20 @@ def _build_pdf_report(
     charts: list[dict],
 ) -> bytes:
     """
-    Genera un PDF che combina sezioni di testo/tabelle (reportlab) e
-    grafici embedded come immagini PNG (matplotlib).
+    Generates a PDF that combines text/table sections (reportlab) and
+    charts embedded as PNG images (matplotlib).
 
-    Parametro charts — lista di grafici da includere nel documento:
+    charts parameter — list of charts to include in the document:
       [
         {
-          "title":      "Ricavi Tesla",       # titolo del grafico (opzionale)
+          "title":      "Tesla Revenue",      # chart title (optional)
           "chart_type": "bar",                # bar | line | area | pie | scatter
-          "categories": ["2021","2022",...],  # asse X o fette pie
-          "series":     [{"name":"Ricavi","values":[53.82,81.46,...]}],
-          "x_label":    "Anno",               # opzionale
-          "y_label":    "Miliardi USD",       # opzionale
-          "position":   "after_section_2"     # opzionale: dopo quale sezione inserire
-                                              # il grafico (0-based). Default: in fondo.
+          "categories": ["2021","2022",...],  # X axis or pie slices
+          "series":     [{"name":"Revenue","values":[53.82,81.46,...]}],
+          "x_label":    "Year",               # optional
+          "y_label":    "Billion USD",        # optional
+          "position":   "after_section_2"     # optional: after which section to insert
+                                              # the chart (0-based). Default: at the end.
         }
       ]
     """
@@ -343,7 +343,7 @@ def _build_pdf_report(
     )
     from reportlab.lib.enums import TA_LEFT
 
-    # ── Stili ──────────────────────────────────────────────────────────────
+    # ── Styles ─────────────────────────────────────────────────────────────
     styles = getSampleStyleSheet()
 
     title_style = ParagraphStyle(
@@ -393,7 +393,7 @@ def _build_pdf_report(
         spaceBefore=6,
     )
 
-    # ── Helper: genera PNG di un grafico e restituisce un flowable Image ──
+    # ── Helper: generates a chart PNG and returns a flowable Image ────────
     def _chart_flowable(chart_def: dict, width_cm: float = 15, height_cm: float = 9):
         png = _build_chart_png(
             title      = chart_def.get("title", ""),
@@ -406,7 +406,7 @@ def _build_pdf_report(
         img_buf = io.BytesIO(png)
         return Image(img_buf, width=width_cm * cm, height=height_cm * cm)
 
-    # ── Helper: costruisce la tabella reportlab ────────────────────────────
+    # ── Helper: builds the reportlab table ─────────────────────────────────
     def _rl_table(table_data: dict):
         headers = table_data.get("headers", [])
         rows    = table_data.get("rows", [])
@@ -431,9 +431,9 @@ def _build_pdf_report(
         ]))
         return t
 
-    # ── Indicizza i grafici per posizione ─────────────────────────────────
-    # Un grafico con position=N viene inserito subito dopo la sezione N (0-based).
-    # Grafici senza position (o con position non valida) vanno in coda.
+    # ── Index charts by position ──────────────────────────────────────────
+    # A chart with position=N is inserted right after section N (0-based).
+    # Charts without a position (or with an invalid one) go at the end.
     charts_by_position: dict[int | None, list[dict]] = {}
     for chart_def in charts:
         pos = chart_def.get("position")
@@ -452,7 +452,7 @@ def _build_pdf_report(
             flowables.append(Spacer(1, 12))
             story.append(KeepTogether(flowables))
 
-    # ── Costruisce lo story reportlab ─────────────────────────────────────
+    # ── Builds the reportlab story ─────────────────────────────────────────
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
@@ -466,7 +466,7 @@ def _build_pdf_report(
 
     story.append(Paragraph(title, title_style))
     story.append(Paragraph(
-        f"Generato: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}",
         meta_style,
     ))
     story.append(HRFlowable(
@@ -498,10 +498,10 @@ def _build_pdf_report(
         if block:
             story.append(KeepTogether(block))
 
-        # Grafici posizionati dopo questa sezione
+        # Charts positioned after this section
         _append_charts_for_pos(story, idx)
 
-    # Grafici senza posizione specifica → in coda
+    # Charts without a specific position → at the end
     _append_charts_for_pos(story, None)
 
     doc.build(story)
@@ -509,7 +509,7 @@ def _build_pdf_report(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HELPER COMUNE
+# SHARED HELPER
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _save_and_track(
@@ -531,7 +531,7 @@ async def _save_and_track(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ADK FUNCTION TOOLS — DOCUMENTI
+# ADK FUNCTION TOOLS — DOCUMENTS
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def generate_docx_report(
@@ -540,12 +540,12 @@ async def generate_docx_report(
     tool_context: ToolContext,
 ) -> dict:
     """
-    Genera un report Word (.docx) e lo allega automaticamente alla risposta.
+    Generates a Word report (.docx) and attaches it automatically to the response.
 
     Args:
-        title: Titolo del documento.
+        title: Document title.
         sections: [{"heading": str, "content": str|list[str], "table": {"headers":[], "rows":[[]]}}]
-        tool_context: Iniettato automaticamente da ADK.
+        tool_context: Injected automatically by ADK.
     """
     try:
         data     = _build_docx(title, sections)
@@ -563,12 +563,12 @@ async def generate_xlsx_report(
     tool_context: ToolContext,
 ) -> dict:
     """
-    Genera un report Excel (.xlsx) e lo allega automaticamente alla risposta.
+    Generates an Excel report (.xlsx) and attaches it automatically to the response.
 
     Args:
-        title: Titolo del workbook.
+        title: Workbook title.
         sheets: [{"name": str, "headers": [...], "rows": [[...]]}]
-        tool_context: Iniettato automaticamente da ADK.
+        tool_context: Injected automatically by ADK.
     """
     try:
         data     = _build_xlsx(title, sheets)
@@ -586,12 +586,12 @@ async def generate_md_report(
     tool_context: ToolContext,
 ) -> dict:
     """
-    Genera un report Markdown (.md) e lo allega automaticamente alla risposta.
+    Generates a Markdown report (.md) and attaches it automatically to the response.
 
     Args:
-        title: Titolo del documento.
-        sections: Stesso formato di generate_docx_report.
-        tool_context: Iniettato automaticamente da ADK.
+        title: Document title.
+        sections: Same format as generate_docx_report.
+        tool_context: Injected automatically by ADK.
     """
     try:
         data     = _build_md(title, sections)
@@ -609,26 +609,26 @@ async def generate_pdf_report(
     tool_context: ToolContext,
 ) -> dict:
     """
-    Genera un report PDF che combina sezioni di testo/tabelle e grafici embedded.
-    Usa reportlab per il layout testuale e matplotlib per i grafici.
+    Generates a PDF report that combines text/table sections and embedded charts.
+    Uses reportlab for the text layout and matplotlib for the charts.
 
     Args:
-        title: Titolo del documento.
-        sections: Lista sezioni testo/tabella:
+        title: Document title.
+        sections: List of text/table sections:
             [{"heading": str, "content": str|list[str], "table": {"headers":[], "rows":[[]]}}]
-        charts: Lista grafici da includere:
+        charts: List of charts to include:
             [{
-                "title":      "Titolo grafico",    # opzionale
+                "title":      "Chart title",       # optional
                 "chart_type": "bar",               # bar|line|area|pie|scatter
-                "categories": ["2021","2022",...], # asse X o fette pie
+                "categories": ["2021","2022",...], # X axis or pie slices
                 "series":     [{"name":"...", "values":[...]}],
-                "x_label":    "Anno",              # opzionale
-                "y_label":    "Miliardi USD",      # opzionale
-                "position":   1                    # opzionale: inserisce il grafico
-                                                   # dopo la sezione N (0-based).
-                                                   # Ometti per mettere in coda.
+                "x_label":    "Year",              # optional
+                "y_label":    "Billion USD",       # optional
+                "position":   1                    # optional: inserts the chart
+                                                   # after section N (0-based).
+                                                   # Omit to append at the end.
             }]
-        tool_context: Iniettato automaticamente da ADK.
+        tool_context: Injected automatically by ADK.
 
     Returns:
         {"status": "ok", "filename": "...", "size_bytes": N, "version": N}
@@ -643,7 +643,7 @@ async def generate_pdf_report(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ADK FUNCTION TOOLS — GRAFICI STANDALONE
+# ADK FUNCTION TOOLS — STANDALONE CHARTS
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def generate_chart_png(
@@ -656,16 +656,16 @@ async def generate_chart_png(
     y_label: str = "",
 ) -> dict:
     """
-    Genera un grafico statico PNG (matplotlib).
+    Generates a static PNG chart (matplotlib).
 
     Args:
-        title: Titolo del grafico.
+        title: Chart title.
         chart_type: "bar" | "line" | "area" | "pie" | "scatter"
-        categories: Etichette asse X (o fette per pie).
-        series: [{"name": "Serie A", "values": [v1, v2, ...]}]
-                Per scatter: [{"name": "...", "x": [...], "y": [...]}]
-        x_label, y_label: Etichette assi (opzionali).
-        tool_context: Iniettato automaticamente da ADK.
+        categories: X axis labels (or pie slices).
+        series: [{"name": "Series A", "values": [v1, v2, ...]}]
+                For scatter: [{"name": "...", "x": [...], "y": [...]}]
+        x_label, y_label: Axis labels (optional).
+        tool_context: Injected automatically by ADK.
     """
     try:
         data     = _build_chart_png(title, chart_type, categories, series, x_label, y_label)
@@ -686,17 +686,17 @@ async def generate_chart_html(
     y_label: str = "",
 ) -> dict:
     """
-    Genera un grafico interattivo HTML/Plotly (zoom, tooltip, filtri).
-    Ideale per applicazioni web.
+    Generates an interactive HTML/Plotly chart (zoom, tooltip, filters).
+    Ideal for web applications.
 
     Args:
-        title: Titolo del grafico.
+        title: Chart title.
         chart_type: "bar" | "line" | "area" | "pie" | "scatter"
-        categories: Etichette asse X (o fette per pie).
-        series: [{"name": "Serie A", "values": [v1, v2, ...]}]
-                Per scatter: [{"name": "...", "x": [...], "y": [...]}]
-        x_label, y_label: Etichette assi (opzionali).
-        tool_context: Iniettato automaticamente da ADK.
+        categories: X axis labels (or pie slices).
+        series: [{"name": "Series A", "values": [v1, v2, ...]}]
+                For scatter: [{"name": "...", "x": [...], "y": [...]}]
+        x_label, y_label: Axis labels (optional).
+        tool_context: Injected automatically by ADK.
     """
     try:
         data     = _build_chart_html(title, chart_type, categories, series, x_label, y_label)
@@ -717,16 +717,16 @@ async def generate_chart_pdf(
     y_label: str = "",
 ) -> dict:
     """
-    Genera un grafico PDF standalone (matplotlib). Ideale per report stampabili.
+    Generates a standalone PDF chart (matplotlib). Ideal for printable reports.
 
     Args:
-        title: Titolo del grafico.
+        title: Chart title.
         chart_type: "bar" | "line" | "area" | "pie" | "scatter"
-        categories: Etichette asse X (o fette per pie).
-        series: [{"name": "Serie A", "values": [v1, v2, ...]}]
-                Per scatter: [{"name": "...", "x": [...], "y": [...]}]
-        x_label, y_label: Etichette assi (opzionali).
-        tool_context: Iniettato automaticamente da ADK.
+        categories: X axis labels (or pie slices).
+        series: [{"name": "Series A", "values": [v1, v2, ...]}]
+                For scatter: [{"name": "...", "x": [...], "y": [...]}]
+        x_label, y_label: Axis labels (optional).
+        tool_context: Injected automatically by ADK.
     """
     try:
         data     = _build_chart_pdf(title, chart_type, categories, series, x_label, y_label)

@@ -1,21 +1,21 @@
-# Sofia Deploy — Infrastruttura Terraform su GCP
+# Sofia Deploy — Terraform Infrastructure on GCP
 
-Deploy completo dei tre agenti STLS-A2A su **Cloud Run** con:
-- **Cloud SQL PostgreSQL 16** (IP privato, nessun IP pubblico)
-- **Memorystore Redis 7** (VPC peering diretto)
-- **Artifact Registry** (immagini Docker)
-- **Secret Manager** (credenziali e API key)
-- **VPC dedicato** con Serverless VPC Connector
+Full deployment of the three STLS-A2A agents on **Cloud Run** with:
+- **Cloud SQL PostgreSQL 16** (private IP, no public IP)
+- **Memorystore Redis 7** (direct VPC peering)
+- **Artifact Registry** (Docker images)
+- **Secret Manager** (credentials and API keys)
+- **Dedicated VPC** with Serverless VPC Connector
 
-`BASE_URL` viene risolto automaticamente a runtime da ciascun server tramite
-il metadata server GCP — nessuna configurazione manuale necessaria.
+`BASE_URL` is automatically resolved at runtime by each server via
+the GCP metadata server — no manual configuration needed.
 
 ---
 
-## Struttura
+## Structure
 
 ```
-sofia-deploy/                          ← questa repo (infrastruttura)
+sofia-deploy/                          ← this repo (infrastructure)
 ├── docker/
 │   ├── server-api-keys/
 │   │   └── Dockerfile                 ← build context: server-api-keys/
@@ -24,28 +24,28 @@ sofia-deploy/                          ← questa repo (infrastruttura)
 │   └── server-redis/
 │       └── Dockerfile                 ← build context: server-redis/
 ├── scripts/
-│   ├── build-push.sh                  ← Build & push delle 3 immagini
-│   └── init-db.sql                    ← Schema PostgreSQL iniziale
+│   ├── build-push.sh                  ← Build & push the 3 images
+│   └── init-db.sql                    ← Initial PostgreSQL schema
 ├── terraform/
-│   ├── main.tf                        ← Provider, abilitazione API GCP, locals
-│   ├── variables.tf                   ← Tutte le variabili con default e validazioni
-│   ├── outputs.tf                     ← Output riepilogo infrastruttura
+│   ├── main.tf                        ← Provider, GCP API enablement, locals
+│   ├── variables.tf                   ← All variables with defaults and validations
+│   ├── outputs.tf                     ← Infrastructure summary output
 │   ├── vpc.tf                         ← VPC, subnet, private services access, connector
 │   ├── iam.tf                         ← Service account, IAM bindings
 │   ├── secrets.tf                     ← Secret Manager (DSN, Redis URL, API key)
-│   ├── artifact_registry.tf           ← Registry Docker con cleanup automatico
-│   ├── cloudsql.tf                    ← PostgreSQL 16 su IP privato
+│   ├── artifact_registry.tf           ← Docker registry with automatic cleanup
+│   ├── cloudsql.tf                    ← PostgreSQL 16 on private IP
 │   ├── redis.tf                       ← Memorystore Redis 7
-│   └── cloudrun.tf                    ← 3 servizi Cloud Run via for_each
+│   └── cloudrun.tf                    ← 3 Cloud Run services via for_each
 ├── .gitignore
 ├── terraform.tfvars.example
 └── README.md
 ```
 
-### Struttura attesa nel repo applicativo
+### Expected structure in the application repo
 
-Ogni server ha una propria directory autonoma con `wheels/`, `requirements.txt`
-e la cartella `app/` che contiene tutti i sorgenti copiati nel container (in realta' coincidono con quelle docker)
+Each server has its own standalone directory with `wheels/`, `requirements.txt`
+and the `app/` folder containing all the sources copied into the container (in practice these match the docker ones)
 
 ```
 <repo-root>/
@@ -53,11 +53,11 @@ e la cartella `app/` che contiene tutti i sorgenti copiati nel container (in rea
 │   ├── wheels/
 │   │   └── stls_a2a-X.Y.Z-py3-none-any.whl
 │   ├── requirements.txt
-│   └── app/                           ← tutto ciò che finisce in /app nel container
+│   └── app/                           ← everything that ends up in /app inside the container
 │       ├── server.py
 │       ├── agent_keys_management/
 │       │   └── __init__.py
-│       └── ...altri moduli/file
+│       └── ...other modules/files
 │
 ├── server-monitoring/                 ← build context Dockerfile monitoring
 │   ├── wheels/
@@ -78,12 +78,12 @@ e la cartella `app/` che contiene tutti i sorgenti copiati nel container (in rea
         └── ...
 ```
 
-> **Wheel**: ogni server ha la propria copia in `wheels/`. Se preferisci
-> un'unica sorgente, puoi usare un symlink o copiarlo con uno script pre-build.
+> **Wheel**: each server has its own copy in `wheels/`. If you prefer
+> a single source, you can use a symlink or copy it with a pre-build script.
 
 ---
 
-## Prerequisiti
+## Prerequisites
 
 ```bash
 terraform --version   # >= 1.7
@@ -97,16 +97,16 @@ gcloud config set project aichemy-dev-01
 
 ---
 
-## Deploy — Passo per passo
+## Deploy — Step by step
 
-### 1. Configurazione variabili
+### 1. Variable configuration
 
 ```bash
 cp terraform.tfvars.example terraform/terraform.tfvars
-# Edita terraform.tfvars con i valori reali
+# Edit terraform.tfvars with real values
 ```
 
-### 2. Provisioning infrastruttura
+### 2. Infrastructure provisioning
 
 ```bash
 cd terraform
@@ -115,11 +115,11 @@ terraform plan
 terraform apply
 ```
 
-Al termine l'output mostra IP Redis, IP Cloud SQL e URL Cloud Run.
+At the end, the output shows the Redis IP, Cloud SQL IP, and Cloud Run URL.
 
-### 3. Inizializzazione schema PostgreSQL
+### 3. PostgreSQL schema initialization
 
-Connettiti all'IP privato (es. da Cloud Shell nella stessa VPC):
+Connect to the private IP (e.g. from Cloud Shell in the same VPC):
 
 ```bash
 DB_IP=$(terraform -chdir=terraform output -raw db_private_ip)
@@ -128,42 +128,42 @@ psql "host=${DB_IP} dbname=sofia user=spk_sofia password=<PWD>" \
      -f scripts/init-db.sql
 ```
 
-### 4. Aggiornamento server.py
+### 4. Updating server.py
 
-Copia il `server.py` (e tutti i moduli necessari per l'implementazione del server) nella
-cartella `app/` di ogni server nel repo applicativo:
+Copy `server.py` (and all modules needed for the server implementation) into the
+`app/` folder of each server in the application repo:
 
 
-### 5. Build & push immagini Docker
+### 5. Build & push Docker images
 
 ```bash
 chmod +x scripts/build-push.sh
 ./scripts/build-push.sh 1.0.0
 ```
 
-Lo script per ciascun agente:
-- Usa il **Dockerfile specifico** `docker/server-{nome}/Dockerfile`
-- Imposta come **build context** la directory del server (`server-{nome}/`)
-- Verifica che `wheels/`, `app/` e il wheel stls_a2a siano presenti
-- Non copia né sposta file — tutto è nella struttura del repo applicativo
+The script for each agent:
+- Uses the **specific Dockerfile** `docker/server-{name}/Dockerfile`
+- Sets the server directory (`server-{name}/`) as the **build context**
+- Verifies that `wheels/`, `app/`, and the stls_a2a wheel are present
+- Doesn't copy or move files — everything is already in the application repo's structure
 
-### 6. Deploy servizi
+### 6. Deploy services
 
 ```bash
 cd terraform
 terraform apply -var='default_image_tag=1.0.0'
 ```
 
-I servizi si avviano e `BASE_URL` viene risolto automaticamente
-dal metadata server GCP — nessun secondo apply necessario.
+The services start up and `BASE_URL` is automatically resolved
+from the GCP metadata server — no second apply needed.
 
-### 7. Cancellazione servizi via terraform
+### 7. Deleting services via terraform
 
-#### 1. Disabilita la protezione Cloud SQL
+#### 1. Disable Cloud SQL deletion protection
 cd terraform
 terraform apply -var='db_deletion_protection=false'
 
-#### 2. Svuota il registry (obbligatorio se contiene immagini)
+#### 2. Empty the registry (required if it contains images)
 gcloud artifacts docker images delete \
   europe-west8-docker.pkg.dev/aichemy-dev-01/sofia/server-api-keys \
   --delete-tags --quiet
@@ -176,10 +176,10 @@ gcloud artifacts docker images delete \
   europe-west8-docker.pkg.dev/aichemy-dev-01/sofia/server-redis \
   --delete-tags --quiet
 
-#### 3. Distruggi tutto
+#### 3. Destroy everything
 terraform destroy
 
-### 8. Sospensione dei servizi
+### 8. Suspending services
 
 #### 1. Memorystore Redis
 terraform destroy -target='google_redis_instance.sofia'
@@ -193,20 +193,20 @@ gcloud sql instances patch sofia-pg \
 gcloud sql instances patch sofia-pg \
   --activation-policy=ALWAYS 
 
-#### 3. Riattivazione servizi (occhio al cambio ip redis)
+#### 3. Reactivating services (watch out for the Redis IP change)
 
-##### 1. Ricrea Redis
+##### 1. Recreate Redis
 terraform apply -target='google_redis_instance.sofia'
 
-##### 2. Aggiorna il secret con il nuovo IP
+##### 2. Update the secret with the new IP
 NEW_IP=$(terraform output -raw redis_host)
 echo -n "redis://${NEW_IP}:6379" | \
   gcloud secrets versions add sofia-redis-url --data-file=-
 
-##### 3. Riavvia Cloud SQL
+##### 3. Restart Cloud SQL
 gcloud sql instances patch sofia-pg --activation-policy=ALWAYS
 
-##### 4. Forza il riavvio dei 3 servizi Cloud Run per rileggere il secret
+##### 4. Force the 3 Cloud Run services to restart to reread the secret
 for svc in sofia-api-keys sofia-monitoring sofia-redis; do
   gcloud run services update $svc \
     --region=europe-west8 \
@@ -215,76 +215,76 @@ done
 
 ---
 
-## BASE_URL — risoluzione automatica
+## BASE_URL — automatic resolution
 
-Ogni `server.py` contiene `_resolve_base_url()` che interroga nell'ordine:
+Each `server.py` contains `_resolve_base_url()`, which checks in order:
 
-1. Variabile d'ambiente `BASE_URL` (override esplicito, utile in locale)
-2. Metadata server GCP `metadata.google.internal` (Cloud Run in produzione)
-3. Fallback `http://localhost:{PORT}` (sviluppo locale senza GCP)
+1. Environment variable `BASE_URL` (explicit override, useful locally)
+2. GCP metadata server `metadata.google.internal` (Cloud Run in production)
+3. Fallback `http://localhost:{PORT}` (local development without GCP)
 
-L'Agent Card viene generata con l'URL corretto senza configurazione aggiuntiva.
+The Agent Card is generated with the correct URL with no additional configuration.
 
 ---
 
-## Variabili principali
+## Main variables
 
-| Variabile | Default | Descrizione |
+| Variable | Default | Description |
 |---|---|---|
 | `project_id` | — | GCP Project ID |
-| `region` | `europe-west8` | Regione GCP (Milan) |
-| `db_tier` | `db-g1-small` | Tier Cloud SQL (`db-f1-micro` per dev) |
-| `db_availability_type` | `ZONAL` | `ZONAL` o `REGIONAL` (HA) |
-| `redis_tier` | `BASIC` | `BASIC` o `STANDARD_HA` |
-| `min_instances` | `0` | Scale-to-zero. Usa `1` per eliminare cold start |
-| `max_instances` | `5` | Limite istanze per servizio |
-| `cloud_run_invoker_public` | `false` | `true` = endpoint pubblici senza auth GCP |
-| `default_image_tag` | `latest` | Tag Docker per tutti i servizi |
-| `image_tags` | `{}` | Override tag per singolo servizio |
+| `region` | `europe-west8` | GCP region (Milan) |
+| `db_tier` | `db-g1-small` | Cloud SQL tier (`db-f1-micro` for dev) |
+| `db_availability_type` | `ZONAL` | `ZONAL` or `REGIONAL` (HA) |
+| `redis_tier` | `BASIC` | `BASIC` or `STANDARD_HA` |
+| `min_instances` | `0` | Scale-to-zero. Use `1` to eliminate cold start |
+| `max_instances` | `5` | Instance limit per service |
+| `cloud_run_invoker_public` | `false` | `true` = public endpoints without GCP auth |
+| `default_image_tag` | `latest` | Docker tag for all services |
+| `image_tags` | `{}` | Per-service tag override |
 
 ---
 
-## Outputs principali
+## Main outputs
 
 ```bash
-terraform -chdir=terraform output summary         # riepilogo completo
-terraform -chdir=terraform output service_urls    # URL Cloud Run
-terraform -chdir=terraform output db_private_ip   # IP Cloud SQL
-terraform -chdir=terraform output redis_host      # IP Redis
+terraform -chdir=terraform output summary         # full summary
+terraform -chdir=terraform output service_urls    # Cloud Run URL
+terraform -chdir=terraform output db_private_ip   # Cloud SQL IP
+terraform -chdir=terraform output redis_host      # Redis IP
 ```
 
 ---
 
-## Aggiornamento servizi
+## Updating services
 
 ```bash
-# Build nuova versione
+# Build new version
 ./scripts/build-push.sh 1.1.0
 
 # Deploy
 cd terraform && terraform apply -var='default_image_tag=1.1.0'
 ```
 
-Per aggiornare un singolo agente:
+To update a single agent:
 
 ```hcl
 # terraform.tfvars
 image_tags = {
   api-keys = "1.1.0"
-  # monitoring e redis rimangono sul default_image_tag
+  # monitoring and redis stay on default_image_tag
 }
 ```
 
 ---
 
-## Rotazione secrets
+## Secret rotation
 
 ```bash
-# Esempio rotazione OPENAI_API_KEY
-echo -n "sk-proj-NUOVA_KEY" | \
+# Example OPENAI_API_KEY rotation
+echo -n "sk-proj-NEW_KEY" | \
   gcloud secrets versions add sofia-openai-api-key --data-file=-
 
-# Forza nuovo deploy per rileggere il secret
+# Force a new deploy to reread the secret
 gcloud run services update sofia-api-keys \
   --region europe-west8 \
   --update-env-vars _FORCE_REDEPLOY=$(date +%s)
@@ -292,18 +292,18 @@ gcloud run services update sofia-api-keys \
 
 ---
 
-## Note sicurezza
+## Security notes
 
-- **PostgreSQL e Redis** senza IP pubblici — raggiungibili solo via VPC privata
-- **KEY_PROVIDER_NAME=base** — nessun JVM nel container, immagini leggere
-- **Secret Manager** — le credenziali non transitano mai nel Dockerfile
-- **`db_deletion_protection = true`** — protezione da cancellazioni accidentali
-- **Utente non-root** (`appuser`, UID 1001) in tutti i container
-- Imposta `cloud_run_invoker_public = false` per richiedere auth GCP-native
+- **PostgreSQL and Redis** have no public IPs — reachable only via the private VPC
+- **KEY_PROVIDER_NAME=base** — no JVM in the container, lightweight images
+- **Secret Manager** — credentials never pass through the Dockerfile
+- **`db_deletion_protection = true`** — protection against accidental deletion
+- **Non-root user** (`appuser`, UID 1001) in all containers
+- Set `cloud_run_invoker_public = false` to require native GCP auth
 
 ---
 
-## Architettura GCP
+## GCP Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -323,18 +323,18 @@ gcloud run services update sofia-api-keys \
                           └──────────────┬──────────────┘
                                          │
         ┌────────────────────────────────▼─────────────────────────────┐
-        │                  sofia-network — VPC privata                 │
+        │                  sofia-network — private VPC                 │
         │  ┌───────────────────────────┐  ┌──────────────────────────┐ │
         │  │   Memorystore Redis 7     │  │  Cloud SQL PostgreSQL 16 │ │
         │  │  Task store · Auth cache  │  │  sf_api_keys · sf_agents │ │
-        │  │  BASIC · DIRECT_PEERING   │  │  ZONAL · IP privato      │ │
+        │  │  BASIC · DIRECT_PEERING   │  │  ZONAL · private IP      │ │
         │  └───────────────────────────┘  └──────────────────────────┘ │
         └──────────────────────────────────────────────────────────────┘
 ```
 
 <div align="center">
 
-<!-- Diagramma architetturale — generato automaticamente -->
+<!-- Architecture diagram — auto-generated -->
 <svg width="680" viewBox="0 0 680 480" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;font-family:sans-serif">
 <defs>
   <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -397,7 +397,7 @@ gcloud run services update sofia-api-keys \
 
 <!-- Private VPC container -->
 <rect x="10" y="280" width="660" height="162" rx="16" fill="none" stroke="#0F6E56" stroke-width="0.5" stroke-dasharray="5 3"/>
-<text x="22" y="298" text-anchor="start" font-size="11" fill="#0F6E56">sofia-network — VPC privata</text>
+<text x="22" y="298" text-anchor="start" font-size="11" fill="#0F6E56">sofia-network — private VPC</text>
 
 <!-- Memorystore Redis -->
 <rect x="55" y="305" width="215" height="112" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
@@ -409,7 +409,7 @@ gcloud run services update sofia-api-keys \
 <rect x="410" y="305" width="240" height="112" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
 <text x="530" y="340" text-anchor="middle" font-size="13" font-weight="500" fill="#0C447C">Cloud SQL PostgreSQL 16</text>
 <text x="530" y="360" text-anchor="middle" font-size="11" fill="#185FA5">sf_api_keys · sf_agents</text>
-<text x="530" y="378" text-anchor="middle" font-size="11" fill="#185FA5">ZONAL · IP privato</text>
+<text x="530" y="378" text-anchor="middle" font-size="11" fill="#185FA5">ZONAL · private IP</text>
 </svg>
 
 </div>

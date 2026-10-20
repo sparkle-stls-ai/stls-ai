@@ -10,6 +10,8 @@ from google.adk.agents import Agent
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 from google.adk.agents.remote_a2a_agent import AGENT_CARD_WELL_KNOWN_PATH
 
+from stls_a2a import ContextualSecureRemoteA2aAgent
+
 from dotenv import load_dotenv
 import httpx
 load_dotenv()
@@ -60,16 +62,16 @@ sofia_redis_agent = RemoteA2aAgent(
 )
 
 
-sofia_api_keys_agent = RemoteA2aAgent(
+sofia_api_keys_agent = ContextualSecureRemoteA2aAgent(
     name="sofia_api_keys_agent",
     description=(
         "Agent to manage API keys for peer to peer agent communication on Sofia Platform."
     ),
     agent_card=f"{BASE_URL_API_KEYS}{AGENT_CARD_WELL_KNOWN_PATH}",
-    httpx_client=httpx.AsyncClient(
-        headers={"X-API-Key": API_KEY_API_KEYS},
-        timeout=httpx.Timeout(60.0),
-    ),    
+    extra_headers={"X-API-Key": API_KEY_API_KEYS},
+    # No session.state context to propagate here — encrypted transport only,
+    # same behavior as the plain RemoteA2aAgent it replaces.
+    context_keys=[],
 )
 
 

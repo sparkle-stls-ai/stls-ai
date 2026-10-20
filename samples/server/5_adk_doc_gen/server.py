@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Imports STLS-A2A
+# STLS-A2A imports
 # ---------------------------------------------------------------------------
 from stls_a2a import (
     KeySessionProvider,
@@ -32,7 +32,7 @@ from stls_a2a import (
 )
 
 # ---------------------------------------------------------------------------
-# Configurazione globale
+# Global configuration
 # ---------------------------------------------------------------------------
 
 PORT        = int(os.getenv("PORT", 8001))
@@ -41,15 +41,15 @@ AUTH_PG_DSN = os.getenv("AUTH_PG_DSN", "")
 
 # ---------------------------------------------------------------------------
 # Audit hook — shared, standard logging.
-# In produzione: sostituire default_audit_hook() con un hook che invia a SIEM.
+# In production: replace default_audit_hook() with a hook that sends to a SIEM.
 # ---------------------------------------------------------------------------
 
 _audit = default_audit_hook()
 
 # ---------------------------------------------------------------------------
-# Loaders - definiscono da dove vengono le chiavi API
+# Loaders - define where the API keys come from
 # ---------------------------------------------------------------------------
-# PostgresLoader: solo se AUTH_PG_DSN è configurato
+# PostgresLoader: only if AUTH_PG_DSN is configured
 _pg_loader = (
     PostgresLoader(dsn=AUTH_PG_DSN, min_pool_size=1, max_pool_size=3)
     if AUTH_PG_DSN else None
@@ -61,8 +61,8 @@ pg_manager = (
 )
 
 # ---------------------------------------------------------------------------
-# ApiKeyManagerGroup — gestisce start/stop/health/refresh di tutti i manager
-# con una sola chiamata. I manager None vengono ignorati silenziosamente.
+# ApiKeyManagerGroup — handles start/stop/health/refresh for all managers
+# with a single call. None managers are silently ignored.
 # ---------------------------------------------------------------------------
 managers = (
     ApiKeyManagerGroup()
@@ -78,7 +78,7 @@ def build_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info(
-            "Avvio ApiKeyManagerGroup (%d manager: %s)…",
+            "Starting ApiKeyManagerGroup (%d managers: %s)…",
             len(managers),
             ", ".join(managers._managers),
         )
@@ -88,7 +88,7 @@ def build_app() -> FastAPI:
     app = FastAPI(title="Multi-Agent KM Server", lifespan=lifespan)
     start_task_store_cleanup(app=app)
 
-    # ── Provider STLS ──────────────────────────────────────────────────────
+    # ── STLS provider ──────────────────────────────────────────────────────
     key_session_provider: KeySessionProvider = KeySessionProviderFactory().get_session_provider(
         session_type=KeySessionProvider.KeySessionProviderType.SERVER,
         port=8081,
@@ -106,7 +106,7 @@ def build_app() -> FastAPI:
         #api_key_manager=pg_manager
     )
 
-    # ── Endpoint diagnostica ───────────────────────────────────────────────
+    # ── Diagnostic endpoints ───────────────────────────────────────────────
 
     @app.get("/auth/health")
     async def auth_health():
@@ -132,22 +132,22 @@ def main() -> None:
 
     _pg_status = (
         f"postgresql ({AUTH_PG_DSN[:20]}…)" if AUTH_PG_DSN
-        else "disabled (AUTH_PG_DSN non impostato)"
+        else "disabled (AUTH_PG_DSN not set)"
     )
     _redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     _use_redis = os.getenv("AUTH_KM_USE_REDIS", "true").lower() not in ("false", "0", "no")
 
     print("\n" + "=" * 70)
-    print("📡 Multi-Agent KM Server — Porta", PORT)
+    print("📡 Multi-Agent KM Server — Port", PORT)
     print("=" * 70)
     print(f"\n🔐 Auth backends:")
     print(f"   PostgresLoader → /agents/docs-generator/    ({_pg_status})")
-    print(f"\n   Redis cache: {'abilitata (' + _redis_url + ')' if _use_redis else 'disabilitata (AUTH_KM_USE_REDIS=false)'}")
-    print(f"\n🌐 Endpoint globali:")
+    print(f"\n   Redis cache: {'enabled (' + _redis_url + ')' if _use_redis else 'disabled (AUTH_KM_USE_REDIS=false)'}")
+    print(f"\n🌐 Global endpoints:")
     print(f"   Cards:   http://localhost:{PORT}/.well-known/agent-card.json")
     print(f"   Health:  http://localhost:{PORT}/auth/health")
     print(f"   Refresh: http://localhost:{PORT}/auth/refresh  (POST)")
-    print(f"\n🤖 Agenti:")
+    print(f"\n🤖 Agents:")
     print(f"   docs-generator    http://localhost:{PORT}/agents/docs-generator/secure-a2a")
     print()
 

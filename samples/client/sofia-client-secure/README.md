@@ -41,7 +41,7 @@ Browser
 - **PostgreSQL 14+** (production mode only)
 - **Redis** — optional (`SESSION_CACHE_BACKEND=memory` is the default and needs none). Required when `SESSION_CACHE_BACKEND=redis`, so key sessions survive across container instances/restarts (Cloud Run) instead of living in process memory; also used by stls_a2a agent servers for task store / auth cache.
 - The **key-exchange sidecar** running on `KEY_SESSION_HOST:KEY_SESSION_PORT`  
-  (base/simple provider: pure Python; arqit: requires the JVM + JAR)
+  (`base` and `arqit_py` providers: pure Python, no JVM)
 
 ---
 
@@ -76,35 +76,13 @@ Follow the instructions in the `stls-a2a` project to start the key provider on `
 ### 6. Start the Python secure transport service
 
 ```bash
-# necessario almeno il 21
-set JAVA_HOME="C:\Java\jdks\jdk-24"
-set PATH=%JAVA_HOME%\bin;%PATH%
-java -version
-set JPYPE_JVM=C:\Java\jdks\jdk-24\bin\server\jvm.dll
-# non funziona perche' legge direttamente dal registro
-python -c "import jpype; print(jpype.getDefaultJVMPath())"
-# sembra funzionare invece questa
-notepad .venv\Lib\site-packages\sitecustomize.py
-# contenuto
-import jpype
-
-_original_start = jpype.startJVM
-
-def _patched_startJVM(*args, **kwargs):
-    if not args or not str(args[0]).endswith(".dll"):
-        kwargs.setdefault("jvmpath", r"C:\Java\jdks\jdk-24\bin\server\jvm.dll")
-        return _original_start(**kwargs)
-    return _original_start(*args, **kwargs)
-
-jpype.startJVM = _patched_startJVM
-# verifica
-python -c "import os; print(os.environ.get('JPYPE_JVM'))"
-
-
 python python/secure_transport.py
 # → listening on http://localhost:8090
 # → GET http://localhost:8090/health  → {"ok":true,"session_ready":true}
 ```
+
+> `KEY_PROVIDER_NAME=arqit_py` requires the Arqit SKA-Platform™ Python wheels (proprietary, not redistributable).
+> Install them with the `arqit_py` extra before starting the service — see the `stls-a2a` README.
 
 ### 7. Start the Express backend
 
@@ -159,10 +137,10 @@ npm run dev
 | `SECURE_TRANSPORT_HOST` | `0.0.0.0` | Bind address |
 | `KEY_SESSION_PORT` | `8081` | Key-exchange sidecar port |
 | `KEY_SESSION_HOST` | `localhost` | Key-exchange sidecar host |
-| `KEY_PROVIDER_NAME` | `base` | `base`, `simple`, `arqit`, or `pqc` |
-| `CLASSPATH` | *(unset)* | Path to `stls-ai-*.jar` (arqit only) |
-| `ARQIT_CLIENT_CONFIG` | *(unset)* | Path to Arqit client config JSON |
-| `ARQIT_SERVER_CONFIG` | *(unset)* | Path to Arqit server config JSON |
+| `KEY_PROVIDER_NAME` | `base` | `base`, `arqit_py`, or `pqc` |
+| `ARQIT_PY_CLIENT_CONFIG` | *(unset)* | Path to Arqit client config JSON (`arqit_py` only) |
+| `ARQIT_PY_SERVER_CONFIG` | *(unset)* | Path to Arqit server config JSON (`arqit_py` only) |
+| `ARQIT_PY_TRANSPORT` | `socket` | `socket` or `mqtt` (`arqit_py` only) |
 | `SESSION_CACHE_BACKEND` | `memory` | `memory` or `redis` — same switch as the server-side `stls_core.SessionCacheFactory` |
 | `SESSION_CACHE_REDIS_URL` | `redis://localhost:6379` | Only used when `SESSION_CACHE_BACKEND=redis` |
 | `SESSION_CACHE_REDIS_NAMESPACE` | `stls:sc` | Redis key prefix, distinct from the keystore's `stls:ks:*` |
@@ -172,7 +150,7 @@ npm run dev
 > `stls_core.SessionCacheFactory`, so there's one naming convention across the whole stls stack. `memory` (default)
 > lives in process and does not survive restarts or multi-instance deployments; switch to `redis` on Cloud Run, which
 > does not guarantee that consecutive requests for the same `session_id` land on the same instance. This applies to
-> `base`/`arqit` too, not just `pqc`. (Not a direct import of `stls_core`'s cache — see the note at the top of
+> `base`/`arqit_py` too, not just `pqc`. (Not a direct import of `stls_core`'s cache — see the note at the top of
 > `secure_transport.py` for why.)
 
 ### Post-quantum key exchange (`KEY_PROVIDER_NAME=pqc`)
@@ -246,20 +224,16 @@ The `app` container runs `docker-entrypoint.sh` which:
 The `stls_a2a`/`stls_core` wheels under `python/wheels/` are already in the repo, and the `Dockerfile` installs them
 automatically via `--find-links` (`stls_a2a[pqc]==0.1.3` in `python/requirements.txt`). No manual steps required.
 
-### Arqit / JVM key provider
+### Arqit key provider (`arqit_py`)
 
-If `KEY_PROVIDER_NAME=arqit`, uncomment the JVM section in the Dockerfile:
+If `KEY_PROVIDER_NAME=arqit_py`, the Arqit SKA-Platform™ Python wheels (proprietary, not redistributable) must be
+installed in the image via the `arqit_py` extra and `--find-links`, mirroring how `stls-a2a` installs them — see that
+project's README for the wheel list and `uv pip install` command.
 
-```dockerfile
-RUN apk add --no-cache openjdk17-jre
-COPY path/to/stls-ai-0.0.1.jar /app/stls-ai.jar
-ENV CLASSPATH=/app/stls-ai.jar
-```
-
-And set in `docker-compose.yml`:
+Set in `docker-compose.yml`:
 ```yaml
-CLASSPATH: /app/stls-ai.jar
-ARQIT_CLIENT_CONFIG: /path/to/a2a-client-config.json
+ARQIT_PY_CLIENT_CONFIG: /path/to/a2a-client-config.json
+ARQIT_PY_SERVER_CONFIG: /path/to/a2a-server-config.json
 ```
 
 ### Deploy to Cloud Run
@@ -311,7 +285,7 @@ gcloud run deploy sofia-client-secure \
   --platform managed \
   --allow-unauthenticated \
   --vpc-connector <redis-vpc-connector> \
-  --set-env-vars "SESSION_SECRET=<secret>,DB_HOST=<host>,DB_NAME=<db>,DB_USER=<user>,DB_PASSWORD=<pw>,KEY_PROVIDER_NAME=<base|arqit|pqc>,SESSION_CACHE_BACKEND=redis,SESSION_CACHE_REDIS_URL=redis://<memorystore-ip>:6379"
+  --set-env-vars "SESSION_SECRET=<secret>,DB_HOST=<host>,DB_NAME=<db>,DB_USER=<user>,DB_PASSWORD=<pw>,KEY_PROVIDER_NAME=<base|arqit_py|pqc>,SESSION_CACHE_BACKEND=redis,SESSION_CACHE_REDIS_URL=redis://<memorystore-ip>:6379"
 
 # Deploy — sofia-client-secure-a (served at /a behind the internal LB)
 gcloud run deploy sofia-client-secure-a \
@@ -320,7 +294,7 @@ gcloud run deploy sofia-client-secure-a \
   --platform managed \
   --allow-unauthenticated \
   --vpc-connector <redis-vpc-connector> \
-  --set-env-vars "SESSION_SECRET=<secret>,DB_HOST=<host>,DB_NAME=<db>,DB_USER=<user>,DB_PASSWORD=<pw>,KEY_PROVIDER_NAME=<base|arqit|pqc>,SESSION_CACHE_BACKEND=redis,SESSION_CACHE_REDIS_URL=redis://<memorystore-ip>:6379,BASE_PATH=/a"
+  --set-env-vars "SESSION_SECRET=<secret>,DB_HOST=<host>,DB_NAME=<db>,DB_USER=<user>,DB_PASSWORD=<pw>,KEY_PROVIDER_NAME=<base|arqit_py|pqc>,SESSION_CACHE_BACKEND=redis,SESSION_CACHE_REDIS_URL=redis://<memorystore-ip>:6379,BASE_PATH=/a"
 ```
 
 > **Redis / Memorystore**: `SESSION_CACHE_BACKEND` defaults to `memory`, which does **not** survive Cloud Run's

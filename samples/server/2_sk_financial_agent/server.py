@@ -33,30 +33,30 @@ def start_server():
     key_session_provider:KeySessionProvider=KeySessionProviderFactory().get_session_provider(
         session_type=KeySessionProvider.KeySessionProviderType.SERVER,port=8002)
 
-    # Crea app FastAPI
+    # Create FastAPI app
     app = FastAPI(title="Server1 App")
-    # starto l'utiliry per la pulizia del taskstore
+    # start the taskstore cleanup utility
     start_task_store_cleanup(app=app)
 
-    
-    # monta agente semantic layer
+
+    # mount the semantic layer agent
     from semantic_agents import agent as sk_agent
     create_secure_a2a_endpoint(
             app=app,
             agent=sk_agent,
             key_session_provider=key_session_provider,
-            path='/agents/sk-agent/secure-a2a',  # ← Endpoint A2A
-            base_url="http://localhost:8002",  # ← URL base per gli endpoint
+            path='/agents/sk-agent/secure-a2a',  # ← A2A endpoint
+            base_url="http://localhost:8002",  # ← base URL for the endpoints
             framework='semantic-kernel',
             enable_plain_endpoint=True
         )
-    
+
     print("\n" + "="*70)
-    print("📡 Multi-Agent Server - Porta 8002")
+    print("📡 Multi-Agent Server - Port 8002")
     print("="*70)
-    print("\n🌐 Endpoint Globali:")
+    print("\n🌐 Global endpoints:")
     print("  - Root - Cards:  http://localhost:8002/.well-known/agent-card.json")
-    print("\n🤖 Agente: sk-agent")
+    print("\n🤖 Agent: sk-agent")
     print("  - Secure A2A:    http://localhost:8002/agents/sk-agent/secure-a2a")
     
     uvicorn.run(app, host="0.0.0.0", port=8002)

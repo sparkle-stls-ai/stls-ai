@@ -46,13 +46,29 @@ propagated as an "error" event, not silently retried.
 
 Provider
 ~~~~~~~~
-The default provider for the handshake is PQC (X25519 + ML-KEM-768),
-chosen because it's the only one of the three (base/arqit_py/pqc)
-designed for a client-initiated handshake with no pre-shared state —
-consistent with the "an agent contacts another agent it doesn't yet
-know" use case. base/arqit_py require a pre-provisioned session_id/kid on
-the KeySessionProvider side and don't suit a generic client that
-discovers the target at runtime.
+Defaults to PQC (X25519 + ML-KEM-768) for backward compatibility and
+because it's the only one of the three (base/arqit_py/pqc) designed for
+a client-initiated handshake with no pre-shared state — consistent with
+the "an agent contacts another agent it doesn't yet know" use case.
+
+base and arqit_py are also supported, opt-in via provider_name= on
+SecureSessionManager/ContextualSecureRemoteA2aAgent (never via the
+ambient KEY_PROVIDER_NAME env var alone — that would silently change
+behavior for every existing caller that relies on the historical
+always-PQC default). For these two there's no HTTP handshake at all:
+get_adapter() resolves the session through the generic
+KeySessionProviderFactory().get_session_provider(...) +
+getSessionKeyIdentifier()/getSessionKeyData() (both declared async def
+on the abstract KeySessionProvider, so they're simply awaited here — no
+resolve_if_awaitable(), which internally calls asyncio.run() and would
+break inside this already-running event loop). base returns a fixed key
+instantly; arqit_py waits on real device peering (realm auth plus
+bilocation/P2P key agreement in a background thread) and needs
+ARQIT_PY_CLIENT_CONFIG pointing at a pre-provisioned device identity for
+the specific counterpart — the host/port passed to
+get_session_provider() are accepted for API uniformity but not actually
+used by arqit_py (see stls_core_providers_arqit_py.py): the peer address
+comes from that config file, not from the agent card.
 
 Dependency on ADK
 ~~~~~~~~~~~~~~~~~~
@@ -66,12 +82,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlsplit
 
 import httpx
 
 import uuid as _uuid
+
+from stls_core import KeySessionProvider, KeySessionProviderFactory
 
 from .stls_a2a_integration import (
     SecureA2ATransportAdapter,
@@ -166,19 +185,31 @@ def _root_of(url: str) -> str:
 
 class SecureSessionManager:
     """
-    Cache of encrypted STLS sessions by base_url, with lazy PQC handshake.
+    Cache of encrypted STLS sessions by base_url, with a lazy handshake
+    on first use (provider-dependent — see get_adapter()).
 
     A single instance should be shared across all agents/sub-agents of a
     process that talk to the same targets — avoids one handshake per
     sub-agent toward the same server if several root agents contact it.
 
     Args:
-        client_id:      identifier for server-side audit (PQCHandshakeRequest).
-        httpx_client:    optional httpx client reused for handshakes
+        client_id:      identifier for server-side audit (PQCHandshakeRequest)
+                         and for the generic KeySessionProvider path.
+        httpx_client:    optional httpx client reused for PQC handshakes
                          (not for application traffic, which goes through
-                         the encrypted adapters). If None, creates an
-                         internal one.
-        handshake_path:  path of the PQC handshake endpoint.
+                         the encrypted adapters; irrelevant for base/arqit_py,
+                         which don't do an HTTP handshake). If None, creates
+                         an internal one.
+        handshake_path:  path of the PQC handshake endpoint (pqc only).
+        provider_name:   "pqc" (default, preserves prior behavior exactly),
+                         "base", or "arqit_py". Deliberately a constructor
+                         argument, never read from KEY_PROVIDER_NAME by
+                         default — this class ignored that env var
+                         entirely before this option existed, and
+                         defaulting to it now would silently change
+                         behavior for existing callers whose environment
+                         happens to set it for unrelated reasons (e.g.
+                         their own server-side secure-a2a endpoint).
     """
 
     def __init__(
@@ -187,9 +218,11 @@ class SecureSessionManager:
         client_id: str = "stls-secure-remote-agent",
         httpx_client: Optional[httpx.AsyncClient] = None,
         handshake_path: str = "/stls/pqc/handshake",
+        provider_name: str = "pqc",
     ) -> None:
         self.client_id = client_id
         self._handshake_path = handshake_path
+        self._provider_name = provider_name.strip().lower()
         self._owns_http = httpx_client is None
         self._http = httpx_client or httpx.AsyncClient()
         self._sessions: dict[str, SecureA2ATransportAdapter] = {}
@@ -205,17 +238,9 @@ class SecureSessionManager:
     async def get_adapter(self, base_url: str) -> SecureA2ATransportAdapter:
         """
         Returns the encrypted adapter for base_url (with its agent prefix,
-        if any, e.g. "http://host/agents/agent-b"), handshaking lazily if
-        absent.
-
-        The PQC handshake is always done against the host's ROOT
-        (_root_of), because /stls/pqc/handshake is a global per-app
-        endpoint, not prefixed per-agent — see _root_of(). If base_url has
-        a prefix (multi-agent case), the adapter's data URLs
-        (_secure_url/_stream_url) are rebuilt on the requested base_url
-        AFTER the handshake: session_key/session_id/transport remain the
-        negotiated ones, the crypto session doesn't depend on the HTTP
-        path the messages travel over.
+        if any, e.g. "http://host/agents/agent-b"), resolving the session
+        lazily if absent. How it's resolved depends on provider_name —
+        see _handshake_pqc() and _resolve_via_key_session_provider().
         """
         adapter = self._sessions.get(base_url)
         if adapter is not None:
@@ -228,31 +253,91 @@ class SecureSessionManager:
             if adapter is not None:
                 return adapter
 
-            handshake_base = _root_of(base_url)
-            logger.info(
-                "SecureSessionManager: PQC handshake toward %s (data on %s)",
-                handshake_base, base_url,
-            )
-            adapter = await create_pqc_a2a_transport(
-                handshake_base,
-                client_id=self.client_id,
-                handshake_path=self._handshake_path,
-                httpx_client=self._http,
-            )
-
-            if base_url != handshake_base:
-                # Data endpoint under a prefix (e.g. /agents/agent-b) —
-                # rewrites ONLY the adapter's HTTP routing, not the
-                # crypto session already negotiated against the host.
-                adapter.base_url = base_url.rstrip("/")
-                _b = adapter.base_url
-                adapter._secure_url = _b if _b.endswith("/secure-a2a") else f"{_b}/secure-a2a"
-                adapter._stream_url = (
-                    f"{_b}/stream" if _b.endswith("/secure-a2a") else f"{_b}/secure-a2a/stream"
-                )
+            if self._provider_name == "pqc":
+                adapter = await self._handshake_pqc(base_url)
+            else:
+                adapter = await self._resolve_via_key_session_provider(base_url)
 
             self._sessions[base_url] = adapter
             return adapter
+
+    async def _handshake_pqc(self, base_url: str) -> SecureA2ATransportAdapter:
+        """
+        PQC path (original behavior, unchanged): KEM handshake against the
+        host's ROOT (_root_of), because /stls/pqc/handshake is a global
+        per-app endpoint, not prefixed per-agent — see _root_of(). If
+        base_url has a prefix (multi-agent case), the adapter's data URLs
+        (_secure_url/_stream_url) are rebuilt on the requested base_url
+        AFTER the handshake: session_key/session_id/transport remain the
+        negotiated ones, the crypto session doesn't depend on the HTTP
+        path the messages travel over.
+        """
+        handshake_base = _root_of(base_url)
+        logger.info(
+            "SecureSessionManager: PQC handshake toward %s (data on %s)",
+            handshake_base, base_url,
+        )
+        adapter = await create_pqc_a2a_transport(
+            handshake_base,
+            client_id=self.client_id,
+            handshake_path=self._handshake_path,
+            httpx_client=self._http,
+        )
+
+        if base_url != handshake_base:
+            # Data endpoint under a prefix (e.g. /agents/agent-b) —
+            # rewrites ONLY the adapter's HTTP routing, not the
+            # crypto session already negotiated against the host.
+            adapter.base_url = base_url.rstrip("/")
+            _b = adapter.base_url
+            adapter._secure_url = _b if _b.endswith("/secure-a2a") else f"{_b}/secure-a2a"
+            adapter._stream_url = (
+                f"{_b}/stream" if _b.endswith("/secure-a2a") else f"{_b}/secure-a2a/stream"
+            )
+
+        return adapter
+
+    async def _resolve_via_key_session_provider(self, base_url: str) -> SecureA2ATransportAdapter:
+        """
+        base / arqit_py path: no HTTP handshake. The session key comes
+        from the generic KeySessionProvider instead — base returns a
+        fixed key instantly, arqit_py waits on real device peering
+        (ARQIT_PY_CLIENT_CONFIG, realm auth, background thread).
+
+        getSessionKeyIdentifier()/getSessionKeyData() are declared
+        `async def` on the abstract KeySessionProvider (both base and
+        arqit_py implement them as real coroutines), so they're awaited
+        directly here — NOT via KeySessionProviderFactory.resolve_if_awaitable(),
+        which calls asyncio.run() internally and would raise "cannot be
+        called from a running event loop" inside this already-async method
+        (get_adapter() is always invoked from within the caller's event
+        loop, e.g. STLSHttpxTransport.handle_async_request()).
+
+        host/port are accepted by get_session_provider() for API
+        uniformity but, per provider, may not affect where the session
+        actually comes from (arqit_py's peer address is in its config
+        file, not derived from base_url) — see the module docstring.
+        """
+        host = os.getenv("KEY_SESSION_HOST", "localhost")
+        port = int(os.getenv("KEY_SESSION_PORT", "8081"))
+        logger.info(
+            "SecureSessionManager: resolving %s session for %s (KeySessionProvider host=%s port=%s)",
+            self._provider_name, base_url, host, port,
+        )
+        provider = KeySessionProviderFactory().get_session_provider(
+            session_type=KeySessionProvider.KeySessionProviderType.CLIENT,
+            host=host,
+            port=port,
+            name=self._provider_name,
+        )
+        session_key_identifier = await provider.getSessionKeyIdentifier()
+        session_key_data = await provider.getSessionKeyData(session_key_identifier)
+
+        return SecureA2ATransportAdapter(
+            session_key=session_key_data,
+            session_id=session_key_identifier,
+            base_url=base_url,
+        )
 
     def invalidate(self, base_url: str) -> None:
         """Removes the cached session: the next get_adapter() re-handshakes."""
@@ -577,7 +662,16 @@ class ContextualSecureRemoteA2aAgent:
         session_manager:    SecureSessionManager to reuse across several
                             agents (recommended to share one per process).
                             If None, creates a dedicated one for this
-                            instance.
+                            instance, using provider_name (see below).
+        provider_name:      "pqc" (default, backward-compatible — omit
+                            this argument and nothing changes), "base", or
+                            "arqit_py". Only used when session_manager is
+                            None; passing both together raises, since the
+                            manager's own provider would silently win and
+                            that's more likely a caller mistake than
+                            intent. To pick a provider for a shared
+                            manager, set it on the SecureSessionManager
+                            you construct and pass that in instead.
         extra_headers:      application headers (e.g. X-API-Key) injected
                             into every encrypted request, both sync and SSE.
         **kwargs:           other RemoteA2aAgent parameters (timeout,
@@ -590,7 +684,8 @@ class ContextualSecureRemoteA2aAgent:
         TypeError:   if httpx_client is passed explicitly (it would be
                      silently overwritten: better to fail immediately
                      than give a false sense of control over the
-                     transport).
+                     transport), or if both session_manager and
+                     provider_name are passed together.
     """
 
     def __new__(
@@ -600,6 +695,7 @@ class ContextualSecureRemoteA2aAgent:
         *,
         context_keys: Optional[list[str]] = None,
         session_manager: Optional[SecureSessionManager] = None,
+        provider_name: Optional[str] = None,
         extra_headers: Optional[dict[str, str]] = None,
         **kwargs: Any,
     ) -> Any:
@@ -611,6 +707,14 @@ class ContextualSecureRemoteA2aAgent:
                 "extra_headers= for application headers (e.g. X-API-Key) "
                 "and session_manager= to share encrypted sessions across "
                 "multiple agents."
+            )
+        if session_manager is not None and provider_name is not None:
+            raise TypeError(
+                "Pass either session_manager= (which already has its own "
+                "provider_name) or provider_name= (to build a dedicated "
+                "manager for this agent), not both — set provider_name on "
+                "the SecureSessionManager you construct if you need a "
+                "shared manager with a non-default provider."
             )
 
         try:
@@ -636,7 +740,9 @@ class ContextualSecureRemoteA2aAgent:
         else:
             final_provider = _stls_provider
 
-        _manager = session_manager or SecureSessionManager(client_id=name)
+        _manager = session_manager or SecureSessionManager(
+            client_id=name, provider_name=provider_name or "pqc",
+        )
         _transport = STLSHttpxTransport(_manager, extra_headers=extra_headers)
         _httpx_client = httpx.AsyncClient(transport=_transport)
 
@@ -656,8 +762,8 @@ class ContextualSecureRemoteA2aAgent:
 
         logger.debug(
             "ContextualSecureRemoteA2aAgent '%s' initialized — "
-            "context propagation: %s, transport: encrypted STLS (PQC)",
-            name, _keys,
+            "context propagation: %s, transport: encrypted STLS (provider=%s)",
+            name, _keys, _manager._provider_name,
         )
 
         return instance

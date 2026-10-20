@@ -1,12 +1,12 @@
 """
 agent_docs.py
 -------------
-Agent con sub-agent specializzati e tool per la generazione on-demand
-di documenti (docx, xlsx, md, pdf) e grafici (png, html, pdf).
+Agent with specialized sub-agents and tools for on-demand generation
+of documents (docx, xlsx, md, pdf) and charts (png, html, pdf).
 
-MIME type e compatibilità Gemini (input history):
-  ✅ image/png, application/pdf  → accettati, niente strip
-  ❌ docx, xlsx, text/html       → non accettati, strippati dalla history
+MIME type and Gemini compatibility (input history):
+  ✅ image/png, application/pdf  → accepted, no stripping
+  ❌ docx, xlsx, text/html       → not accepted, stripped from history
 """
 
 from __future__ import annotations
@@ -43,8 +43,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Modello LLM passato dall'esterno (variabile d'ambiente AGENT_MODEL).
-# Il default mantiene il modello usato finora se la variabile non e' impostata.
+# LLM model passed in externally (AGENT_MODEL environment variable).
+# The default keeps the model used so far if the variable is not set.
 DEFAULT_AGENT_MODEL = "gemini-3.5-flash"
 AGENT_MODEL = (os.getenv("AGENT_MODEL") or DEFAULT_AGENT_MODEL).strip()
 logger.info(f"--- Agent model: {AGENT_MODEL} ---")
@@ -65,7 +65,7 @@ def strip_binary_parts(
     callback_context: CallbackContext,
     llm_request: LlmRequest,
 ) -> Optional[LlmResponse]:
-    """Rimuove dalla history i Part con MIME type non supportati da Gemini."""
+    """Removes Parts with MIME types unsupported by Gemini from the history."""
     if not llm_request.contents:
         return None
     removed = 0
@@ -79,7 +79,7 @@ def strip_binary_parts(
         ]
         removed += original_len - len(content.parts)
     if removed:
-        logger.debug("strip_binary_parts: rimossi %d Part dalla history", removed)
+        logger.debug("strip_binary_parts: removed %d Parts from history", removed)
     return None
 
 
@@ -87,7 +87,7 @@ async def inject_document_artifacts(
     callback_context: CallbackContext,
     llm_response: LlmResponse,
 ) -> Optional[LlmResponse]:
-    """Inietta gli artifact generati come Part(inline_data) nella risposta finale."""
+    """Injects the generated artifacts as Part(inline_data) into the final response."""
     if llm_response.content and llm_response.content.parts:
         if any(p.function_call is not None for p in llm_response.content.parts):
             return None
@@ -124,11 +124,11 @@ async def inject_document_artifacts(
 search_agent = Agent(
     model=AGENT_MODEL,
     name="search_agent",
-    description="Agente per ricerche di contenuti su internet",
+    description="Agent for searching content on the internet",
     instruction=(
-        "Sei un agente specializzato nella ricerca. "
-        "Il tuo obiettivo e' quello di cercare contenuti su internet "
-        "in base alla richiesta dell'utente."
+        "You are an agent specialized in search. "
+        "Your goal is to search for content on the internet "
+        "based on the user's request."
     ),
     tools=[google_search],
 )
@@ -141,63 +141,63 @@ search_agent = Agent(
 root_agent = Agent(
     name="docs_agent",
     model=AGENT_MODEL,
-    description="Agente per la generazione di documenti e grafici con contenuti trovati su internet.",
+    description="Agent for generating documents and charts from content found on the internet.",
     instruction=(
-        "## REGOLA CRITICA — Nessun testo prima dei tool call\n"
-        "NON generare MAI testo introduttivo o di pianificazione prima di chiamare i tool.\n"
-        "Esempi di testo VIETATO: 'Certo, cerco subito...', 'Per prima cosa...', "
-        "'Inizierò cercando...', 'Procedo a cercare...'.\n"
-        "Chiama DIRETTAMENTE il tool appropriato senza nessun testo preliminare.\n"
-        "Il testo di risposta va prodotto SOLO alla fine, dopo che tutti i tool hanno completato.\n\n"
+        "## CRITICAL RULE — No text before tool calls\n"
+        "NEVER generate introductory or planning text before calling the tools.\n"
+        "Examples of FORBIDDEN text: 'Sure, I'll search right away...', 'First...', "
+        "'I'll start by searching...', 'Proceeding to search...'.\n"
+        "Call the appropriate tool DIRECTLY with no preliminary text whatsoever.\n"
+        "Response text must be produced ONLY at the end, after all tools have completed.\n\n"
 
-        "## Obiettivo\n"
-        "Cercare contenuti su internet e generare documenti e grafici basati su di essi.\n"
-        "Usa il tool agente 'search_agent' per effettuare ricerche su internet.\n\n"
+        "## Goal\n"
+        "Search for content on the internet and generate documents and charts based on it.\n"
+        "Use the 'search_agent' agent tool to perform internet searches.\n\n"
 
-        "## Tool disponibili\n\n"
+        "## Available tools\n\n"
 
-        "### Documenti\n"
+        "### Documents\n"
         "- 'generate_docx_report' — Word (.docx)\n"
         "- 'generate_xlsx_report' — Excel (.xlsx)\n"
         "- 'generate_md_report'   — Markdown (.md)\n"
-        "- 'generate_pdf_report'  — PDF con testo + grafici embedded (usa questo\n"
-        "  quando l'utente vuole un report completo con testo e grafici insieme)\n\n"
+        "- 'generate_pdf_report'  — PDF with text + embedded charts (use this\n"
+        "  when the user wants a complete report with text and charts together)\n\n"
 
-        "### Grafici standalone\n"
-        "- 'generate_chart_png'   — PNG statico\n"
-        "- 'generate_chart_html'  — HTML interattivo Plotly (ideale per web)\n"
-        "- 'generate_chart_pdf'   — PDF con solo il grafico\n\n"
+        "### Standalone charts\n"
+        "- 'generate_chart_png'   — static PNG\n"
+        "- 'generate_chart_html'  — interactive Plotly HTML (ideal for web)\n"
+        "- 'generate_chart_pdf'   — PDF with just the chart\n\n"
 
-        "### Quando usare generate_pdf_report vs grafici standalone\n"
-        "- Vuole testo + grafici insieme → 'generate_pdf_report'\n"
-        "- Vuole solo il grafico         → 'generate_chart_png/html/pdf'\n"
-        "- Vuole dati tabellari          → 'generate_xlsx_report'\n"
-        "- Puoi generare più file nella stessa risposta (es. xlsx + html)\n\n"
+        "### When to use generate_pdf_report vs standalone charts\n"
+        "- Wants text + charts together → 'generate_pdf_report'\n"
+        "- Wants only the chart          → 'generate_chart_png/html/pdf'\n"
+        "- Wants tabular data            → 'generate_xlsx_report'\n"
+        "- You can generate multiple files in the same response (e.g. xlsx + html)\n\n"
 
-        "### Struttura sections (docx, md, pdf_report)\n"
-        "  [{\"heading\": \"Titolo\", \"content\": \"testo\" o [\"bullet1\",\"bullet2\"],\n"
+        "### sections structure (docx, md, pdf_report)\n"
+        "  [{\"heading\": \"Title\", \"content\": \"text\" or [\"bullet1\",\"bullet2\"],\n"
         "    \"table\": {\"headers\": [...], \"rows\": [[...]]}}]\n\n"
 
-        "### Struttura sheets (xlsx)\n"
-        "  [{\"name\": \"NomeFoglio\", \"headers\": [...], \"rows\": [[...]]}]\n\n"
+        "### sheets structure (xlsx)\n"
+        "  [{\"name\": \"SheetName\", \"headers\": [...], \"rows\": [[...]]}]\n\n"
 
-        "### Struttura charts (solo per generate_pdf_report)\n"
+        "### charts structure (only for generate_pdf_report)\n"
         "  [{\n"
-        "    \"title\": \"Titolo grafico\",\n"
+        "    \"title\": \"Chart title\",\n"
         "    \"chart_type\": \"bar\",           # bar|line|area|pie|scatter\n"
         "    \"categories\": [\"2021\",\"2022\",...],\n"
-        "    \"series\": [{\"name\": \"Ricavi\", \"values\": [53.82, 81.46, ...]}],\n"
-        "    \"x_label\": \"Anno\",             # opzionale\n"
-        "    \"y_label\": \"Miliardi USD\",     # opzionale\n"
-        "    \"position\": 1                   # opzionale: inserisce il grafico dopo\n"
-        "                                     # la sezione N (0-based). Ometti per coda.\n"
+        "    \"series\": [{\"name\": \"Revenue\", \"values\": [53.82, 81.46, ...]}],\n"
+        "    \"x_label\": \"Year\",             # optional\n"
+        "    \"y_label\": \"Billion USD\",      # optional\n"
+        "    \"position\": 1                   # optional: inserts the chart after\n"
+        "                                     # section N (0-based). Omit to append at the end.\n"
         "  }]\n\n"
 
-        "### Struttura series (grafici standalone)\n"
-        "  Bar/line/area/pie: [{\"name\": \"Serie A\", \"values\": [v1, v2, ...]}]\n"
-        "  Scatter:           [{\"name\": \"Serie A\", \"x\": [...], \"y\": [...]}]\n\n"
+        "### series structure (standalone charts)\n"
+        "  Bar/line/area/pie: [{\"name\": \"Series A\", \"values\": [v1, v2, ...]}]\n"
+        "  Scatter:           [{\"name\": \"Series A\", \"x\": [...], \"y\": [...]}]\n\n"
 
-        "IMPORTANTE: Non passare mai 'tool_context' — viene iniettato automaticamente da ADK."
+        "IMPORTANT: Never pass 'tool_context' — it is injected automatically by ADK."
     ),
     tools=[
         AgentTool(agent=search_agent),

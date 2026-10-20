@@ -9,6 +9,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `ContextualSecureRemoteA2aAgent`/`SecureSessionManager`
+  (`stls_a2a_secure_remote.py`) now support `base` and `arqit_py` in
+  addition to `pqc`, via an opt-in `provider_name=` argument. `base`/
+  `arqit_py` resolve the session through the generic
+  `KeySessionProviderFactory` (awaited directly — no
+  `resolve_if_awaitable()`, which would break inside the already-running
+  event loop this class operates in) instead of the PQC-specific
+  `/stls/pqc/handshake` round trip. Default stays `pqc`; no behavior
+  change for existing callers that don't pass `provider_name=`.
+
 ### Changed
 
 - Translated remaining Italian docstrings/comments/log messages in
