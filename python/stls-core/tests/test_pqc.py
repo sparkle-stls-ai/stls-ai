@@ -368,7 +368,7 @@ class TestKeySessionProviderPQC:
         provider = KeySessionProviderPQC(
             KeySessionProvider.KeySessionProviderType.SERVER, PQCKeyStore()
         )
-        with pytest.raises(RuntimeError, match="kid non disponibile"):
+        with pytest.raises(RuntimeError, match="kid not available"):
             await provider.getSessionKeyIdentifier()
 
     @pytest.mark.asyncio
@@ -695,7 +695,7 @@ class TestPerformPQCHandshake:
             x25519_public_key=base64.b64encode(os.urandom(32)).decode(),
             mlkem_public_key=base64.b64encode(os.urandom(100)).decode(),
         )
-        with pytest.raises(PQCHandshakeError, match="troppo corto"):
+        with pytest.raises(PQCHandshakeError, match="Nonce too short"):
             await perform_pqc_handshake(req, InMemorySessionCache())
 
     @pytest.mark.asyncio

@@ -133,7 +133,7 @@ def test_P07_factory_get_base():
 
 def test_P08_factory_unknown_provider():
     factory = KeyProviderFactory()
-    with pytest.raises(ValueError, match="non supportato"):
+    with pytest.raises(ValueError, match="Unsupported provider"):
         factory.get_provider("sconosciuto")
 
 

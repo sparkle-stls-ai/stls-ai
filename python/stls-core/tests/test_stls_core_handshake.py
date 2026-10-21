@@ -152,7 +152,7 @@ def test_H07_nonce_too_short(base_provider_session_server):
         run(perform_handshake(req, base_provider_session_server, cache))
 
     assert exc_info.value.code == -32600
-    assert "corto" in exc_info.value.message
+    assert "too short" in exc_info.value.message
 
 
 # ---------------------------------------------------------------------------
