@@ -30,25 +30,98 @@ Each directory ships a `.env.example` with every variable except
 
 ## Prerequisites
 
-- `stls_core` and `stls_a2a` importable, with the `arqit_client_configs`
-  feature (added 2026-10-23) in `stls_core_providers_arqit_py.py` /
-  `stls_core_providers_factory.py` / `stls_a2a_secure_remote.py`. If your
-  installed copies predate it (check with
-  `python -c "import inspect,stls_a2a; print(inspect.signature(stls_a2a.SecureSessionManager.__init__))"`
-  — look for `arqit_client_configs`), either reinstall from source
-  (`pip install -e python/stls-core -e python/stls-a2a`) or run with:
-  ```bash
-  export PYTHONPATH=/path/to/stls-ai/python/stls-core/src:/path/to/stls-ai/python/stls-a2a/src
-  ```
-- `google-adk`, `fastapi`, `uvicorn`, `python-dotenv` installed.
-- For `KEY_PROVIDER_NAME=arqit_py`: the `[arqit_py]` extra (the Arqit
-  SKA-Platform wheels) installed — `import uk.arqit.device.common` must
-  succeed.
+### Python environment — use ONE shared venv at the repo root, not each package's own
+
+Run every `10_`/`11_`/`12_`-series Python script (servers and clients
+alike) with the **same venv at the repo root** (`stls-ai/.venv`), not
+with any individual package's own `python/stls-*/.venv`. Each
+package's own venv is meant for that package's own test suite in
+isolation; the samples are cross-package (a `10_client_ms` script
+imports both `stls_core` and `stls_a2a`) and are meant to be run
+against one shared, consistent install — exactly how an actual
+downstream project consuming these packages would set things up.
+
+Set it up once (editable installs, so `.venv` always reflects whatever
+is currently on disk in `python/stls-*/src/` — no reinstall needed
+after pulling or editing source):
+
+```bash
+cd /path/to/stls-ai
+VENV=/path/to/stls-ai/.venv   # adjust, or just use .venv/bin/python below
+
+# 1. stls-core, WITH the [arqit_py] extra (real Arqit SKA-Platform
+#    wheels, vendored under arqit_wheels/ — no PyPI package exists for
+#    these, hence --find-links) AND [dev] (pytest/pytest-asyncio/
+#    httpx/fastapi/uvicorn/fakeredis — only needed if you'll also run
+#    stls-core's own test suite, harmless otherwise):
+cd python/stls-core
+uv pip install -e ".[arqit_py,dev]" \
+  --find-links arqit_wheels/arqit-skaplatform-common/ \
+  --find-links arqit_wheels/arqit-skaplatform-policy/ \
+  --find-links arqit_wheels/arqit-skaplatform-registration/ \
+  --find-links arqit_wheels/arqit-skaplatform-provisioning/ \
+  --find-links arqit_wheels/arqit-skaplatform-mqtt-common/ \
+  --find-links arqit_wheels/arqit-skaplatform-peering/ \
+  --find-links arqit_wheels/arqit-skaplatform-monitoring/ \
+  --python "$VENV/bin/python"
+
+# 2. stls-a2a (needed for 10_*), stls-mcp (needed for 11_*) — both
+#    depend on stls-core, each pulls in its own transitive deps
+#    (fastapi, uvicorn, mcp, ...). stls-mcp's google-adk is its OWN
+#    optional [adk] extra (only client_multi_server.py — the ADK-based
+#    script — needs it; client_multi_session.py doesn't), so install
+#    with it unless you specifically don't want it:
+cd ../stls-a2a  && uv pip install -e . --python "$VENV/bin/python"
+cd ../stls-mcp  && uv pip install -e ".[adk,dev]" --python "$VENV/bin/python"
+
+# 3. IMPORTANT — re-apply step 1 as the LAST command. Installing
+#    stls-a2a/stls-mcp can silently resolve and reinstall a
+#    non-editable stls-core wheel over the editable one (observed
+#    repeatedly in practice — it's a uv dependency-resolution quirk,
+#    not a one-time fluke), which breaks every script needing
+#    anything added to stls-core after its last published version
+#    (e.g. KeySessionResolver). Re-running step 1 after 2 restores the
+#    editable link:
+cd ../stls-core
+uv pip install -e ".[arqit_py,dev]" \
+  --find-links arqit_wheels/arqit-skaplatform-common/ \
+  --find-links arqit_wheels/arqit-skaplatform-policy/ \
+  --find-links arqit_wheels/arqit-skaplatform-registration/ \
+  --find-links arqit_wheels/arqit-skaplatform-provisioning/ \
+  --find-links arqit_wheels/arqit-skaplatform-mqtt-common/ \
+  --find-links arqit_wheels/arqit-skaplatform-peering/ \
+  --find-links arqit_wheels/arqit-skaplatform-monitoring/ \
+  --python "$VENV/bin/python"
+```
+
+Verify before running anything:
+```bash
+"$VENV/bin/python" -c "
+import stls_core, stls_a2a, stls_mcp
+print(stls_core.__file__)   # must be .../python/stls-core/src/stls_core/__init__.py
+print(stls_a2a.__file__)    # must be .../python/stls-a2a/src/stls_a2a/__init__.py
+print(stls_mcp.__file__)    # must be .../python/stls-mcp/src/stls_mcp/__init__.py
+print('KeySessionResolver' in dir(stls_core))   # must be True
+import uk.arqit.device.common   # must not raise
+import google.adk               # must not raise — needed by client_agent_multi_server.py / 11_'s ADK-based client
+"
+```
+If any `__file__` printed above points *inside* `.venv/lib/.../site-packages/` instead of the package's own `src/` directory, that package's editable link was clobbered — redo step 1 (or the relevant step) and re-verify.
+
+Use `$VENV/bin/python` (or activate the venv) for every command below instead of a bare `python` — a bare `python` on `PATH` may resolve to a different interpreter entirely and will not have any of this installed.
+
+### Other prerequisites
+
+- `python-dotenv` (pulled in transitively above).
+- For `KEY_PROVIDER_NAME=arqit_py`: confirmed above via
+  `import uk.arqit.device.common`.
 - A `GOOGLE_API_KEY` (each `.env` has a slot for it) — without it the
   session/transport layer still works end-to-end, but the ADK agent's
-  final answer fails with a Gemini "No API key" error. That's a useful,
-  expected failure mode when you only care about validating the crypto/
-  session layer, not the LLM's answer.
+  final answer fails with a Gemini "No API key" error (or, if the key
+  is present but its prepaid credits are exhausted, a `402
+  RESOURCE_EXHAUSTED`). Both are useful, expected failure modes when
+  you only care about validating the crypto/session layer, not the
+  LLM's answer.
 
 ## Running one server
 
@@ -60,8 +133,8 @@ why this matters).
 
 ```bash
 cd samples/server/10_server_ms/server_ms_1
-python server.py
-# or, from anywhere:
+/path/to/stls-ai/.venv/bin/python server.py
+# or, from anywhere, with the venv activated:
 python samples/server/10_server_ms/server_ms_1/server.py
 ```
 

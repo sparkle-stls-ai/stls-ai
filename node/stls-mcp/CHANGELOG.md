@@ -9,6 +9,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.2] — 2026-10-19
 
+### Fixed (follow-up, 2026-10-23 — concurrent `arqit_py` sessions)
+
+Concurrent `arqit_py` MCP sessions against one long-running server
+could get cross-wired (a client's key ending up checked against a
+*different* session's handshake) once `node/stls-core`'s
+`_ARQIT_PY_START_LOCK`/`hintKid` fixes stopped them from deadlocking
+first (see `node/stls-core/CHANGELOG.md`). Fixed by threading a `kid`
+hint through `performClientHandshake()`:
+
+- `transport.ts`: `PerformClientHandshakeOptions` gained an optional
+  `kid?: string`, threaded into `generateHandshakeRequest()`.
+- `samples/client/12_client_mcp_ms/client_multi_session.ts` and
+  `client_multi_server.ts`, plus `tests/vault-client.ts` (for
+  consistency): all now pass their already-resolved `kid` through
+  instead of discarding it.
+
+Confirmed fixed: re-ran `client_multi_session.ts` with genuinely
+concurrent sessions — 3/3 then 6/6 clean passes, 0 errors.
+
 ### Fixed
 
 - **`encryptedHandler()` double-encrypted HTTP-level error responses** —

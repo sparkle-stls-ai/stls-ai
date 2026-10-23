@@ -104,6 +104,16 @@ export interface GetSessionProviderOptions {
    * fails against the real Arqit cloud — see ARQIT_PEERING_NOTES.md).
    */
   socketPath?: string;
+  /**
+   * arqit_py only: a different device config_path per call, letting one
+   * process hold several Arqit device identities across calls instead
+   * of being limited to the sidecar's own env-var-wide config. Passed
+   * through to createProviderClient/createProviderServer's per-call
+   * options (the generic KeyProvider ABC slot) as `configPath`; see
+   * KeyProviderArqitSidecar in arqit-sidecar.ts and stls-core's own
+   * KeySessionResolver (Python) for the equivalent pattern.
+   */
+  configPath?: string;
 }
 
 export class KeySessionProviderFactory {
@@ -131,13 +141,15 @@ export class KeySessionProviderFactory {
           })
         : KeyProviderFactory.getProvider(providerName);
 
+    const perCallOptions = { configPath: options.configPath };
+
     if (options.sessionType === KeySessionProviderType.SERVER) {
-      const server = keyProvider.createProviderServer(options.port ?? 0, {});
+      const server = keyProvider.createProviderServer(options.port ?? 0, perCallOptions);
       await server.start();
       return server.createProviderSession();
     }
 
-    const client = keyProvider.createProviderClient(options.host ?? "", options.port ?? 0, {});
+    const client = keyProvider.createProviderClient(options.host ?? "", options.port ?? 0, perCallOptions);
     await client.start();
     return client.createProviderSession();
   }

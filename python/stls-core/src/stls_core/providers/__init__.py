@@ -15,6 +15,7 @@ from .stls_core_providers_factory import (
     KeyProviderFactory,
     KeySessionProviderFactory,
 )
+from .stls_core_providers_session_resolver import KeySessionResolver
 
 from .stls_core_providers_keystore import (
     ArqitKeyStoreBase,
@@ -49,6 +50,7 @@ __all__ = [
     "KeySessionProviderBase",
     "KeyProviderFactory",
     "KeySessionProviderFactory",
+    "KeySessionResolver",
     "ArqitKeyStoreBase",
     "ArqitKeyStoreFactory",
     "InMemoryArqitKeyStore",

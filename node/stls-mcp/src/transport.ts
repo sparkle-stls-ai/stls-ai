@@ -62,6 +62,17 @@ export interface StlsClientSession {
 
 export interface PerformClientHandshakeOptions {
   clientId: string;
+  /**
+   * Optional kid the caller already resolved alongside sessionKey
+   * (e.g. via KeySessionProvider.getSessionKeyIdentifier() for
+   * arqit_py) — passed through as a hint so the server resolves THIS
+   * exact key directly for arqit_py, instead of a plain "next
+   * available" lookup, which is not safe once more than one handshake
+   * can be in flight concurrently against the same long-running
+   * server-side provider instance. Leave unset for base (nothing to
+   * disambiguate) or when unavailable.
+   */
+  kid?: string;
   handshakePath?: string;
   fetch?: FetchLike;
 }
@@ -87,7 +98,7 @@ export async function performClientHandshake(
 ): Promise<StlsClientSession> {
   const handshakePath = options.handshakePath ?? HANDSHAKE_PATH;
   const doFetch = options.fetch ?? globalThis.fetch;
-  const request = generateHandshakeRequest(options.clientId);
+  const request = generateHandshakeRequest(options.clientId, options.kid);
   const url = baseUrl.replace(/\/$/, "") + handshakePath;
 
   let response: Response;

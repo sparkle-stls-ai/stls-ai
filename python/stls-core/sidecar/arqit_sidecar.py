@@ -24,7 +24,7 @@ KeyProviderClientArqitPy/KeyProviderServerArqitPy: a dedicated
 KeyProviderClient/Server per session). Exposed methods:
 
     start            {session_type: "CLIENT"|"SERVER", provider_name?,
-                       host?, port?}              -> {}
+                       host?, port?, config_path?} -> {}
     get_session_key_identifier   {}               -> {"kid": str}
     set_session_key_identifier   {kid}             -> {}
     get_session_key_data         {kid}             -> {"session_key_b64": str}
@@ -97,7 +97,12 @@ class SidecarSession:
         if method == "start":
             return await self._start(params)
         if method == "get_session_key_identifier":
-            return {"kid": await self._provider().getSessionKeyIdentifier()}
+            # Optional hint_kid (see stls_core_providers_arqit_py.py /
+            # stls_core_handshake.py's HandshakeRequest.kid): lets the
+            # Node side resolve an EXACT already-delivered key directly
+            # instead of plain FIFO, same fix as the Python path.
+            hint_kid = params.get("kid")
+            return {"kid": await self._provider().getSessionKeyIdentifier(hint_kid=hint_kid)}
         if method == "set_session_key_identifier":
             self._provider().setSessionKeyIdentifier(params["kid"])
             return {}
@@ -137,6 +142,16 @@ class SidecarSession:
                 )
             _active_arqit_py_role = session_type_name
 
+        # config_path (arqit_py only): overrides ARQIT_PY_CLIENT_CONFIG/
+        # ARQIT_PY_SERVER_CONFIG for this connection only — lets several
+        # connections to this same sidecar process use different device
+        # configs, mirroring stls-core's own
+        # KeySessionProviderFactory.get_session_provider(options=...)
+        # (see stls_core_providers_arqit_py.py). Ignored by other
+        # providers, same as the env vars themselves.
+        config_path = params.get("config_path")
+        options = {"config_path": config_path} if config_path else {}
+
         factory = KeySessionProviderFactory()
         loop = asyncio.get_event_loop()
         # get_session_provider() is sync (it calls start() sync/async and
@@ -149,9 +164,14 @@ class SidecarSession:
                 host=params.get("host"),
                 port=params.get("port"),
                 name=provider_name,
+                options=options,
             ),
         )
-        logger.info("session started: type=%s provider=%s", session_type_name, provider_name)
+        logger.info(
+            "session started: type=%s provider=%s%s",
+            session_type_name, provider_name,
+            f" config_path={config_path}" if config_path else "",
+        )
         return {}
 
 

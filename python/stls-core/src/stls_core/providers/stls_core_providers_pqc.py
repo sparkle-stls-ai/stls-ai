@@ -146,7 +146,7 @@ class KeySessionProviderPQC(KeySessionProvider):
     def getSessionType(self) -> KeySessionProvider.KeySessionProviderType:
         return self._session_type
 
-    async def getSessionKeyIdentifier(self) -> str:
+    async def getSessionKeyIdentifier(self, hint_kid: Optional[str] = None) -> str:
         """
         Returns the kid of the current session.
 
@@ -154,6 +154,11 @@ class KeySessionProviderPQC(KeySessionProvider):
         perform_pqc_handshake() before this is called.
         CLIENT: the kid is set via setSessionKeyIdentifier()
         after receiving the PQCHandshakeResponse.
+
+        hint_kid is ignored: pqc never goes through perform_handshake()
+        (it has its own dedicated /stls/pqc/handshake flow via
+        perform_pqc_handshake()), and there is only ever one
+        unambiguous kid per instance regardless.
         """
         if self._kid is None:
             raise RuntimeError(

@@ -236,3 +236,72 @@ real Arqit cloud calls for a problem that isn't there.
 No code changes resulted from this round beyond the cosmetic
 `process.exit(0)` in `vault-client.ts` (documented in
 `node/stls-mcp/CHANGELOG.md`) — the mechanism itself needed no fixes.
+
+## Follow-up (2026-10-23): `DeviceMetadata` singleton race — confirmed real, fixed
+
+A multi-session/multi-server push for `arqit_py` (see
+`python/stls-a2a/README.md`'s "Current Limitations and Notes" and
+`samples/server/12_server_mcp_ms/README.md`) surfaced a real failure
+under genuine OS-thread concurrency: 3 concurrent sessions for the same
+device via the Node sidecar (`arqit_sidecar.py` dispatches each RPC
+connection through `loop.run_in_executor()`, a real thread per
+connection) partially failed and then hung. Every *pure-Python*
+`asyncio.gather()` "concurrency" test in this project had missed this
+because `KeyProviderClientArqitPy.start()` has no `await` inside it, so
+`asyncio.gather()` silently serializes it for free — not a real test.
+
+**Controlled, isolated reproduction** (dedicated throwaway devices,
+`python/stls-core/tests/test_arqit_py_same_device_concurrent_real.py`,
+using `asyncio.to_thread()` to force genuine OS-thread concurrency
+instead of relying on the sidecar): with no protection at all, 1 of 3
+concurrent `start()` calls completed and the other 2 deadlocked
+forever. `py-spy` thread dumps pinned the exact spot: both stuck
+threads were blocked acquiring `AuthenticationClient.__mutex`
+(`authentication.py:197`) — a **class-level** lock (`__mutex =
+threading.Lock()` at class scope, not in `__init__`), shared by every
+`AuthenticationClient` instance in the process, same as
+`DeviceMetadata`'s own singleton. The critical section it guards
+(`self.__mutex.acquire(); self._dev_metadata.load();
+self.__mutex.release()`) has no `try`/`finally` — an unrelated
+exception during that `load()` call (in our first repro attempt, an
+unrelated relative-path bug — see the cwd-resolution note elsewhere in
+this file — the same class of bug, re-triggered) leaks the mutex
+*permanently* for the rest of the process, wedging every later
+`start()` call forever regardless of how carefully callers serialize
+themselves afterward.
+
+**Fix**, in `python/stls-core/src/stls_core/providers/stls_core_providers_arqit_py.py`:
+a module-level `_ARQIT_PY_START_LOCK` (`threading.Lock`) now fully
+serializes `KeyProviderClientArqitPy.start()` and
+`KeyProviderServerArqitPy.start()`, process-wide, across *all* devices
+(not just the same one — `DeviceMetadata` is one global singleton
+regardless of which device's config is passed). Serializing only the
+authentication step wasn't enough on its own: with that narrower scope,
+authentication stopped deadlocking, but letting a second session
+authenticate while a first session's negotiation thread was still
+connecting made the SDK's socket bilocation handshake fail outright
+(`ConnectionRefusedError`/`PeerUnableToConnectException`) for every
+session involved. The client-side lock is therefore held through the
+*entire* negotiation — `start()` now joins the negotiation thread
+(capped at 30s, matching this provider's own key-delivery timeout
+convention) before releasing the lock, not just through authentication.
+
+**Confirmed fixed**: the same 3-concurrent-sessions-same-device
+reproduction that previously deadlocked forever now completes in ~5s
+with 3/3 distinct keys and zero errors, against the real cloud. An
+immediate back-to-back retry right after that clean pass then hit
+`ConnectionRefusedError` again — consistent with, not contradicting,
+this file's own already-documented real-cloud rate-limiting/flakiness
+on back-to-back retries (see the "second immediate retry" note above).
+One clean full pass is the standard of evidence here; don't chase a
+second back-to-back green run as proof, space retries out instead.
+
+**Consequence**: `arqit_py` session establishment (`start()`) is now
+fully serial process-wide by design — a throughput cost, not a
+correctness one, and unavoidable until Arqit fixes their SDK's own
+locking. Callers (`SecureSessionManager`, `SecureToolsetManager`, the
+Node `KeySessionResolver`, or raw scripts) no longer need to avoid
+parallelizing `arqit_py` calls themselves; the provider now does that
+safely on their behalf. The Node sidecar needed no code change of its
+own — it's a Python process running this same module under the hood,
+so it picked up the fix automatically.

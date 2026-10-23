@@ -117,8 +117,9 @@ export class ArqitSidecarKeySessionProvider implements KeySessionProvider {
     return this.sessionType;
   }
 
-  async getSessionKeyIdentifier(): Promise<string> {
-    const result = (await this.rpc.call("get_session_key_identifier")) as { kid: string };
+  async getSessionKeyIdentifier(hintKid?: string): Promise<string> {
+    const params = hintKid ? { kid: hintKid } : undefined;
+    const result = (await this.rpc.call("get_session_key_identifier", params)) as { kid: string };
     return result.kid;
   }
 
@@ -156,6 +157,28 @@ export interface ArqitSidecarOptions {
   socketPath?: string;
   /** Python provider to instantiate on the sidecar: "arqit_py" (production) | "base" (test). */
   providerName?: string;
+  /**
+   * arqit_py only: overrides ARQIT_PY_CLIENT_CONFIG/ARQIT_PY_SERVER_CONFIG
+   * on the Python sidecar side for THIS connection only — lets several
+   * connections to the same sidecar process use different device
+   * configs. Sent to the sidecar as "config_path" in the "start" RPC
+   * params; mirrors stls-core's own
+   * KeySessionProviderFactory.get_session_provider(options=...) on the
+   * Python side. Omitted (undefined) falls back to the sidecar's env
+   * var exactly as before this option existed.
+   */
+  configPath?: string;
+}
+
+/**
+ * Per-call options["configPath"] (the generic KeyProvider ABC slot,
+ * mirroring Python's options: dict[str, Any]) overrides the
+ * sidecar-level ArqitSidecarOptions.configPath — takes priority when
+ * present, same precedence as Python's KeyProviderArqitPy.
+ */
+function mergeConfigPath(base: ArqitSidecarOptions, perCall: Record<string, unknown>): ArqitSidecarOptions {
+  const configPath = typeof perCall.configPath === "string" ? perCall.configPath : base.configPath;
+  return { ...base, configPath };
 }
 
 function resolveSocketPath(options: ArqitSidecarOptions): string {
@@ -179,6 +202,7 @@ export class KeyProviderClientArqitSidecar implements KeyProviderClient {
     await this.rpc.call("start", {
       session_type: "CLIENT",
       provider_name: this.options.providerName ?? process.env.KEY_PROVIDER_NAME ?? "base",
+      config_path: this.options.configPath,
     });
     this.session = new ArqitSidecarKeySessionProvider(this.rpc, KeySessionProviderType.CLIENT);
   }
@@ -207,6 +231,7 @@ export class KeyProviderServerArqitSidecar implements KeyProviderServer {
     await this.rpc.call("start", {
       session_type: "SERVER",
       provider_name: this.options.providerName ?? process.env.KEY_PROVIDER_NAME ?? "base",
+      config_path: this.options.configPath,
     });
     this.session = new ArqitSidecarKeySessionProvider(this.rpc, KeySessionProviderType.SERVER);
   }
@@ -235,12 +260,12 @@ export class KeyProviderArqitSidecar implements KeyProvider {
   createProviderClient(
     _host: string,
     _port: number,
-    _options: Record<string, unknown>,
+    options: Record<string, unknown>,
   ): KeyProviderClient {
-    return new KeyProviderClientArqitSidecar(this.options);
+    return new KeyProviderClientArqitSidecar(mergeConfigPath(this.options, options));
   }
 
-  createProviderServer(_port: number, _options: Record<string, unknown>): KeyProviderServer {
-    return new KeyProviderServerArqitSidecar(this.options);
+  createProviderServer(_port: number, options: Record<string, unknown>): KeyProviderServer {
+    return new KeyProviderServerArqitSidecar(mergeConfigPath(this.options, options));
   }
 }

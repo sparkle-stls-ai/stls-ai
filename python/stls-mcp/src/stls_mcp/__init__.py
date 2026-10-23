@@ -53,7 +53,7 @@ from .stls_mcp_transport import (
     perform_pqc_client_handshake,
     stls_httpx_factory,
 )
-from .stls_mcp_secure_toolset import STLSMCPToolset, create_stls_mcp_toolset
+from .stls_mcp_secure_toolset import STLSMCPToolset, create_stls_mcp_toolset, SecureToolsetManager
 
 __all__ = [
     # server.py — main entry point (server-side)
@@ -70,6 +70,7 @@ __all__ = [
     # for why. import stls_mcp stays valid without ADK installed)
     "STLSMCPToolset",
     "create_stls_mcp_toolset",
+    "SecureToolsetManager",
     # middleware.py — exposed for whoever wants to assemble it manually
     # (e.g. integration into an existing Starlette/FastAPI app)
     "StlsMcpMiddleware",

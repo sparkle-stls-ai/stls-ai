@@ -9,6 +9,49 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.2] — 2026-10-19
 
+### Added (follow-up, 2026-10-23)
+
+- **`SecureToolsetManager`** (`stls_mcp_secure_toolset.py`) — cache of
+  encrypted STLS MCP toolsets by `base_url`, with a lazy build and a
+  lock against duplicate concurrent handshakes, the `stls-mcp` twin of
+  `stls_a2a.SecureSessionManager`. Resolves `base`/`arqit_py` session
+  keys via the new shared `stls_core.KeySessionResolver` (`pqc` still
+  does its own handshake via `perform_pqc_client_handshake`, same as
+  before). Accepts an optional `arqit_client_configs={base_url:
+  config_path}` constructor argument, letting one process hold several
+  `arqit_py` device identities for different MCP servers — same shape
+  and env-var fallback as `stls_a2a.SecureSessionManager`'s own option.
+  Validated end-to-end against the real Arqit cloud for the sequential
+  case (see `samples/client/11_client_mcp_ms/` and its README).
+
+### Fixed (follow-up, 2026-10-23, continued — concurrent `arqit_py` sessions)
+
+Concurrent `arqit_py` MCP sessions against one long-running server used
+to fail with "Invalid proof of possession" once `stls-core`'s
+`_ARQIT_PY_START_LOCK` fix (see `python/stls-core/CHAGELOG.md`) stopped
+them from deadlocking first: the server resolved its kid via plain
+FIFO with no correlation to which incoming handshake it was for, so
+concurrent handshakes could get cross-wired. Fixed by threading a
+`kid` hint through end to end, mirroring `stls_core_handshake.py`'s
+new `HandshakeRequest.kid`:
+
+- `create_stls_mcp_toolset()` gained an optional
+  `session_key_identifier: Optional[str] = None` parameter, passed
+  through to `perform_client_handshake(kid=...)`.
+- `SecureToolsetManager`'s own cache-miss path no longer discards the
+  kid half of `self._resolver.resolve(base_url)`'s `(kid, kdata)`
+  tuple — passes it through as `session_key_identifier=`.
+- `stls_mcp_transport.py`'s `perform_client_handshake()` gained a
+  matching optional `kid: str | None = None` parameter, threaded into
+  `HandshakeRequest.generate()`.
+
+Confirmed fixed: the same 3-concurrent-sessions reproduction that
+previously failed with cross-wired keys now passes cleanly (3/3 and
+6/6, 0 errors, each handshake resolving in ~0.1-0.2s) — see
+`samples/client/11_client_mcp_ms/README.md` and
+`samples/server/12_server_mcp_ms/README.md` (Node side, same fix
+ported, see `node/stls-core/CHANGELOG.md`).
+
 ### Fixed
 
 - **`StlsMcpMiddleware._handle_http()` double-encrypted HTTP-level error

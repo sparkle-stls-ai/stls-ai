@@ -94,7 +94,7 @@ import httpx
 
 import uuid as _uuid
 
-from stls_core import KeySessionProvider, KeySessionProviderFactory
+from stls_core import KeySessionResolver
 
 from .stls_a2a_integration import (
     SecureA2ATransportAdapter,
@@ -243,7 +243,14 @@ class SecureSessionManager:
         self.client_id = client_id
         self._handshake_path = handshake_path
         self._provider_name = provider_name.strip().lower()
-        self._arqit_client_configs = arqit_client_configs or {}
+        # Generic cache/lock/config-override resolution lives in
+        # stls-core's KeySessionResolver (shared with stls-mcp's own
+        # multi-session manager) — this class only adds the A2A-specific
+        # part (building/caching SecureA2ATransportAdapter below).
+        self._resolver = KeySessionResolver(
+            provider_name=self._provider_name,
+            target_configs=arqit_client_configs,
+        )
         self._owns_http = httpx_client is None
         self._http = httpx_client or httpx.AsyncClient()
         self._sessions: dict[str, SecureA2ATransportAdapter] = {}
@@ -339,33 +346,21 @@ class SecureSessionManager:
         actually comes from (arqit_py's peer address is in its config
         file, not derived from base_url) — see the module docstring.
 
-        For arqit_py, options["config_path"] is set from
-        arqit_client_configs[base_url] when that base_url has an entry,
-        overriding ARQIT_PY_CLIENT_CONFIG for this session only; absent an
-        entry (or for any other provider), options stays empty and
-        KeyProviderArqitPy falls back to the env var as before.
+        For arqit_py, the resolver's target_configs[base_url] overrides
+        ARQIT_PY_CLIENT_CONFIG for this session only when that base_url
+        has an entry; absent an entry (or for any other provider), it
+        falls back to the env var as before — see
+        stls_core.KeySessionResolver.
         """
         host = os.getenv("KEY_SESSION_HOST", "localhost")
         port = int(os.getenv("KEY_SESSION_PORT", "8081"))
-        options: dict[str, Any] = {}
-        if self._provider_name == "arqit_py":
-            config_path = self._arqit_client_configs.get(base_url)
-            if config_path:
-                options["config_path"] = config_path
         logger.info(
-            "SecureSessionManager: resolving %s session for %s (KeySessionProvider host=%s port=%s%s)",
+            "SecureSessionManager: resolving %s session for %s (KeySessionProvider host=%s port=%s)",
             self._provider_name, base_url, host, port,
-            f", config_path={options['config_path']}" if "config_path" in options else "",
         )
-        provider = KeySessionProviderFactory().get_session_provider(
-            session_type=KeySessionProvider.KeySessionProviderType.CLIENT,
-            host=host,
-            port=port,
-            name=self._provider_name,
-            options=options,
+        session_key_identifier, session_key_data = await self._resolver.resolve(
+            base_url, host=host, port=port,
         )
-        session_key_identifier = await provider.getSessionKeyIdentifier()
-        session_key_data = await provider.getSessionKeyData(session_key_identifier)
 
         return SecureA2ATransportAdapter(
             session_key=session_key_data,

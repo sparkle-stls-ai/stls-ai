@@ -25,21 +25,30 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   — lets one client process hold distinct `arqit_py` device identities
   for different remote counterparts, instead of being limited to the
   single device/config the whole process's `ARQIT_PY_CLIENT_CONFIG` env
-  var pointed at. Resolved per `base_url` in
-  `_resolve_via_key_session_provider()` and passed down as
-  `options={"config_path": ...}` to the new `stls_core`
-  `KeySessionProviderFactory.get_session_provider(options=...)`
-  parameter; falls back to the env var when no entry matches a given
-  `base_url` (or the argument is omitted), so existing callers are
-  unaffected. Works identically with `ContextualSecureRemoteA2aAgent`
+  var pointed at. Resolved per `base_url` via `stls_core`'s new shared
+  `KeySessionResolver` (see `python/stls-core/CHAGELOG.md` — also used
+  by `stls-mcp`'s `SecureToolsetManager`); falls back to the env var
+  when no entry matches a given `base_url` (or the argument is
+  omitted), so existing callers are unaffected. Works identically with
+  `ContextualSecureRemoteA2aAgent`
   by sharing one `SecureSessionManager` across its sub-agents (no
   `stls_a2a` code change was needed for that case). Validated
   end-to-end against the real Arqit cloud for the sequential-use case
   (one device's session fully set up before the next starts — see
   `samples/client/10_client_ms/` and its README for the reproducible
-  test matrix); concurrent/parallel use of several `arqit_py` configs
-  in one process is still unvalidated, see the `arqit_py` section of
-  `README.md`'s "Current Limitations and Notes".
+  test matrix).
+
+### Fixed (follow-up, 2026-10-23, continued)
+
+- **Concurrent/parallel use of several `arqit_py` configs in one
+  process — now safe, not just validated sequentially.** Two real bugs
+  were found in `stls_core`'s `arqit_py` provider (a process-wide Arqit
+  SDK singleton deadlock, and a plain-FIFO key resolution that broke
+  under genuine concurrency) and fixed at the source — this package
+  needed no code change of its own, since `SecureSessionManager` calls
+  into the now-fixed `stls_core` provider/resolver. See the `arqit_py`
+  section of `README.md`'s "Current Limitations and Notes" and
+  `python/stls-core/CHAGELOG.md` for the full write-up.
 
 ### Changed
 

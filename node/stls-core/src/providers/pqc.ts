@@ -73,7 +73,7 @@ export class KeySessionProviderPQC implements KeySessionProvider {
     return this.sessionType;
   }
 
-  async getSessionKeyIdentifier(): Promise<string> {
+  async getSessionKeyIdentifier(_hintKid?: string): Promise<string> {
     if (this.kid === null) {
       throw new Error(
         "[KeySessionProviderPQC] kid not available — injectKey() or setSessionKeyIdentifier() has not been called yet",

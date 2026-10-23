@@ -11,6 +11,64 @@ of which this package is the TypeScript port.
 
 ## [0.1.2] — 2026-10-18
 
+### Added (follow-up, 2026-10-23)
+
+- **`KeySessionResolver`** (`providers/session-resolver.ts`) — the
+  TypeScript twin of `python/stls_core/providers/stls_core_providers_session_resolver.py`'s
+  `KeySessionResolver`: generic resolution of `{kid, kdata}` for an
+  arbitrary caller-defined `targetKey`, with a per-`targetKey` async
+  lock and an optional `targetConfigs={targetKey: configPath}` map for
+  `arqit_py` (falls back to the sidecar's own env var when a target
+  has no entry). Validated end-to-end against the real Arqit cloud —
+  one sidecar process resolving two different, already-provisioned
+  device identities via `configPath` (see
+  `tests/interop/key-session-resolver-multi-config.live.ts`).
+- **`configPath` propagated through the Arqit sidecar RPC** —
+  `ArqitSidecarOptions.configPath` and `GetSessionProviderOptions.configPath`
+  (`providers/arqit-sidecar.ts`, `providers/factory.ts`), sent as
+  `config_path` in the `"start"` RPC payload and read by
+  `arqit_sidecar.py`'s `_start()` on the Python side (see
+  `python/stls-core/CHAGELOG.md`). Previously neither side of this RPC
+  carried any config override at all — every connection to a given
+  sidecar process was limited to whatever `ARQIT_PY_CLIENT_CONFIG`/
+  `ARQIT_PY_SERVER_CONFIG` that process's own environment pointed at.
+
+### Fixed (follow-up, 2026-10-23, continued — concurrent `arqit_py` sessions)
+
+Confirmed the Python-side `DeviceMetadata` singleton race (see
+`python/stls-core/CHAGELOG.md`) was real, and reproducible through the
+Node sidecar path specifically — the Python fix (process-wide
+`_ARQIT_PY_START_LOCK`) required no Node-side change, since the
+sidecar is a Python process under the hood. Once that fix stopped
+concurrent sessions from deadlocking, a second bug surfaced: Node had
+the **exact same** FIFO-handshake-resolution gap Python did, not
+independently fixed — `HandshakeRequest` carried no kid, and the
+sidecar RPC's `get_session_key_identifier` method never passed one
+through even after the Python-side `getSessionKeyIdentifier()` gained
+support for a hint. Fixed, mirroring the Python shape exactly:
+
+- `providers/base.ts`: `KeySessionProvider.getSessionKeyIdentifier(hintKid?: string)` —
+  `KeySessionProviderBase` accepts and ignores it (single fixed key,
+  nothing to disambiguate).
+- `providers/pqc.ts`: same, ignored (separate handshake flow, doesn't
+  use this).
+- `providers/arqit-sidecar.ts`: `ArqitSidecarKeySessionProvider.getSessionKeyIdentifier(hintKid?)`
+  forwards `{kid: hintKid}` over the RPC call when given.
+- `handshake.ts`: `HandshakeRequest.kid?: string` added;
+  `generateHandshakeRequest(clientId, kid?)`; `performHandshake()`
+  passes `request.kid` through as the hint.
+- `python/stls-core/sidecar/arqit_sidecar.py`'s
+  `get_session_key_identifier` RPC handler now reads an optional `kid`
+  from `params` and passes it as `hint_kid` to the real provider.
+
+Confirmed fixed: re-ran `samples/client/12_client_mcp_ms/client_multi_session.ts`
+with genuinely concurrent sessions (same devices as the original
+failure) — 3/3 then 6/6 clean passes, 0 errors, matching the
+Python-side result exactly. Regression-checked against
+`test:provider-factory-smoke`, `test:arqit-sidecar-smoke` and
+`test:arqit-sidecar-guard-smoke` (`base`/`pqc` and the sidecar RPC
+mechanics) — all pass unchanged.
+
 ### Added (follow-up, 2026-10-19)
 
 - **`.env.example`** — this package had none; added, documenting every

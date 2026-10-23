@@ -66,6 +66,7 @@ from .providers import (
     KeySessionProvider,
     KeySessionProviderBase,
     KeySessionProviderFactory,
+    KeySessionResolver,
     # PQC
     KeyProviderPQC,
     KeyProviderClientPQC,
@@ -156,6 +157,7 @@ __all__ = [
     "KeySessionProviderBase",
     "KeyProviderFactory",
     "KeySessionProviderFactory",
+    "KeySessionResolver",
     # PQC providers
     "KeyProviderPQC",
     "KeyProviderClientPQC",

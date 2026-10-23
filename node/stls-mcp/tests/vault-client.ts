@@ -50,7 +50,7 @@ async function main(): Promise<void> {
     const kid = await clientProvider.getSessionKeyIdentifier();
     const sessionKey = await clientProvider.getSessionKeyData(kid);
     console.log(`Provider: ${providerName} — kid=${kid}`);
-    const result = await performClientHandshake(baseUrl, sessionKey, { clientId: "vault-demo-client-node" });
+    const result = await performClientHandshake(baseUrl, sessionKey, { clientId: "vault-demo-client-node", kid });
     sessionId = result.sessionId;
     transport = result.transport;
   }

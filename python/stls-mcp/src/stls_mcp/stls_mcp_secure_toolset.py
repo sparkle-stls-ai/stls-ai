@@ -37,12 +37,13 @@ Agent (not directly inside tools=[...]), exactly like yesterday's
 session_manager.get_adapter() but with an explicit await point on the
 caller's side instead of hidden inside the first call.
 
-If a real multi-toolset cache is needed in the future (several
-different MCP servers in the same process), stls-a2a's
-SecureSessionManager pattern applies identically here: a cache keyed by
-base_url, a lock against double handshakes. Not implemented in this
-first version because the current goal is a single toolset per test
-agent — see vault_agent_test.py.
+Multi-server caching: SecureToolsetManager (below) implements exactly
+the pattern this docstring used to defer — a cache keyed by base_url, a
+lock against double handshakes, same shape as stls-a2a's
+SecureSessionManager — built on stls-core's shared KeySessionResolver
+for the base/arqit_py path (pqc still does its own handshake here, via
+perform_pqc_client_handshake, exactly like SecureSessionManager's own
+PQC branch bypasses the resolver).
 
 Importing google-adk: lazy, inside STLSMCPToolset.__new__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -65,10 +66,13 @@ installed.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Callable, Optional
 
 import httpx
+
+from stls_core import KeySessionResolver
 
 from .stls_mcp_transport import (
     StlsHandshakeFailed,
@@ -83,6 +87,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "STLSMCPToolset",
     "create_stls_mcp_toolset",
+    "SecureToolsetManager",
 ]
 
 
@@ -179,6 +184,7 @@ async def create_stls_mcp_toolset(
     client_id: str,
     provider: str = "pqc",
     session_key: Optional[bytes] = None,
+    session_key_identifier: Optional[str] = None,
     stls_path: str = MCP_STLS_PATH,
     handshake_path: Optional[str] = None,
     timeout: float = 30.0,
@@ -202,6 +208,13 @@ async def create_stls_mcp_toolset(
                          side — see stls_core.KeySessionProviderFactory).
         session_key:    required if provider != "pqc". Ignored for "pqc"
                          (the key originates from the KEM handshake itself).
+        session_key_identifier: optional kid resolved alongside session_key
+                         (e.g. from the same KeySessionProvider call) —
+                         passed through as a hint so the server resolves
+                         THIS exact key directly for arqit_py, instead of a
+                         plain "next available" lookup (see
+                         HandshakeRequest.kid's docstring in
+                         stls_core_handshake.py). Ignored for "pqc"/"base".
         stls_path:      path of the encrypted endpoint (defaults to
                          stls_mcp_constants.MCP_STLS_PATH, "/mcp-stls").
         handshake_path: path of the handshake endpoint. Defaults to
@@ -254,6 +267,7 @@ async def create_stls_mcp_toolset(
             base_url,
             session_key,
             client_id=client_id,
+            kid=session_key_identifier,
             handshake_path=handshake_path or "/stls/handshake",
             httpx_client=handshake_httpx_client,
         )
@@ -293,3 +307,110 @@ async def create_stls_mcp_toolset(
         connection_params=connection_params,
         **toolset_kwargs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Multi-server cache — stls-a2a's SecureSessionManager pattern, ported
+# ---------------------------------------------------------------------------
+
+class SecureToolsetManager:
+    """
+    Cache of encrypted STLS MCP toolsets by base_url, with a lazy build
+    on first use — the stls-mcp analogue of stls-a2a's
+    SecureSessionManager. An asyncio.Lock per base_url prevents duplicate
+    concurrent handshakes/builds when multiple requests to the same
+    target start in parallel before the first toolset is ready.
+
+    A single instance should be shared across all agents/tools of a
+    process that talk to the same MCP servers — avoids one handshake per
+    caller toward the same server if several callers need it.
+
+    Args:
+        client_id:      identifier for the handshake (server-side
+                         audit/logging, not a secret) — forwarded to
+                         create_stls_mcp_toolset() for every target.
+        provider_name:  "pqc" (default — no pre-shared key required) |
+                         "base" | "arqit_py". For "base"/"arqit_py", the
+                         session key is resolved via stls-core's
+                         KeySessionResolver (shared with stls-a2a's
+                         SecureSessionManager) instead of a handshake.
+        arqit_client_configs: optional {base_url: config_path} map, used
+                         only when provider_name="arqit_py" — lets one
+                         process hold distinct Arqit device configs for
+                         different MCP servers, same mapping shape and
+                         same env-var fallback as
+                         SecureSessionManager(arqit_client_configs=...).
+        handshake_httpx_client: optional httpx client reused for pqc
+                         handshakes (not for application traffic, which
+                         goes through each toolset's own encrypted
+                         transport). If None, create_stls_mcp_toolset()
+                         builds one per handshake.
+    """
+
+    def __init__(
+        self,
+        *,
+        client_id: str = "stls-secure-mcp-client",
+        provider_name: str = "pqc",
+        arqit_client_configs: Optional[dict[str, str]] = None,
+        handshake_httpx_client: Optional[httpx.AsyncClient] = None,
+    ) -> None:
+        self.client_id = client_id
+        self._provider_name = provider_name.strip().lower()
+        self._resolver = KeySessionResolver(
+            provider_name=self._provider_name,
+            target_configs=arqit_client_configs,
+        )
+        self._handshake_httpx_client = handshake_httpx_client
+        self._toolsets: dict[str, STLSMCPToolset] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, base_url: str) -> asyncio.Lock:
+        lock = self._locks.get(base_url)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[base_url] = lock
+        return lock
+
+    async def get_toolset(self, base_url: str, **toolset_kwargs: Any) -> STLSMCPToolset:
+        """
+        Returns the cached toolset for base_url, building it (handshake
+        or key resolution, then create_stls_mcp_toolset()) on first use.
+        Extra kwargs (stls_path, headers, tool_filter, ...) are passed
+        through to create_stls_mcp_toolset() on a cache miss only — they
+        have no effect on an already-cached toolset.
+        """
+        toolset = self._toolsets.get(base_url)
+        if toolset is not None:
+            return toolset
+
+        async with self._lock_for(base_url):
+            toolset = self._toolsets.get(base_url)
+            if toolset is not None:
+                return toolset
+
+            if self._provider_name == "pqc":
+                toolset = await create_stls_mcp_toolset(
+                    base_url,
+                    client_id=self.client_id,
+                    provider="pqc",
+                    handshake_httpx_client=self._handshake_httpx_client,
+                    **toolset_kwargs,
+                )
+            else:
+                session_key_id, session_key_data = await self._resolver.resolve(base_url)
+                toolset = await create_stls_mcp_toolset(
+                    base_url,
+                    client_id=self.client_id,
+                    provider=self._provider_name,
+                    session_key=session_key_data,
+                    session_key_identifier=session_key_id,
+                    **toolset_kwargs,
+                )
+
+            self._toolsets[base_url] = toolset
+            return toolset
+
+    def invalidate(self, base_url: str) -> None:
+        """Removes the cached toolset: the next get_toolset() rebuilds it."""
+        self._toolsets.pop(base_url, None)

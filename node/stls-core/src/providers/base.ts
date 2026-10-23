@@ -23,8 +23,23 @@ export enum KeySessionProviderType {
  */
 export interface KeySessionProvider {
   getSessionType(): KeySessionProviderType;
-  /** May be asynchronous: on remote providers (e.g. Arqit via the sidecar) it waits for negotiation. */
-  getSessionKeyIdentifier(): Promise<string>;
+  /**
+   * May be asynchronous: on remote providers (e.g. Arqit via the
+   * sidecar) it waits for negotiation.
+   *
+   * hintKid: optional kid the caller already knows (e.g. the one a
+   * client resolved on its own side and sent along in its
+   * HandshakeRequest). Implementations that serve a single,
+   * unambiguous key (Base, PQC) ignore it. The Arqit sidecar provider
+   * uses it to resolve that EXACT already-delivered key directly
+   * instead of "whichever key arrived and hasn't been claimed yet" —
+   * needed because, on a long-running SERVER instance serving
+   * multiple concurrent handshakes, plain FIFO delivery order does
+   * not necessarily match the order handshake requests arrive in
+   * (same fix as stls_core_providers_arqit_py.py's own hint_kid, see
+   * its docstring for the full explanation).
+   */
+  getSessionKeyIdentifier(hintKid?: string): Promise<string>;
   /** Explicitly sets the kid (used for session-reuse scenarios). */
   setSessionKeyIdentifier(sessionKeyIdentifier: string): void;
   getSessionKeyData(sessionKeyIdentifier: string): Promise<Buffer>;
@@ -70,7 +85,7 @@ export class KeySessionProviderBase implements KeySessionProvider {
     return this.sessionType;
   }
 
-  async getSessionKeyIdentifier(): Promise<string> {
+  async getSessionKeyIdentifier(_hintKid?: string): Promise<string> {
     return this.kid;
   }
 

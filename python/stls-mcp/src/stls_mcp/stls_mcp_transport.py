@@ -46,6 +46,7 @@ async def perform_client_handshake(
     session_key: bytes,
     *,
     client_id: str,
+    kid: str | None = None,
     handshake_path: str = "/stls/handshake",
     httpx_client: httpx.AsyncClient | None = None,
 ) -> tuple[str, StlsTransport]:
@@ -62,6 +63,16 @@ async def perform_client_handshake(
                         HMAC proof.
         client_id:       client identifier, passed in the handshake request
                         (for server-side audit/logging purposes only).
+        kid:             optional kid the caller already resolved alongside
+                        session_key (e.g. via KeySessionProvider.getSessionKeyIdentifier()
+                        for arqit_py) — passed as a hint so the server
+                        resolves THIS exact key directly instead of a plain
+                        "next available" lookup, which is not safe once more
+                        than one handshake can be in flight concurrently
+                        against the same long-running server-side provider
+                        instance (see HandshakeRequest.kid's own docstring
+                        in stls_core_handshake.py). Leave unset for base
+                        (nothing to disambiguate) or when unavailable.
         handshake_path:  path of the handshake endpoint (default "/stls/handshake").
         httpx_client:    optional httpx client to reuse; if None, a
                         temporary one is created just for the handshake.
@@ -78,7 +89,7 @@ async def perform_client_handshake(
                              server doesn't hold the same key — possible
                              attack or misconfiguration).
     """
-    request = HandshakeRequest.generate(client_id=client_id)
+    request = HandshakeRequest.generate(client_id=client_id, kid=kid)
     url = base_url.rstrip("/") + handshake_path
 
     owns_client = httpx_client is None

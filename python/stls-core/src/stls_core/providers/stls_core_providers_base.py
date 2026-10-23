@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 import logging
 logger = logging.getLogger(__name__)
@@ -46,12 +46,24 @@ class KeySessionProvider(ABC):
         pass
 
     @abstractmethod
-    async def getSessionKeyIdentifier(self) -> str:
+    async def getSessionKeyIdentifier(self, hint_kid: Optional[str] = None) -> str:
         """
         Returns the key identifier (kid) of the current session.
 
         May be asynchronous: on ArqitPy it waits for the peering
         process to produce at least one key before returning the kid.
+
+        hint_kid: optional kid the caller already knows (e.g. the
+        kid a client resolved on its own side and sent along in its
+        HandshakeRequest). Implementations that serve a single,
+        unambiguous key (Base, PQC) ignore it. ArqitPy uses it to
+        resolve that EXACT already-delivered key directly instead of
+        "whichever key arrived and hasn't been claimed yet" — needed
+        because, on a long-running SERVER instance serving multiple
+        concurrent handshakes, plain FIFO delivery order does not
+        necessarily match the order handshake requests arrive in (see
+        stls_core_providers_arqit_py.py's own docstring for the full
+        explanation and the real failure this fixes).
         """
         pass
 
@@ -184,7 +196,7 @@ class KeySessionProviderBase(KeySessionProvider):
     def getSessionType(self) -> KeySessionProvider.KeySessionProviderType:
         return self._session_type
 
-    async def getSessionKeyIdentifier(self) -> str:
+    async def getSessionKeyIdentifier(self, hint_kid: Optional[str] = None) -> str:
         return self._kid
 
     def setSessionKeyIdentifier(self, session_key_identifier: str) -> None:

@@ -511,6 +511,22 @@ https://<random-name>.trycloudflare.com/mcp
   path on the client side in this version.
 - **E2E tests with a real `arqit_py` provider** not included in this
   package — requires the real Arqit SKA-Platform™ environment.
+- **Concurrent `arqit_py` handshakes against one long-running server
+  — fixed (2026-10-23).** `perform_handshake()` used to resolve the
+  server's kid via plain FIFO ("next available, not yet claimed"),
+  with no correlation to which specific incoming request it was for —
+  safe only when handshakes never overlap in time. Concurrent
+  sessions (`asyncio.gather`/`Promise.all` from several clients, or
+  several devices, against the same server) could get cross-wired:
+  one client's proof-of-possession check validated against a
+  *different* client's key. Fixed by having the client send its own
+  already-resolved kid as a hint (`HandshakeRequest.kid`, optional,
+  `stls_core_handshake.py`) so `arqit_py` can resolve that exact key
+  directly instead of guessing by arrival order — `base`/`pqc` ignore
+  the hint (nothing to disambiguate for `base`; `pqc` doesn't use this
+  endpoint). See `python/stls-core/sidecar/ARQIT_PEERING_NOTES.md`'s
+  "DeviceMetadata singleton race" follow-up for the full chain of
+  fixes this was found alongside.
 
 ## Testing
 

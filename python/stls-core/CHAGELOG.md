@@ -31,9 +31,74 @@ suite pass unchanged.
   `SecureSessionManager(arqit_client_configs=...)` to hold several
   `arqit_py` device configs in one process. Validated against the real
   Arqit cloud for sequential use (one device's session fully
-  negotiated before the next starts); see `README.md`'s `arqit_py —
-  SERVER and CLIENT must run in separate OS processes` section for the
-  related, still-open question about concurrent use.
+  negotiated before the next starts).
+
+### Fixed (follow-up, 2026-10-23, continued — concurrent `arqit_py` use)
+
+The "concurrent use" question left open immediately above is now
+closed: concurrent/parallel `arqit_py` sessions (same device or
+different devices, same process) are safe to call, not just untested.
+Two distinct, real bugs were found and fixed, both confirmed by direct
+reproduction against the real Arqit cloud (see
+`python/stls-a2a/README.md`'s "Current Limitations and Notes" and
+`sidecar/ARQIT_PEERING_NOTES.md` for the full investigation writeups):
+
+- **`DeviceMetadata`/`AuthenticationClient` singleton race in the Arqit
+  SDK — deadlock under concurrent `start()` calls.** The Arqit SDK's
+  `DeviceMetadata` is a process-wide singleton and
+  `AuthenticationClient.__mutex` is a class-level lock shared by every
+  instance in the process, with no `try`/`finally` around the critical
+  section it guards — an unrelated exception during one `start()`
+  call's critical section leaks that lock permanently, deadlocking
+  every subsequent `start()` call in the process forever. **Fixed**:
+  new module-level `_ARQIT_PY_START_LOCK` (`threading.Lock`) in
+  `providers/stls_core_providers_arqit_py.py` serializes
+  `KeyProviderClientArqitPy.start()`/`KeyProviderServerArqitPy.start()`
+  process-wide, across *all* devices (not just the same one, since
+  `DeviceMetadata` is one global singleton regardless of which
+  device's config is passed). Client-side, the lock is held through
+  the *entire* negotiation (joins the negotiation thread, capped at
+  30s) — serializing only authentication wasn't sufficient on its own,
+  since letting a second session authenticate while a first session's
+  negotiation was still connecting broke the socket bilocation
+  handshake outright (`ConnectionRefusedError`/`PeerUnableToConnectException`).
+  This makes `arqit_py` session establishment fully serial
+  process-wide (a throughput cost, not a correctness one) until Arqit
+  fixes their own SDK's locking.
+- **`KeySessionProviderArqitPy.getSessionKeyIdentifier()`: unprotected
+  `_delivered_key_ids` mutation, plus a plain-FIFO resolution that
+  assumes handshake requests arrive in the same order their
+  negotiations completed.** On a long-running SERVER-role instance
+  shared by every incoming handshake for the process's lifetime,
+  concurrent handshakes now genuinely race (only possible *after* the
+  fix above stopped them from deadlocking first). Two fixes:
+  1. a new `self._key_lock` (`asyncio.Lock`) serializes the
+     wait-then-claim-then-add sequence per instance, closing a data
+     race on the `_delivered_key_ids` set itself.
+  2. **New optional `hint_kid` parameter on `getSessionKeyIdentifier()`**
+     (also added to the `KeySessionProvider` ABC and to `Base`/`PQC`,
+     which both just ignore it) — when given, resolves that EXACT
+     already-delivered key directly (polls `key_store.get(hint_kid)`)
+     instead of "whichever key arrived and hasn't been claimed yet",
+     which has no way to stay correct once multiple negotiations can
+     finish before their matching handshake request is processed.
+     `stls_core_handshake.py`'s `HandshakeRequest` gained a matching
+     optional `kid` field, populated by the client with its own
+     already-resolved kid and passed through by `perform_handshake()`
+     as the hint. Purely additive, not a trust boundary: the HMAC
+     proof-of-possession check still enforces actual key possession
+     regardless of which kid the server looked up by.
+
+Also found, in the course of building the reproduction above: an
+ordering bug in the first version of the `_ARQIT_PY_START_LOCK` fix
+itself — building the session object (which snapshots
+`key_store.startup_seen_keys()`) *after* joining the negotiation
+thread wrongly absorbed that same negotiation's own freshly-delivered
+keys as "already seen" (only visible with a Redis-backed key store;
+the in-memory store has no persistence to snapshot anything stale
+from). Fixed by moving that construction *before* starting the
+negotiation thread, restoring the original snapshot timing while
+keeping the full-negotiation lock scope.
 
 ### Changed (follow-up, 2026-10-19)
 

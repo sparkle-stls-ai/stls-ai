@@ -20,13 +20,15 @@ key/session robustness under concurrency, not SSE plumbing.
 
 ## Prerequisites
 
-Same as the server side (see
-[`samples/server/10_server_ms/README.md`](../../server/10_server_ms/README.md#prerequisites))
-— `stls_core`/`stls_a2a` with the `arqit_client_configs` feature,
-`python-dotenv`, and for `arqit_py` the Arqit wheels. Both servers
-(`server_ms_1`, `server_ms_2`) must already be running for
-`client_multi_server.py`; only the one server you're targeting needs to
-be running for `client_multi_session.py`.
+Same as the server side — see
+[`samples/server/10_server_ms/README.md`](../../server/10_server_ms/README.md#prerequisites)
+for the full, step-by-step **shared root venv** setup (`stls-ai/.venv`,
+editable installs of `stls_core`+`stls_a2a`+`stls_mcp`, the
+`[arqit_py]` extra, `google-adk`) — use that same venv's `python` for
+every command below, not a bare `python`. Both servers (`server_ms_1`,
+`server_ms_2`) must already be running for `client_multi_server.py`;
+only the one server you're targeting needs to be running for
+`client_multi_session.py`.
 
 Copy `.env.example` to `.env` in this directory (and in each
 `server_ms_N/`) and fill in `GOOGLE_API_KEY` — the example files ship
@@ -93,11 +95,12 @@ KEY_PROVIDER_NAME=arqit_py python client_multi_server.py
 KEY_PROVIDER_NAME=arqit_py python client_multi_session.py
 ```
 
-If your installed `stls_core`/`stls_a2a` packages predate the
-`arqit_client_configs` feature, prefix every command above with:
-```bash
-export PYTHONPATH=/path/to/stls-ai/python/stls-core/src:/path/to/stls-ai/python/stls-a2a/src
-```
+If a command above fails with `TypeError: ... unexpected keyword argument
+'arqit_client_configs'` or `ImportError: cannot import name
+'KeySessionResolver'`, the venv you're using has a stale/non-editable
+`stls_core`/`stls_a2a` — see the verification step in
+[`10_server_ms`'s README](../../server/10_server_ms/README.md#prerequisites)
+and redo the relevant `uv pip install -e` step there.
 
 ## Expected output per provider
 
@@ -125,7 +128,7 @@ to confirm the fix didn't regress anything.
 | | `base` | `pqc` | `arqit_py` |
 |---|---|---|---|
 | `client_multi_server.py` | PASS | PASS | PASS |
-| `client_multi_session.py` | PASS (expected kid/key collisions) | PASS | PASS (8 concurrent real sessions, same device) |
+| `client_multi_session.py` | PASS (expected kid/key collisions) | PASS | ran without error (8 "concurrent" sessions) — but see the note below, this did not actually test concurrent access |
 | `client_agent_multi_server.py` | session/transport PASS, final answer blocked by API quota | session/transport PASS, final answer blocked by API quota | session/transport PASS, final answer blocked by API quota |
 
 `client_agent_multi_server.py` confirms `ContextualSecureRemoteA2aAgent`
@@ -161,21 +164,42 @@ the whole script, matching the other two scripts' behavior.
   otherwise), see `python/stls-core/README.md` and
   `sidecar/ARQIT_PEERING_NOTES.md`. Not an issue here: servers and
   client are always separate processes.
-- **`client_multi_server.py`'s multi-device-per-process use has only
-  been validated sequentially** (one device's full session setup
-  completing before the next one starts — exactly what
+- **`client_multi_server.py`'s multi-device-per-process use was
+  originally only validated sequentially** (one device's full session
+  setup completing before the next one starts — exactly what
   `SecureSessionManager`'s internal loop does). The Arqit SDK's
   `uk.arqit.device.common.device_metadata.DeviceMetadata` is a
   process-wide singleton whose `.config` is silently overwritten on
-  every call, with no guard against two different device identities
-  racing each other. Don't parallelize (`asyncio.gather`) different
-  `arqit_py` client configs in the same process without first checking
-  that risk — see the `arqit_py` section of
+  every call; concurrent `arqit_py` client configs in the same process
+  used to risk racing each other. **This is now fixed**: a
+  process-wide serialization lock in `stls_core_providers_arqit_py.py`
+  makes concurrent use safe (if fully serial under the hood) rather
+  than merely untested — see the `arqit_py` section of
   `python/stls-a2a/README.md`'s "Current Limitations and Notes".
-- **`client_multi_session.py`'s concurrency (same device, many
-  sessions) is the architecture-intended case** and is unaffected by
-  the above: it's explicitly designed for in
-  `stls_core_providers_arqit_py.py`'s "1:1 architecture (Option A)"
-  docstring, and has now been validated with 8 simultaneous real
-  sessions against the real cloud with zero errors and zero kid
-  collisions.
+- **`client_multi_session.py`'s "8 simultaneous real sessions, zero
+  errors" result below was weaker evidence than it looked, at the
+  time.** `KeyProviderClientArqitPy.start()` is a plain, blocking,
+  synchronous method with no `await` inside it — called directly from
+  a coroutine passed to `asyncio.gather()` (as this script does),
+  Python's cooperative scheduler ran it to completion before ever
+  switching to the next coroutine, so the `DeviceMetadata.get_instance()`
+  calls inside it never actually overlapped in time; `asyncio.gather()`
+  here serialized exactly the part that mattered, for free, without
+  anyone asking it to. A **real** OS-thread race at that call site was
+  first exercised via the Node sidecar path (`arqit_sidecar.py`
+  dispatches each RPC call through `loop.run_in_executor()`, a genuine
+  thread per connection), where it failed — then root-caused and fixed
+  with a direct, controlled, real-cloud reproduction in pure Python
+  (`python/stls-core/tests/test_arqit_py_same_device_concurrent_real.py`,
+  using `asyncio.to_thread()` for genuine concurrency): Arqit SDK's
+  `DeviceMetadata`/`AuthenticationClient.__mutex` singletons have no
+  protection against concurrent `start()` calls and no `try`/`finally`
+  around the critical section that can leak the lock forever on an
+  unrelated exception. Fixed with a process-wide `threading.Lock`
+  serializing `start()` (full negotiation included, not just
+  authentication) — confirmed by re-running the same reproduction:
+  3 concurrent same-device sessions that used to deadlock forever now
+  complete in ~5s with 3/3 distinct keys. See
+  `samples/server/12_server_mcp_ms/README.md` and
+  `python/stls-a2a/README.md`'s "Current Limitations and Notes" for the
+  full write-up.

@@ -164,11 +164,13 @@ accept `options["config_path"]`, taking priority over the env var — a
 caller holding several device configs (e.g. `stls-a2a`'s
 `SecureSessionManager(arqit_client_configs={...})`) can pass a different
 one per call instead of being limited to the single process-wide env var.
-This is wired at the API level but not yet validated end-to-end against
-the real Arqit SDK for N *different* client identities in one process —
-see the "1 client → N servers" note in
+Validated end-to-end against the real Arqit SDK for N *different*
+client identities in one process, both sequentially and under genuine
+concurrency (`asyncio.gather`/real OS threads) — see the `arqit_py`
+section of
 [`stls-a2a/README.md`](../stls-a2a/README.md#current-limitations-and-notes)
-for the tracked open point on fixing this via the agent card.
+for the full write-up, including the process-wide serialization lock
+this required inside the provider itself to make concurrent use safe.
 
 ## Configuration
 
