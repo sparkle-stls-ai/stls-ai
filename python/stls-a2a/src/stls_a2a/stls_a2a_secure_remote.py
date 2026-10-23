@@ -63,12 +63,16 @@ on the abstract KeySessionProvider, so they're simply awaited here — no
 resolve_if_awaitable(), which internally calls asyncio.run() and would
 break inside this already-running event loop). base returns a fixed key
 instantly; arqit_py waits on real device peering (realm auth plus
-bilocation/P2P key agreement in a background thread) and needs
-ARQIT_PY_CLIENT_CONFIG pointing at a pre-provisioned device identity for
-the specific counterpart — the host/port passed to
-get_session_provider() are accepted for API uniformity but not actually
-used by arqit_py (see stls_core_providers_arqit_py.py): the peer address
-comes from that config file, not from the agent card.
+bilocation/P2P key agreement in a background thread) and needs a
+pre-provisioned device identity for the specific counterpart — the
+host/port passed to get_session_provider() are accepted for API
+uniformity but not actually used by arqit_py (see
+stls_core_providers_arqit_py.py): the peer address comes from that
+config file, not from the agent card. By default the config path is
+ARQIT_PY_CLIENT_CONFIG (one for the whole process); SecureSessionManager's
+arqit_client_configs= constructor argument can override it per base_url,
+for a process that talks to several different arqit_py-secured
+counterparts through one shared manager.
 
 Dependency on ADK
 ~~~~~~~~~~~~~~~~~~
@@ -210,6 +214,21 @@ class SecureSessionManager:
                          behavior for existing callers whose environment
                          happens to set it for unrelated reasons (e.g.
                          their own server-side secure-a2a endpoint).
+        arqit_client_configs: optional static {base_url: config_path} map,
+                         used only when provider_name="arqit_py". Lets one
+                         process hold distinct Arqit device configs for
+                         different remote counterparts — each entry is
+                         passed as options["config_path"] to
+                         KeyProviderArqitPy.create_provider_client(),
+                         overriding ARQIT_PY_CLIENT_CONFIG for that
+                         base_url only. A base_url with no entry here (or
+                         this argument left as None) falls back to
+                         ARQIT_PY_CLIENT_CONFIG exactly as before this
+                         option existed — no behavior change for existing
+                         callers. Resolved entirely client-side; never
+                         derived from the remote agent's card (see
+                         "Current Limitations and Notes" in README.md for
+                         why that direction was rejected).
     """
 
     def __init__(
@@ -219,10 +238,12 @@ class SecureSessionManager:
         httpx_client: Optional[httpx.AsyncClient] = None,
         handshake_path: str = "/stls/pqc/handshake",
         provider_name: str = "pqc",
+        arqit_client_configs: Optional[dict[str, str]] = None,
     ) -> None:
         self.client_id = client_id
         self._handshake_path = handshake_path
         self._provider_name = provider_name.strip().lower()
+        self._arqit_client_configs = arqit_client_configs or {}
         self._owns_http = httpx_client is None
         self._http = httpx_client or httpx.AsyncClient()
         self._sessions: dict[str, SecureA2ATransportAdapter] = {}
@@ -317,18 +338,31 @@ class SecureSessionManager:
         uniformity but, per provider, may not affect where the session
         actually comes from (arqit_py's peer address is in its config
         file, not derived from base_url) — see the module docstring.
+
+        For arqit_py, options["config_path"] is set from
+        arqit_client_configs[base_url] when that base_url has an entry,
+        overriding ARQIT_PY_CLIENT_CONFIG for this session only; absent an
+        entry (or for any other provider), options stays empty and
+        KeyProviderArqitPy falls back to the env var as before.
         """
         host = os.getenv("KEY_SESSION_HOST", "localhost")
         port = int(os.getenv("KEY_SESSION_PORT", "8081"))
+        options: dict[str, Any] = {}
+        if self._provider_name == "arqit_py":
+            config_path = self._arqit_client_configs.get(base_url)
+            if config_path:
+                options["config_path"] = config_path
         logger.info(
-            "SecureSessionManager: resolving %s session for %s (KeySessionProvider host=%s port=%s)",
+            "SecureSessionManager: resolving %s session for %s (KeySessionProvider host=%s port=%s%s)",
             self._provider_name, base_url, host, port,
+            f", config_path={options['config_path']}" if "config_path" in options else "",
         )
         provider = KeySessionProviderFactory().get_session_provider(
             session_type=KeySessionProvider.KeySessionProviderType.CLIENT,
             host=host,
             port=port,
             name=self._provider_name,
+            options=options,
         )
         session_key_identifier = await provider.getSessionKeyIdentifier()
         session_key_data = await provider.getSessionKeyData(session_key_identifier)

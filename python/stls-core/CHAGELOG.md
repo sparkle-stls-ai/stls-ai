@@ -15,6 +15,26 @@ No wire-format or public API changes; all 250 unit/e2e tests (+ 80 PQC
 tests with real `liboqs`) and the full Node↔Python interoperability
 suite pass unchanged.
 
+### Added (follow-up, 2026-10-23)
+
+- **`KeyProviderArqitPy.create_provider_client()`/`create_provider_server()`
+  now accept an `options["config_path"]` override**, taking priority
+  over `ARQIT_PY_CLIENT_CONFIG`/`ARQIT_PY_SERVER_CONFIG` when present.
+  Previously the device config path was read only from the process
+  environment, so a single process could only ever use one `arqit_py`
+  device identity for its whole lifetime. No change to the shared
+  `KeyProvider` ABC signature (`options: dict` already existed there).
+- **`KeySessionProviderFactory.get_session_provider()` gained an
+  `options` parameter**, passed straight through to
+  `create_provider_client()`/`create_provider_server()` (previously
+  always called with `options={}`). Enables callers like `stls-a2a`'s
+  `SecureSessionManager(arqit_client_configs=...)` to hold several
+  `arqit_py` device configs in one process. Validated against the real
+  Arqit cloud for sequential use (one device's session fully
+  negotiated before the next starts); see `README.md`'s `arqit_py —
+  SERVER and CLIENT must run in separate OS processes` section for the
+  related, still-open question about concurrent use.
+
 ### Changed (follow-up, 2026-10-19)
 
 - **Finished translating docstrings, comments and log/error strings from

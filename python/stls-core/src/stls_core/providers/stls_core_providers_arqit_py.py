@@ -11,6 +11,13 @@ Environment variables:
     ARQIT_PY_SERVER_CONFIG  → path to the server (receiver) JSON config
     ARQIT_PY_TRANSPORT      → "socket" (default) | "mqtt"
 
+create_provider_client()/create_provider_server() also accept an
+options["config_path"] override, taking priority over the env var above
+when present — lets a single process hold several KeyProviderArqitPy
+clients against different device configs (see SecureSessionManager's
+arqit_client_configs= in stls_a2a_secure_remote.py), instead of being
+limited to the one config the whole process's environment points at.
+
 1:1 architecture (Option A):
     Each STLS session has its own KeyProviderClient/Server and its own
     ArqitKeyStoreBase. create_provider_client() is called once per
@@ -481,10 +488,11 @@ class KeyProviderArqitPy(KeyProvider):
     def create_provider_client(
         self, host: str, port: int, options: dict
     ) -> KeyProviderClient:
-        config_path = os.getenv("ARQIT_PY_CLIENT_CONFIG")
+        config_path = options.get("config_path") or os.getenv("ARQIT_PY_CLIENT_CONFIG")
         if not config_path:
             raise ValueError(
-                "[KeyProviderArqitPy] ARQIT_PY_CLIENT_CONFIG not set"
+                "[KeyProviderArqitPy] no config_path in options and "
+                "ARQIT_PY_CLIENT_CONFIG not set"
             )
         logger.info(
             "[KeyProviderArqitPy] create_provider_client config=%s", config_path
@@ -496,10 +504,11 @@ class KeyProviderArqitPy(KeyProvider):
     def create_provider_server(
         self, port: int, options: dict
     ) -> KeyProviderServer:
-        config_path = os.getenv("ARQIT_PY_SERVER_CONFIG")
+        config_path = options.get("config_path") or os.getenv("ARQIT_PY_SERVER_CONFIG")
         if not config_path:
             raise ValueError(
-                "[KeyProviderArqitPy] ARQIT_PY_SERVER_CONFIG not set"
+                "[KeyProviderArqitPy] no config_path in options and "
+                "ARQIT_PY_SERVER_CONFIG not set"
             )
         logger.info(
             "[KeyProviderArqitPy] create_provider_server config=%s", config_path

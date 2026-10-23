@@ -382,10 +382,11 @@ def build_api_key_manager() -> "ApiKeyManager | None":
 # ---------------------------------------------------------------------------
 
 # Reads KEY_PROVIDER_NAME from the environment ("base" or "arqit_py").
-# With arqit_py, KEY_SESSION_PORT determines the port the SERVER
-# provider listens on for peering with the client (see
-# ARQIT_PY_SERVER_CONFIG/ARQIT_PY_CLIENT_CONFIG in .env for the
-# SKA-Platform™ configuration).
+# KEY_SESSION_PORT only applies to "base"; with arqit_py it is accepted
+# for API uniformity but ignored by KeyProviderArqitPy.create_provider_server()
+# — the real listening port comes from SOCKET_LISTENING_PORT inside the
+# ARQIT_PY_SERVER_CONFIG JSON (see ARQIT_PY_SERVER_CONFIG/ARQIT_PY_CLIENT_CONFIG
+# in .env for the SKA-Platform™ configuration).
 _key_session_port = int(os.getenv("KEY_SESSION_PORT", "8091"))
 provider = KeySessionProviderFactory().get_session_provider(
     session_type=KeySessionProvider.KeySessionProviderType.SERVER,

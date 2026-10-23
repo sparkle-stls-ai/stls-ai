@@ -142,6 +142,34 @@ already provisioned Arqit device pair (`ARQIT_PY_CLIENT_CONFIG`/
 `ARQIT_PY_SERVER_CONFIG` pointing at existing config files) and skips
 automatically otherwise — it does not run in CI.
 
+**`KEY_SESSION_PORT`/`KEY_SESSION_HOST` are ignored by `arqit_py`.**
+`KeyProviderArqitPy.create_provider_client(host, port, options)` and
+`create_provider_server(port, options)` accept these arguments for API
+uniformity with the other providers (`base`, `pqc`) but never read them —
+see `providers/stls_core_providers_arqit_py.py`. The real peer
+address/port always comes from the JSON pointed at by
+`ARQIT_PY_CLIENT_CONFIG`/`ARQIT_PY_SERVER_CONFIG`
+(`SOCKET_RECEIVER_IP_ADDRESS`/`PORT` on the client side,
+`SOCKET_LISTENING_PORT` on the server side). `ARQIT_PY_TRANSPORT`
+(`"socket"` default | `"mqtt"`) is symmetric — read the same way on both
+sides via `_get_transport()` — and must agree between client and server
+and with the matching `SOCKET_*`/`MQTT_*` fields in their configs.
+
+One `ARQIT_PY_SERVER_CONFIG` is enough for a server that peers with many
+different clients (one device identity, many incoming peerings). The
+client side used to be the opposite by construction: `ARQIT_PY_CLIENT_CONFIG`
+is one device/peer config per process, with no way to override it per
+call. `create_provider_client()`/`create_provider_server()` now also
+accept `options["config_path"]`, taking priority over the env var — a
+caller holding several device configs (e.g. `stls-a2a`'s
+`SecureSessionManager(arqit_client_configs={...})`) can pass a different
+one per call instead of being limited to the single process-wide env var.
+This is wired at the API level but not yet validated end-to-end against
+the real Arqit SDK for N *different* client identities in one process —
+see the "1 client → N servers" note in
+[`stls-a2a/README.md`](../stls-a2a/README.md#current-limitations-and-notes)
+for the tracked open point on fixing this via the agent card.
+
 ## Configuration
 
 Copy `.env.example` to `.env` and adjust the values. Main variables:

@@ -7,7 +7,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [0.1.5] — 2026-10-23
 
 ### Added
 
@@ -20,6 +20,26 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   event loop this class operates in) instead of the PQC-specific
   `/stls/pqc/handshake` round trip. Default stays `pqc`; no behavior
   change for existing callers that don't pass `provider_name=`.
+
+- **`SecureSessionManager(arqit_client_configs={base_url: config_path})`**
+  — lets one client process hold distinct `arqit_py` device identities
+  for different remote counterparts, instead of being limited to the
+  single device/config the whole process's `ARQIT_PY_CLIENT_CONFIG` env
+  var pointed at. Resolved per `base_url` in
+  `_resolve_via_key_session_provider()` and passed down as
+  `options={"config_path": ...}` to the new `stls_core`
+  `KeySessionProviderFactory.get_session_provider(options=...)`
+  parameter; falls back to the env var when no entry matches a given
+  `base_url` (or the argument is omitted), so existing callers are
+  unaffected. Works identically with `ContextualSecureRemoteA2aAgent`
+  by sharing one `SecureSessionManager` across its sub-agents (no
+  `stls_a2a` code change was needed for that case). Validated
+  end-to-end against the real Arqit cloud for the sequential-use case
+  (one device's session fully set up before the next starts — see
+  `samples/client/10_client_ms/` and its README for the reproducible
+  test matrix); concurrent/parallel use of several `arqit_py` configs
+  in one process is still unvalidated, see the `arqit_py` section of
+  `README.md`'s "Current Limitations and Notes".
 
 ### Changed
 

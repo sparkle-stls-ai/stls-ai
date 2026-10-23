@@ -160,6 +160,7 @@ class KeySessionProviderFactory:
         host: Optional[str] = None,
         port: Optional[int] = None,
         name: Optional[str] = None,
+        options: Optional[dict[str, Any]] = None,
     ) -> KeySessionProvider:
         """
         Creates and starts the KeySessionProvider.
@@ -169,6 +170,10 @@ class KeySessionProviderFactory:
             host:         Server host (CLIENT only).
             port:         Provider port (both CLIENT and SERVER).
             name:         Provider name override. If None, reads KEY_PROVIDER_NAME.
+            options:      Provider-specific overrides passed straight through to
+                          create_provider_client/server (e.g. arqit_py's
+                          "config_path", which overrides ARQIT_PY_CLIENT_CONFIG/
+                          ARQIT_PY_SERVER_CONFIG for this call only). Defaults to {}.
 
         Returns:
             KeySessionProvider, started and ready for getSessionKeyIdentifier().
@@ -185,10 +190,11 @@ class KeySessionProviderFactory:
             )
 
         key_provider: KeyProvider = KeyProviderFactory().get_provider(provider_name)
+        resolved_options = options or {}
 
         if session_type == KeySessionProvider.KeySessionProviderType.SERVER:
             server = key_provider.create_provider_server(
-                port=port, options={}
+                port=port, options=resolved_options
             )
             # start() can be sync or async depending on the provider
             result = server.start()
@@ -198,7 +204,7 @@ class KeySessionProviderFactory:
             return server.createProviderSession()
         else:
             client = key_provider.create_provider_client(
-                host=host or "", port=port or 0, options={}
+                host=host or "", port=port or 0, options=resolved_options
             )
             client.start()
             return client.createProviderSession()
