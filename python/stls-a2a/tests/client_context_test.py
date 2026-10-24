@@ -1,22 +1,22 @@
 """
 client_context_test.py
 -----------------------
-Client di test per la verifica della propagazione del contesto utente.
+Test client for verifying user context propagation.
 
-Chiama agente A in due modalità:
-  1. Via canale cifrato STLS  (SecureA2ATransportAdapter)
-  2. Via canale plain A2A     (httpx JSON-RPC standard)
+Calls agent A in two modes:
+  1. Via the encrypted STLS channel  (SecureA2ATransportAdapter)
+  2. Via the plain A2A channel       (standard httpx JSON-RPC)
 
-In entrambi i casi verifica che agent_b abbia ricevuto user_id e profile
-propagati da A tramite ContextualRemoteA2aAgent.
+In both cases, verifies that agent_b received the user_id and profile
+propagated by A via ContextualRemoteA2aAgent.
 
-Avvio (dopo aver avviato server B e server A):
+Startup (after starting server B and server A):
   python client_context_test.py
 
-Variabili d'ambiente:
-  BASE_URL_A    URL del server A (default: http://localhost:8001)
-  API_KEY_A     API key per chiamare A (default: test-key-agent-a)
-  KEY_PROVIDER_NAME  Provider chiavi STLS (default: base)
+Environment variables:
+  BASE_URL_A    URL of server A (default: http://localhost:8001)
+  API_KEY_A     API key to call A (default: test-key-agent-a)
+  KEY_PROVIDER_NAME  STLS key provider (default: base)
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Configurazione ────────────────────────────────────────────────────────────
+# ── Configuration ──────────────────────────────────────────────────────────────
 
 import os
 
@@ -54,7 +54,7 @@ API_KEY_A   = os.getenv("API_KEY_A",   "test-key-agent-a")
 AGENT_A_SECURE_PATH = "/agents/agent-a"           # → /agents/agent-a/secure-a2a
 AGENT_A_PLAIN_PATH  = "/agents/agent-a/a2a"       # plain endpoint
 
-# Contesto utente da propagare ad agent_b
+# User context to propagate to agent_b
 TEST_USER_ID = "mario.rossi@example.com"
 TEST_PROFILE = {"tenant": "tim-sparkle", "role": "admin", "department": "IT"}
 
@@ -95,14 +95,14 @@ def _info(label: str, detail: str = "") -> None:
 
 def _extract_context_from_response(response: dict) -> tuple[str, Any]:
     """
-    Estrae user_id e profile dalla risposta di agent_b.
-    agent_b risponde con un JSON come testo, es.:
+    Extracts user_id and profile from agent_b's response.
+    agent_b replies with JSON as text, e.g.:
       {"user_id": "mario.rossi@example.com", "profile": {"tenant": "..."}}
     """
     text = extract_a2a_text(response) or ""
     try:
-        # Prova a parsare il JSON nella risposta
-        # agent_b potrebbe avvolgere il JSON in testo libero
+        # Try to parse the JSON in the response
+        # agent_b might wrap the JSON in free text
         start = text.find("{")
         end   = text.rfind("}") + 1
         if start >= 0 and end > start:
@@ -118,19 +118,19 @@ def _verify_context(
     user_id_received: str,
     profile_received: Any,
 ) -> bool:
-    """Verifica che user_id e profile ricevuti corrispondano a quelli inviati."""
+    """Verifies that the received user_id and profile match what was sent."""
     ok = True
 
     if user_id_received == TEST_USER_ID:
-        _ok(f"{label} — user_id propagato", user_id_received)
+        _ok(f"{label} — user_id propagated", user_id_received)
     else:
         _fail(
-            f"{label} — user_id NON propagato",
-            f"atteso={TEST_USER_ID!r}  ricevuto={user_id_received!r}",
+            f"{label} — user_id NOT propagated",
+            f"expected={TEST_USER_ID!r}  received={user_id_received!r}",
         )
         ok = False
 
-    # Il tool restituisce profile come JSON string — prova a parsarlo
+    # The tool returns profile as a JSON string — try to parse it
     if isinstance(profile_received, str):
         try:
             import json as _json
@@ -142,33 +142,33 @@ def _verify_context(
         tenant_ok = profile_received.get("tenant") == TEST_PROFILE["tenant"]
         role_ok   = profile_received.get("role")   == TEST_PROFILE["role"]
         if tenant_ok and role_ok:
-            _ok(f"{label} — profile propagato", str(profile_received))
+            _ok(f"{label} — profile propagated", str(profile_received))
         else:
             _fail(
-                f"{label} — profile parziale o errato",
-                f"atteso={TEST_PROFILE}  ricevuto={profile_received}",
+                f"{label} — profile partial or wrong",
+                f"expected={TEST_PROFILE}  received={profile_received}",
             )
             ok = False
     elif str(profile_received).strip() in ("", "not set", "null", "None"):
-        _fail(f"{label} — profile NON propagato", f"ricevuto={profile_received!r}")
+        _fail(f"{label} — profile NOT propagated", f"received={profile_received!r}")
         ok = False
     else:
-        _info(f"{label} — profile ricevuto (non dict)", str(profile_received)[:120])
+        _info(f"{label} — profile received (not a dict)", str(profile_received)[:120])
 
     return ok
 
 
-# ── Test 1: canale cifrato STLS ───────────────────────────────────────────────
+# ── Test 1: encrypted STLS channel ─────────────────────────────────────────────
 
 async def test_secure_channel() -> bool:
     """
-    Test 1 — Canale cifrato STLS (SecureA2ATransportAdapter).
+    Test 1 — Encrypted STLS channel (SecureA2ATransportAdapter).
 
-    Invia la richiesta ad A con user_id e profile in message.metadata.
-    A propaga il contesto a B tramite ContextualRemoteA2aAgent.
-    Verifica che B risponda con i valori corretti.
+    Sends the request to A with user_id and profile in message.metadata.
+    A propagates the context to B via ContextualRemoteA2aAgent.
+    Verifies that B responds with the correct values.
     """
-    print("\n── Test 1: Canale cifrato STLS ──────────────────────────────────────")
+    print("\n── Test 1: Encrypted STLS channel ───────────────────────────────────")
 
     adapter = SecureA2ATransportAdapter(
         session_key=session_key_data,
@@ -189,8 +189,8 @@ async def test_secure_channel() -> bool:
             "message": {
                 "role": "user",
                 "parts": [{"type": "text", "text": "diagnose context"}],
-                # user_id e profile inviati in message.metadata
-                # (sorgente priorità 1 lato server STLS)
+                # user_id and profile sent in message.metadata
+                # (priority-1 source on the STLS server side)
                 "metadata": {
                     "user_id": TEST_USER_ID,
                     "profile": TEST_PROFILE,
@@ -200,36 +200,36 @@ async def test_secure_channel() -> bool:
         "id": 1,
     }
 
-    print(f"  📤 Invio a agent_a (cifrato) con user_id={TEST_USER_ID!r}")
+    print(f"  📤 Sending to agent_a (encrypted) with user_id={TEST_USER_ID!r}")
     try:
         response = await adapter.send_secure_message(message, stream=False)
         result, err = extract_a2a_result(response)
         if err:
-            _fail("Errore nella risposta", str(err))
+            _fail("Error in response", str(err))
             return False
 
         text = extract_a2a_text(response) or ""
-        print(f"  📥 Risposta grezza di agent_b: {text[:200]}")
+        print(f"  📥 Raw response from agent_b: {text[:200]}")
         user_id_rx, profile_rx = _extract_context_from_response(response)
-        return _verify_context("Canale cifrato", user_id_rx, profile_rx)
+        return _verify_context("Encrypted channel", user_id_rx, profile_rx)
 
     except Exception as e:
-        _fail("Eccezione durante la chiamata cifrata", str(e))
-        logger.exception("Dettaglio eccezione test_secure_channel")
+        _fail("Exception during the encrypted call", str(e))
+        logger.exception("Exception detail for test_secure_channel")
         return False
 
 
-# ── Test 2: canale plain ──────────────────────────────────────────────────────
+# ── Test 2: plain channel ──────────────────────────────────────────────────────
 
 async def test_plain_channel() -> bool:
     """
-    Test 2 — Canale plain A2A (httpx JSON-RPC standard).
+    Test 2 — Plain A2A channel (standard httpx JSON-RPC).
 
-    Stesso scenario ma senza cifratura STLS.
-    user_id e profile in message.metadata → propagati via params.metadata
-    di ContextualRemoteA2aAgent → arrivano a B.
+    Same scenario but without STLS encryption.
+    user_id and profile in message.metadata → propagated via
+    ContextualRemoteA2aAgent's params.metadata → reach B.
     """
-    print("\n── Test 2: Canale plain A2A ─────────────────────────────────────────")
+    print("\n── Test 2: Plain A2A channel ────────────────────────────────────────")
 
     url = f"{BASE_URL_A}{AGENT_A_PLAIN_PATH}"
     payload = {
@@ -248,7 +248,7 @@ async def test_plain_channel() -> bool:
         "id": 1,
     }
 
-    print(f"  📤 Invio a agent_a (plain) con user_id={TEST_USER_ID!r}")
+    print(f"  📤 Sending to agent_a (plain) with user_id={TEST_USER_ID!r}")
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
@@ -263,29 +263,29 @@ async def test_plain_channel() -> bool:
         response = resp.json()
 
         if response.get("error"):
-            _fail("Errore JSON-RPC", str(response["error"]))
+            _fail("JSON-RPC error", str(response["error"]))
             return False
 
         text = extract_a2a_text(response) or ""
-        print(f"  📥 Risposta grezza di agent_b: {text[:200]}")
+        print(f"  📥 Raw response from agent_b: {text[:200]}")
         user_id_rx, profile_rx = _extract_context_from_response(response)
-        return _verify_context("Canale plain", user_id_rx, profile_rx)
+        return _verify_context("Plain channel", user_id_rx, profile_rx)
 
     except Exception as e:
-        _fail("Eccezione durante la chiamata plain", str(e))
-        logger.exception("Dettaglio eccezione test_plain_channel")
+        _fail("Exception during the plain call", str(e))
+        logger.exception("Exception detail for test_plain_channel")
         return False
 
 
-# ── Test 3: canale plain SSE (streaming) ──────────────────────────────────────
+# ── Test 3: plain SSE channel (streaming) ──────────────────────────────────────
 
 async def test_plain_stream_channel() -> bool:
     """
-    Test 3 — Canale plain SSE (messages/sendStream).
+    Test 3 — Plain SSE channel (messages/sendStream).
 
-    Verifica la propagazione sul percorso streaming plain.
+    Verifies propagation on the plain streaming path.
     """
-    print("\n── Test 3: Canale plain SSE (streaming) ─────────────────────────────")
+    print("\n── Test 3: Plain SSE channel (streaming) ────────────────────────────")
 
     url = f"{BASE_URL_A}{AGENT_A_PLAIN_PATH}/stream"
     payload = {
@@ -305,7 +305,7 @@ async def test_plain_stream_channel() -> bool:
         "id": 1,
     }
 
-    print(f"  📤 Invio a agent_a (SSE plain) con user_id={TEST_USER_ID!r}")
+    print(f"  📤 Sending to agent_a (plain SSE) with user_id={TEST_USER_ID!r}")
     try:
         collected_parts: list[dict] = []
         last_status = ""
@@ -352,7 +352,7 @@ async def test_plain_stream_channel() -> bool:
             p["text"] for p in collected_parts
             if p.get("type") == "text" and p.get("text")
         )
-        # Costruisce response compatibile con extract_a2a_text
+        # Builds a response compatible with extract_a2a_text
         fake_response = {
             "jsonrpc": "2.0", "id": 1,
             "result": {
@@ -361,25 +361,25 @@ async def test_plain_stream_channel() -> bool:
             },
         }
 
-        print(f"  📥 Risposta grezza di agent_b: {full_text[:200]}")
+        print(f"  📥 Raw response from agent_b: {full_text[:200]}")
         user_id_rx, profile_rx = _extract_context_from_response(fake_response)
-        return _verify_context("Canale plain SSE", user_id_rx, profile_rx)
+        return _verify_context("Plain SSE channel", user_id_rx, profile_rx)
 
     except Exception as e:
-        _fail("Eccezione durante la chiamata plain SSE", str(e))
-        logger.exception("Dettaglio eccezione test_plain_stream_channel")
+        _fail("Exception during the plain SSE call", str(e))
+        logger.exception("Exception detail for test_plain_stream_channel")
         return False
 
 
-# ── Test 4: canale cifrato STLS streaming ─────────────────────────────────────
+# ── Test 4: encrypted STLS streaming channel ───────────────────────────────────
 
 async def test_secure_stream_channel() -> bool:
     """
-    Test 4 — Canale cifrato STLS streaming (stream_secure_message).
+    Test 4 — Encrypted STLS streaming channel (stream_secure_message).
 
-    Verifica la propagazione sul percorso SSE cifrato.
+    Verifies propagation on the encrypted SSE path.
     """
-    print("\n── Test 4: Canale cifrato STLS streaming ────────────────────────────")
+    print("\n── Test 4: Encrypted STLS streaming channel ─────────────────────────")
 
     adapter = SecureA2ATransportAdapter(
         session_key=session_key_data,
@@ -404,7 +404,7 @@ async def test_secure_stream_channel() -> bool:
         "id": 1,
     }
 
-    print(f"  📤 Invio a agent_a (SSE cifrato) con user_id={TEST_USER_ID!r}")
+    print(f"  📤 Sending to agent_a (encrypted SSE) with user_id={TEST_USER_ID!r}")
     try:
         collected_parts: list[dict] = []
         last_status = ""
@@ -419,7 +419,7 @@ async def test_secure_stream_channel() -> bool:
             elif event == "TaskStatusUpdateEvent":
                 last_status = chunk.get("status", "")
             elif event == "error":
-                _fail("Errore SSE cifrato", f"code={chunk['code']} msg={chunk['message']}")
+                _fail("Encrypted SSE error", f"code={chunk['code']} msg={chunk['message']}")
                 return False
 
         full_text = "".join(
@@ -434,37 +434,38 @@ async def test_secure_stream_channel() -> bool:
             },
         }
 
-        print(f"  📥 Risposta grezza di agent_b: {full_text[:200]}")
+        print(f"  📥 Raw response from agent_b: {full_text[:200]}")
         user_id_rx, profile_rx = _extract_context_from_response(fake_response)
-        return _verify_context("Canale cifrato SSE", user_id_rx, profile_rx)
+        return _verify_context("Encrypted SSE channel", user_id_rx, profile_rx)
 
     except Exception as e:
-        _fail("Eccezione durante la chiamata cifrata SSE", str(e))
-        logger.exception("Dettaglio eccezione test_secure_stream_channel")
+        _fail("Exception during the encrypted SSE call", str(e))
+        logger.exception("Exception detail for test_secure_stream_channel")
         return False
 
 
-# ── Runner principale ─────────────────────────────────────────────────────────
+# ── Main runner ─────────────────────────────────────────────────────────────
 
 
 
-# ── Test 5: header statici X-STLS-* — canale plain ───────────────────────────
+# ── Test 5: static X-STLS-* headers — plain channel ───────────────────────────
 
-# Valori speculari a STATIC_USER_ID / STATIC_PROFILE in agent_context_test_a.py
+# Values mirroring STATIC_USER_ID / STATIC_PROFILE in agent_context_test_a.py
 STATIC_USER_ID = "service-account-agent-a@tim-sparkle.com"
 STATIC_PROFILE = {"tenant": "tim-sparkle", "role": "service", "department": "AI-Platform"}
 
 
 async def test_static_header_plain() -> bool:
     """
-    Test 5 — Header statici X-STLS-* sul canale plain.
+    Test 5 — Static X-STLS-* headers on the plain channel.
 
-    Il client chiama A chiedendo di usare agent_b_static.
-    A ha un httpx_client configurato con X-STLS-User-Id e X-STLS-Profile
-    statici verso B. Il server B li legge da _extract_http_context()
-    e li propaga al context dell'adapter (priorità 3).
+    The client calls A asking it to use agent_b_static.
+    A has an httpx_client configured with static X-STLS-User-Id and
+    X-STLS-Profile headers towards B. Server B reads them from
+    _extract_http_context() and propagates them to the adapter's
+    context (priority 3).
     """
-    print("\n── Test 5: Header statici X-STLS-* — canale plain ──────────────────")
+    print("\n── Test 5: Static X-STLS-* headers — plain channel ─────────────────")
 
     url = f"{BASE_URL_A}{AGENT_A_PLAIN_PATH}"
     payload = {
@@ -474,15 +475,15 @@ async def test_static_header_plain() -> bool:
             "message": {
                 "role": "user",
                 "parts": [{"type": "text", "text": "check the STATIC context"}],
-                # Nessun metadata qui: il contesto arriva solo dagli header
-                # X-STLS-* configurati staticamente nell'httpx_client di A→B
+                # No metadata here: the context comes only from the
+                # X-STLS-* headers statically configured in A's httpx_client towards B
             },
         },
         "id": 1,
     }
 
-    print(f"  📤 Invio a agent_a (plain) — richiesta contesto STATICO")
-    print(f"  ℹ️  Atteso: user_id={STATIC_USER_ID!r}")
+    print(f"  📤 Sending to agent_a (plain) — STATIC context request")
+    print(f"  ℹ️  Expected: user_id={STATIC_USER_ID!r}")
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
@@ -492,19 +493,19 @@ async def test_static_header_plain() -> bool:
         resp.raise_for_status()
         response = resp.json()
         if response.get("error"):
-            _fail("Errore JSON-RPC", str(response["error"]))
+            _fail("JSON-RPC error", str(response["error"]))
             return False
 
         text = extract_a2a_text(response) or ""
-        print(f"  📥 Risposta grezza di agent_b_static: {text[:200]}")
+        print(f"  📥 Raw response from agent_b_static: {text[:200]}")
         user_id_rx, profile_rx = _extract_context_from_response(response)
 
         ok = True
         if user_id_rx == STATIC_USER_ID:
-            _ok("Test 5 — user_id statico propagato", user_id_rx)
+            _ok("Test 5 — static user_id propagated", user_id_rx)
         else:
-            _fail("Test 5 — user_id statico NON propagato",
-                  f"atteso={STATIC_USER_ID!r}  ricevuto={user_id_rx!r}")
+            _fail("Test 5 — static user_id NOT propagated",
+                  f"expected={STATIC_USER_ID!r}  received={user_id_rx!r}")
             ok = False
 
         if isinstance(profile_rx, str):
@@ -514,29 +515,29 @@ async def test_static_header_plain() -> bool:
             except Exception:
                 pass
         if isinstance(profile_rx, dict) and profile_rx.get("role") == STATIC_PROFILE["role"]:
-            _ok("Test 5 — profile statico propagato", str(profile_rx))
+            _ok("Test 5 — static profile propagated", str(profile_rx))
         else:
-            _fail("Test 5 — profile statico NON propagato",
-                  f"atteso={STATIC_PROFILE}  ricevuto={profile_rx}")
+            _fail("Test 5 — static profile NOT propagated",
+                  f"expected={STATIC_PROFILE}  received={profile_rx}")
             ok = False
         return ok
 
     except Exception as e:
-        _fail("Eccezione test 5", str(e))
-        logger.exception("Dettaglio eccezione test_static_header_plain")
+        _fail("Test 5 exception", str(e))
+        logger.exception("Exception detail for test_static_header_plain")
         return False
 
 
 async def test_static_header_stream() -> bool:
     """
-    Test 6 — Header statici X-STLS-* sul canale plain SSE.
+    Test 6 — Static X-STLS-* headers on the plain SSE channel.
 
-    Stesso scenario del Test 5 ma sul percorso streaming.
-    Verifica che _extract_http_context venga chiamato anche in
-    plain_a2a_stream_handler e che http_context arrivi a
-    _handle_messages_send_stream tramite _stls_http_context nei params.
+    Same scenario as Test 5 but on the streaming path.
+    Verifies that _extract_http_context is also called in
+    plain_a2a_stream_handler and that http_context reaches
+    _handle_messages_send_stream via _stls_http_context in params.
     """
-    print("\n── Test 6: Header statici X-STLS-* — canale plain SSE ──────────────")
+    print("\n── Test 6: Static X-STLS-* headers — plain SSE channel ─────────────")
 
     url = f"{BASE_URL_A}{AGENT_A_PLAIN_PATH}/stream"
     payload = {
@@ -552,8 +553,8 @@ async def test_static_header_stream() -> bool:
         "id": 1,
     }
 
-    print(f"  📤 Invio a agent_a (SSE plain) — richiesta contesto STATICO")
-    print(f"  ℹ️  Atteso: user_id={STATIC_USER_ID!r}")
+    print(f"  📤 Sending to agent_a (plain SSE) — STATIC context request")
+    print(f"  ℹ️  Expected: user_id={STATIC_USER_ID!r}")
     try:
         collected_parts: list[dict] = []
         last_status = ""
@@ -606,15 +607,15 @@ async def test_static_header_stream() -> bool:
             p["text"] for p in collected_parts
             if p.get("type") == "text" and p.get("text")
         )
-        print(f"  📥 Risposta grezza di agent_b_static: {full_text[:200]}")
+        print(f"  📥 Raw response from agent_b_static: {full_text[:200]}")
         user_id_rx, profile_rx = _extract_context_from_response(fake_response)
 
         ok = True
         if user_id_rx == STATIC_USER_ID:
-            _ok("Test 6 — user_id statico propagato (SSE)", user_id_rx)
+            _ok("Test 6 — static user_id propagated (SSE)", user_id_rx)
         else:
-            _fail("Test 6 — user_id statico NON propagato (SSE)",
-                  f"atteso={STATIC_USER_ID!r}  ricevuto={user_id_rx!r}")
+            _fail("Test 6 — static user_id NOT propagated (SSE)",
+                  f"expected={STATIC_USER_ID!r}  received={user_id_rx!r}")
             ok = False
 
         if isinstance(profile_rx, str):
@@ -624,22 +625,22 @@ async def test_static_header_stream() -> bool:
             except Exception:
                 pass
         if isinstance(profile_rx, dict) and profile_rx.get("role") == STATIC_PROFILE["role"]:
-            _ok("Test 6 — profile statico propagato (SSE)", str(profile_rx))
+            _ok("Test 6 — static profile propagated (SSE)", str(profile_rx))
         else:
-            _fail("Test 6 — profile statico NON propagato (SSE)",
-                  f"atteso={STATIC_PROFILE}  ricevuto={profile_rx}")
+            _fail("Test 6 — static profile NOT propagated (SSE)",
+                  f"expected={STATIC_PROFILE}  received={profile_rx}")
             ok = False
         return ok
 
     except Exception as e:
-        _fail("Eccezione test 6", str(e))
-        logger.exception("Dettaglio eccezione test_static_header_stream")
+        _fail("Test 6 exception", str(e))
+        logger.exception("Exception detail for test_static_header_stream")
         return False
 
 async def main() -> None:
     print("\n" + "=" * 70)
     print("Context Propagation Test")
-    print("Verifica propagazione user_id e profile: client → A → B")
+    print("Verifying user_id and profile propagation: client → A → B")
     print("=" * 70)
     print(f"\n  BASE_URL_A   : {BASE_URL_A}")
     print(f"  TEST_USER_ID : {TEST_USER_ID}")
@@ -647,16 +648,16 @@ async def main() -> None:
 
     results: dict[str, bool] = {}
 
-    results["1 — Cifrato STLS (sync)"]    = await test_secure_channel()
+    results["1 — Encrypted STLS (sync)"]  = await test_secure_channel()
     results["2 — Plain A2A (sync)"]       = await test_plain_channel()
     results["3 — Plain SSE (stream)"]     = await test_plain_stream_channel()
-    results["4 — Cifrato SSE (stream)"]   = await test_secure_stream_channel()
-    results["5 — Header statici (plain)"] = await test_static_header_plain()
-    results["6 — Header statici (SSE)"]   = await test_static_header_stream()
+    results["4 — Encrypted SSE (stream)"] = await test_secure_stream_channel()
+    results["5 — Static headers (plain)"] = await test_static_header_plain()
+    results["6 — Static headers (SSE)"]   = await test_static_header_stream()
 
-    # ── Riepilogo ─────────────────────────────────────────────────────────────
+    # ── Summary ───────────────────────────────────────────────────────────────
     print("\n" + "=" * 70)
-    print("Riepilogo")
+    print("Summary")
     print("=" * 70)
     all_ok = True
     for label, ok in results.items():
@@ -667,9 +668,9 @@ async def main() -> None:
 
     print()
     if all_ok:
-        print("  🎉 Tutti i test superati — propagazione contesto funzionante.")
+        print("  🎉 All tests passed — context propagation working.")
     else:
-        print("  ⚠️  Alcuni test falliti — verificare i log sopra.")
+        print("  ⚠️  Some tests failed — check the logs above.")
     print("=" * 70 + "\n")
 
 

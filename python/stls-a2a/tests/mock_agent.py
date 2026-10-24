@@ -1,11 +1,11 @@
 """
-Esempio: Agente Custom
+Example: Custom Agent
 ======================
 
 Scenario:
-- Agente "Calculator" che esegue operazioni matematiche
-- Esposto tramite A2A Protocol
-- Tutti i messaggi criptati con chiavi derivate univoche per sessione
+- "Calculator" agent that performs mathematical operations
+- Exposed via the A2A Protocol
+- All messages encrypted with unique per-session derived keys
 """
 
 from typing import Dict
@@ -21,26 +21,26 @@ class MockAgent:
     
     async def process_message(self, message: str, params: Dict = None) -> Dict:
         """
-        Simula processamento messaggio.
+        Simulates message processing.
 
-        Metodi supportati:
-            calculate  → esegue espressioni matematiche
-            get_info   → restituisce info sull'agente
-            messages/send, message/send → delegato a calculate se params ha 'expression'
+        Supported methods:
+            calculate  → evaluates mathematical expressions
+            get_info   → returns info about the agent
+            messages/send, message/send → delegated to calculate if params has 'expression'
 
-        Metodi sconosciuti → restituisce errore JSON-RPC -32601 (non un result)
-        in modo che handle_request() in AgentAdapter lo propaghi correttamente.
+        Unknown methods → returns a JSON-RPC -32601 error (not a result)
+        so that handle_request() in AgentAdapter propagates it correctly.
         """
-        # Normalizza alias A2A spec → metodo interno
+        # Normalize A2A spec alias → internal method
         if message in ("messages/send", "message/send"):
-            # Estrai il testo dal payload A2A standard
+            # Extract the text from the standard A2A payload
             text = ""
             parts = (params or {}).get("message", {}).get("parts", [])
             for p in parts:
                 if isinstance(p, dict) and p.get("type") == "text":
                     text = p.get("text", "")
                     break
-            # Prova a usare il testo come expression se contiene operatori
+            # Try to use the text as an expression if it contains operators
             expression = (params or {}).get("expression") or text
             return self._handle_calculate({"expression": expression})
 
@@ -50,18 +50,18 @@ class MockAgent:
         if message == "get_info":
             return {"agent": self.name, "status": "active", "tools": [t.__name__ for t in self.tools]}
 
-        # Metodo non riconosciuto → errore JSON-RPC -32601
-        # NON restituire un result con {"error": "..."} perché agent_response_to_a2a
-        # lo passerebbe come result valido al client.
-        # Restituisce direttamente un dict con "error" strutturato in modo che
-        # CustomFunctionAdapter.invoke() → AgentResponse(error=...) lo propaghi.
+        # Unrecognized method → JSON-RPC -32601 error
+        # Do NOT return a result with {"error": "..."} because agent_response_to_a2a
+        # would pass it through as a valid result to the client.
+        # Return a dict with a structured "error" directly so that
+        # CustomFunctionAdapter.invoke() → AgentResponse(error=...) propagates it.
         raise ValueError(f"Method '{message}' not found (-32601)")
-    
+
     def _handle_calculate(self, params: Dict) -> Dict:
-        """Handler per calcoli"""
+        """Handler for calculations"""
         expression = params.get('expression', '')
         try:
-            # Valutazione sicura (in produzione usa parser appropriato)
+            # Safe evaluation (use a proper parser in production)
             result = eval(expression, {"__builtins__": {}}, {
                 "add": lambda a, b: a + b,
                 "sub": lambda a, b: a - b,

@@ -1,33 +1,33 @@
 """
 multi_agent_km_server.py
 ------------------------
-Server multi-agente per testare i loader dell'ApiKeyManager di STLS-A2A.
+Multi-agent server for testing STLS-A2A's ApiKeyManager loaders.
 
-Ogni agente usa un backend di autenticazione diverso:
+Each agent uses a different authentication backend:
 
-    /agents/calculator/secure-a2a     → StaticLoader  (chiavi in-memory)
+    /agents/calculator/secure-a2a     → StaticLoader  (in-memory keys)
     /agents/adk-agent/secure-a2a      → FileLoader    (api_keys.yaml)
     /agents/lc-agent/secure-a2a       → PostgresLoader (AUTH_PG_DSN)
-    /agents/sk-agent/secure-a2a       → AuthConfig legacy (retrocompatibilità)
-    /agents/invoices-classifier/...   → nessuna auth (pubblico)
+    /agents/sk-agent/secure-a2a       → legacy AuthConfig (backward compatibility)
+    /agents/invoices-classifier/...   → no auth (public)
 
-Avvio rapido:
+Quick start:
 
-    # Solo StaticLoader e FileLoader (nessun Redis né Postgres richiesto)
+    # StaticLoader and FileLoader only (no Redis or Postgres required)
     AUTH_KM_USE_REDIS=false uv run python multi_agent_km_server.py
 
-    # Con Redis per cache (default se REDIS_URL impostato)
+    # With Redis for caching (default if REDIS_URL is set)
     REDIS_URL=redis://localhost:6379 uv run python multi_agent_km_server.py
 
-    # Con Postgres
+    # With Postgres
     AUTH_PG_DSN=postgresql://user:pass@localhost/stls uv run python multi_agent_km_server.py
 
-Variabili d'ambiente lette dall'SDK (non più gestite nel server):
-    REDIS_URL              URL Redis (default: redis://localhost:6379)
-    AUTH_KM_USE_REDIS      abilita cache Redis (default: true)
-    AUTH_REFRESH_INTERVAL  secondi tra refresh (default: 300)
-    AUTH_KEYS_FILE         path file YAML/JSON per FileLoader
-    AUTH_PG_DSN            DSN PostgreSQL per PostgresLoader
+Environment variables read by the SDK (no longer handled in the server):
+    REDIS_URL              Redis URL (default: redis://localhost:6379)
+    AUTH_KM_USE_REDIS      enables the Redis cache (default: true)
+    AUTH_REFRESH_INTERVAL  seconds between refreshes (default: 300)
+    AUTH_KEYS_FILE         YAML/JSON file path for FileLoader
+    AUTH_PG_DSN            PostgreSQL DSN for PostgresLoader
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Imports STLS-A2A
+# STLS-A2A imports
 # ---------------------------------------------------------------------------
 from stls_a2a import (
     AgentResponse,
@@ -68,7 +68,7 @@ from stls_a2a import (
 from stls_a2a import ApiKeyManager, ApiKeyManagerGroup, default_audit_hook
 
 # ---------------------------------------------------------------------------
-# Configurazione globale
+# Global configuration
 # ---------------------------------------------------------------------------
 
 PORT        = int(os.getenv("PORT", 8001))
@@ -77,7 +77,7 @@ AUTH_PG_DSN = os.getenv("AUTH_PG_DSN", "")
 
 # ---------------------------------------------------------------------------
 # Audit hook — shared, standard logging.
-# In produzione: sostituire default_audit_hook() con un hook che invia a SIEM.
+# In production: replace default_audit_hook() with a hook that sends to a SIEM.
 # ---------------------------------------------------------------------------
 
 _audit = default_audit_hook()
@@ -86,8 +86,8 @@ _audit = default_audit_hook()
 # Loaders
 # ---------------------------------------------------------------------------
 
-# StaticLoader: genera chiavi usa-e-getta a ogni avvio.
-# Per chiavi stabili tra riavvii: usare FileLoader o PostgresLoader.
+# StaticLoader: generates throwaway keys on every startup.
+# For keys that stay stable across restarts: use FileLoader or PostgresLoader.
 _raw_key_1, _ = generate_api_key("stls-static")
 _raw_key_2, _ = generate_api_key("stls-static")
 
@@ -97,32 +97,32 @@ _static_loader = StaticLoader.from_plaintext({
         "scopes":      ["secure-a2a"],
         "endpoints":   ["/agents/calculator/secure-a2a",
                         "/agents/calculator/a2a"],
-        "description": "Chiave di test per l'agente calculator",
+        "description": "Test key for the calculator agent",
     },
     _raw_key_2: {
         "client_id":   "admin-client",
         "scopes":      ["secure-a2a", "admin"],
-        "endpoints":   [],              # wildcard: tutti gli endpoint
-        "description": "Chiave admin — accesso completo",
+        "endpoints":   [],              # wildcard: all endpoints
+        "description": "Admin key — full access",
     },
 })
 
-# FileLoader: path da AUTH_KEYS_FILE (default api_keys.yaml)
+# FileLoader: path from AUTH_KEYS_FILE (default api_keys.yaml)
 _file_loader = FileLoader(path=os.getenv("AUTH_KEYS_FILE", "api_keys.yaml"))
 
-# PostgresLoader: solo se AUTH_PG_DSN è configurato
+# PostgresLoader: only if AUTH_PG_DSN is configured
 _pg_loader = (
     PostgresLoader(dsn=AUTH_PG_DSN, min_pool_size=1, max_pool_size=3)
     if AUTH_PG_DSN else None
 )
 
 # ---------------------------------------------------------------------------
-# Manager — uno per loader, costruiti con ApiKeyManager.from_loader()
+# Managers — one per loader, built with ApiKeyManager.from_loader()
 #
-# from_loader() legge automaticamente dall'env:
-#   REDIS_URL          → URL Redis per la cache
-#   AUTH_KM_USE_REDIS  → abilita/disabilita cache
-# Non è più necessario leggere queste variabili nel server.
+# from_loader() automatically reads from the env:
+#   REDIS_URL          → Redis URL for the cache
+#   AUTH_KM_USE_REDIS  → enables/disables the cache
+# These variables no longer need to be read in the server itself.
 # ---------------------------------------------------------------------------
 
 static_manager = ApiKeyManager.from_loader(_static_loader, audit_hook=_audit)
@@ -133,19 +133,19 @@ pg_manager     = (
 )
 
 # ---------------------------------------------------------------------------
-# ApiKeyManagerGroup — gestisce start/stop/health/refresh di tutti i manager
-# con una sola chiamata. I manager None vengono ignorati silenziosamente.
+# ApiKeyManagerGroup — handles start/stop/health/refresh for all managers
+# with a single call. None managers are silently ignored.
 # ---------------------------------------------------------------------------
 
 managers = (
     ApiKeyManagerGroup()
     .add("static_manager",   static_manager)
     .add("file_manager",     file_manager)
-    .add("postgres_manager", pg_manager)    # ignorato se pg_manager è None
+    .add("postgres_manager", pg_manager)    # ignored if pg_manager is None
 )
 
 # ---------------------------------------------------------------------------
-# AuthConfig legacy per sk-agent (invariato — retrocompatibilità)
+# Legacy AuthConfig for sk-agent (unchanged — backward compatibility)
 # ---------------------------------------------------------------------------
 
 _sk_auth_legacy = AuthConfig(
@@ -163,35 +163,35 @@ def build_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """
-        Avvia tutti i manager all'inizio, li ferma allo shutdown.
-        ApiKeyManagerGroup gestisce start/stop in ordine con una sola chiamata.
+        Starts all managers at the beginning, stops them on shutdown.
+        ApiKeyManagerGroup handles start/stop in order with a single call.
         """
         logger.info(
-            "Avvio ApiKeyManagerGroup (%d manager: %s)…",
+            "Starting ApiKeyManagerGroup (%d managers: %s)…",
             len(managers),
             ", ".join(managers._managers),
         )
-        # Logga le chiavi StaticLoader generate (solo per test)
+        # Log the generated StaticLoader keys (test only)
         logger.info("=" * 60)
-        logger.info("StaticLoader — chiavi di test generate:")
+        logger.info("StaticLoader — generated test keys:")
         logger.info("  KEY_1 (calculator):  %s", _raw_key_1)
         logger.info("  KEY_2 (admin):       %s", _raw_key_2)
-        logger.info("  Usare: X-API-Key: <valore> oppure ?api_key=<valore>")
+        logger.info("  Use: X-API-Key: <value> or ?api_key=<value>")
         logger.info("=" * 60)
 
         async with managers:
-            yield                   # ← app in esecuzione
+            yield                   # ← app running
 
     app = FastAPI(title="Multi-Agent KM Server", lifespan=lifespan)
     start_task_store_cleanup(app=app)
 
-    # ── Provider STLS ─────────────────────────────────────────────────────
+    # ── STLS provider ─────────────────────────────────────────────────────
     key_session_provider: KeySessionProvider = KeySessionProviderFactory().get_session_provider(
         session_type=KeySessionProvider.KeySessionProviderType.SERVER,
         port=8081,
     )
 
-    # ── Agente calculator — StaticLoader ──────────────────────────────────
+    # ── calculator agent — StaticLoader ────────────────────────────────────
     from mock_agent import MockAgent
 
     calculator = MockAgent(
@@ -212,7 +212,7 @@ def build_app() -> FastAPI:
         api_key_manager=static_manager,
     )
 
-    # ── Agente adk-agent — FileLoader ─────────────────────────────────────
+    # ── adk-agent — FileLoader ──────────────────────────────────────────────
     from adk_google_agents import agent as adk_agent
 
     create_secure_a2a_endpoint(
@@ -225,7 +225,7 @@ def build_app() -> FastAPI:
         api_key_manager=file_manager,
     )
 
-    # ── Agente lc-agent — PostgresLoader (o fallback legacy) ──────────────
+    # ── lc-agent — PostgresLoader (or legacy fallback) ──────────────────────
     from langchain_agents import agent as lc_agent
 
     create_secure_a2a_endpoint(
@@ -234,7 +234,7 @@ def build_app() -> FastAPI:
         key_session_provider=key_session_provider,
         path="/agents/lc-agent/secure-a2a",
         framework="langchain",
-        api_key_manager=pg_manager,                          # None se PG non configurato
+        api_key_manager=pg_manager,                          # None if PG is not configured
         auth=None if pg_manager else AuthConfig(
             bearer_tokens={"legacy-bearer-token-lc"},
             api_keys={"legacy-api-key-lc"},
@@ -242,7 +242,7 @@ def build_app() -> FastAPI:
         ),
     )
 
-    # ── Agente sk-agent — AuthConfig legacy ───────────────────────────────
+    # ── sk-agent — legacy AuthConfig ─────────────────────────────────────────
     from semantic_agents import agent as sk_agent
 
     create_secure_a2a_endpoint(
@@ -254,7 +254,7 @@ def build_app() -> FastAPI:
         auth=_sk_auth_legacy,
     )
 
-    # ── Agente invoices-classifier — nessuna auth (pubblico) ──────────────
+    # ── invoices-classifier agent — no auth (public) ────────────────────────
     from invoices_agents import invoices_classifier_agent
 
     create_secure_a2a_endpoint(
@@ -265,16 +265,16 @@ def build_app() -> FastAPI:
         framework="google-adk",
     )
 
-    # ── Endpoint diagnostica ──────────────────────────────────────────────
+    # ── Diagnostic endpoints ──────────────────────────────────────────────
 
     @app.get("/auth/health")
     async def auth_health():
         """
-        Health check del sistema di autenticazione.
-        Mostra lo stato di ogni manager e della cache Redis.
+        Health check of the authentication system.
+        Shows the status of each manager and of the Redis cache.
 
-        HTTP 200 → tutti i manager in stato "ok"
-        HTTP 503 → almeno un manager "degraded" o "error"
+        HTTP 200 → all managers in "ok" status
+        HTTP 503 → at least one manager "degraded" or "error"
         """
         from fastapi.responses import JSONResponse as _JR
         data = await managers.health()          # ← ApiKeyManagerGroup
@@ -284,8 +284,8 @@ def build_app() -> FastAPI:
     @app.post("/auth/refresh")
     async def auth_refresh():
         """
-        Forza un reload immediato delle chiavi da tutti i loader.
-        Utile dopo una rotazione di chiavi senza riavviare il server.
+        Forces an immediate reload of keys from all loaders.
+        Useful after a key rotation without restarting the server.
         """
         refreshed = await managers.refresh_all()    # ← ApiKeyManagerGroup
         return {"refreshed": refreshed}
@@ -302,26 +302,26 @@ def main() -> None:
 
     _pg_status = (
         f"postgresql ({AUTH_PG_DSN[:20]}…)" if AUTH_PG_DSN
-        else "disabled (AUTH_PG_DSN non impostato)"
+        else "disabled (AUTH_PG_DSN not set)"
     )
     _redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     _use_redis = os.getenv("AUTH_KM_USE_REDIS", "true").lower() not in ("false", "0", "no")
 
     print("\n" + "=" * 70)
-    print("📡 Multi-Agent KM Server — Porta", PORT)
+    print("📡 Multi-Agent KM Server — Port", PORT)
     print("=" * 70)
     print(f"\n🔐 Auth backends:")
-    print(f"   StaticLoader  → /agents/calculator/  (chiavi in-memory)")
+    print(f"   StaticLoader  → /agents/calculator/  (in-memory keys)")
     print(f"   FileLoader    → /agents/adk-agent/   ({os.getenv('AUTH_KEYS_FILE', 'api_keys.yaml')})")
     print(f"   PostgresLoader→ /agents/lc-agent/    ({_pg_status})")
-    print(f"   AuthConfig    → /agents/sk-agent/    (legacy, invariato)")
-    print(f"   Nessuna auth  → /agents/invoices-classifier/")
-    print(f"\n   Redis cache: {'abilitata (' + _redis_url + ')' if _use_redis else 'disabilitata (AUTH_KM_USE_REDIS=false)'}")
-    print(f"\n🌐 Endpoint globali:")
+    print(f"   AuthConfig    → /agents/sk-agent/    (legacy, unchanged)")
+    print(f"   No auth       → /agents/invoices-classifier/")
+    print(f"\n   Redis cache: {'enabled (' + _redis_url + ')' if _use_redis else 'disabled (AUTH_KM_USE_REDIS=false)'}")
+    print(f"\n🌐 Global endpoints:")
     print(f"   Cards:   http://localhost:{PORT}/.well-known/agent-card.json")
     print(f"   Health:  http://localhost:{PORT}/auth/health")
     print(f"   Refresh: http://localhost:{PORT}/auth/refresh  (POST)")
-    print(f"\n🤖 Agenti:")
+    print(f"\n🤖 Agents:")
     for name, path in [
         ("calculator",          "/agents/calculator/secure-a2a"),
         ("adk-agent",           "/agents/adk-agent/secure-a2a"),

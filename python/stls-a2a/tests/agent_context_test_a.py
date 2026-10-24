@@ -1,11 +1,11 @@
 """
 agent_context_test_a.py
 -----------------------
-Agente A — root agent con ContextualRemoteA2aAgent verso B.
+Agent A — root agent with ContextualRemoteA2aAgent towards B.
 
-Riceve la richiesta dal client, propaga il contesto utente
-(user_id, profile) ad agent_b remoto tramite ContextualRemoteA2aAgent,
-e restituisce la risposta di diagnostica di B.
+Receives the request from the client, propagates the user context
+(user_id, profile) to the remote agent_b via ContextualRemoteA2aAgent,
+and returns B's diagnostic response.
 """
 
 import os
@@ -24,7 +24,7 @@ BASE_URL_B  = os.getenv("BASE_URL_B",  "http://localhost:8002").rstrip("/")
 API_KEY_B   = os.getenv("API_KEY_B",   "test-key-agent-b")
 
 
-# ── Sub-agent remoto B con propagazione contesto ──────────────────────────────
+# ── Remote sub-agent B with context propagation ──────────────────────────────
 agent_b_remote = ContextualRemoteA2aAgent(
     name="agent_b",
     description=(
@@ -39,10 +39,10 @@ agent_b_remote = ContextualRemoteA2aAgent(
 )
 
 
-# ── Sub-agent remoto B con header statici X-STLS-* ───────────────────────────
-# Modalità alternativa: il contesto viene passato via header HTTP statici
-# invece di session.state. Utile per service-to-service con identità fissa.
-# Nota: i valori sono statici — non cambiano per richiesta.
+# ── Remote sub-agent B with static X-STLS-* headers ──────────────────────────
+# Alternative mode: the context is passed via static HTTP headers
+# instead of session.state. Useful for service-to-service with a fixed identity.
+# Note: the values are static — they don't change per request.
 STATIC_USER_ID = "service-account-agent-a@tim-sparkle.com"
 STATIC_PROFILE = {"tenant": "tim-sparkle", "role": "service", "department": "AI-Platform"}
 
@@ -57,16 +57,16 @@ agent_b_remote_static = ContextualRemoteA2aAgent(
     httpx_client=httpx.AsyncClient(
         headers={
             "X-API-Key":      API_KEY_B,
-            # Contesto utente iniettato come header HTTP statici.
-            # Il server STLS li legge in _extract_http_context() e li
-            # propaga al context dell'adapter con priorità 3.
+            # User context injected as static HTTP headers.
+            # The STLS server reads them in _extract_http_context() and
+            # propagates them to the adapter's context with priority 3.
             "X-STLS-User-Id": STATIC_USER_ID,
             "X-STLS-Profile": _json.dumps(STATIC_PROFILE),
         },
         timeout=httpx.Timeout(60.0),
     ),
-    # context_keys vuoto: non propaga session.state — il contesto
-    # arriva esclusivamente dagli header X-STLS-* statici sopra.
+    # Empty context_keys: doesn't propagate session.state — the context
+    # comes exclusively from the static X-STLS-* headers above.
     context_keys=[],
 )
 

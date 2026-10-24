@@ -10,16 +10,16 @@ load_dotenv()
 # ── 1. Tool ───────────────────────────────────────────────────────────────────
 
 def get_stock_price(ticker: str) -> str:
-    """Restituisce il prezzo corrente di un'azione dato il ticker (es. AAPL, TSLA)."""
+    """Returns the current price of a stock given its ticker (e.g. AAPL, TSLA)."""
     import yfinance as yf
-    
+
     t = yf.Ticker(ticker)
-    
-    # prova più metodi in cascata
+
+    # try multiple methods in cascade
     try:
         price = t.info.get("currentPrice") or t.info.get("regularMarketPrice")
         if price:
-            return f"Il prezzo di {ticker} è ${price:.2f}"
+            return f"The price of {ticker} is ${price:.2f}"
     except Exception:
         pass
 
@@ -27,11 +27,11 @@ def get_stock_price(ticker: str) -> str:
         hist = t.history(period="1d")
         if not hist.empty:
             price = hist["Close"].iloc[-1]
-            return f"Il prezzo di {ticker} è ${price:.2f}"
+            return f"The price of {ticker} is ${price:.2f}"
     except Exception:
         pass
 
-    return f"Impossibile recuperare il prezzo di {ticker} al momento."
+    return f"Could not retrieve the price of {ticker} at this time."
 
 tools = [FunctionTool(get_stock_price)]
 
@@ -40,8 +40,8 @@ tools = [FunctionTool(get_stock_price)]
 agent = LlmAgent(
     name="financial_agent",
     model="gemini-2.5-flash",
-    description="Assistente finanziario con accesso ai prezzi azionari.",
-    instruction="Sei un assistente finanziario. Usa i tools disponibili per rispondere.",
+    description="Financial assistant with access to stock prices.",
+    instruction="You are a financial assistant. Use the available tools to answer.",
     tools=tools,
 )
 
@@ -55,7 +55,7 @@ runner = Runner(
     session_service=session_service,
 )
 
-# ── 4. Invoca ─────────────────────────────────────────────────────────────────
+# ── 4. Invoke ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import asyncio
@@ -71,7 +71,7 @@ if __name__ == "__main__":
             session_id=session.id,
             new_message=types.Content(
                 role="user",
-                parts=[types.Part(text="Qual è il prezzo di AAPL?")]
+                parts=[types.Part(text="What is the price of AAPL?")]
             ),
         )
 

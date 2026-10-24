@@ -12,7 +12,7 @@ import logging
 
 
 def _status_str(status) -> str:
-    """Normalizza status A2A: accetta stringa scalare oppure oggetto {"state":"..."}."""
+    """Normalizes an A2A status: accepts a scalar string or an object {"state":"..."}."""
     if isinstance(status, dict):
         return status.get("state", "")
     return str(status) if status is not None else ""
@@ -32,9 +32,9 @@ import os
 
 KEY_PROVIDER_NAME = os.getenv("KEY_PROVIDER_NAME", "base").strip().lower()
 
-# Per base/arqit_py la session key è risolvibile subito (chiave pre-condivisa).
-# Per PQC la session key esiste solo dopo l'handshake KEM — viene inizializzata
-# all'interno di task_test() via create_pqc_a2a_transport().
+# For base/arqit_py the session key can be resolved immediately (pre-shared key).
+# For PQC the session key only exists after the KEM handshake — it is initialized
+# inside task_test() via create_pqc_a2a_transport().
 if KEY_PROVIDER_NAME != "pqc":
     key_session_provider: KeySessionProvider = KeySessionProviderFactory().get_session_provider(
         session_type=KeySessionProvider.KeySessionProviderType.CLIENT, port=8081, host='localhost')
@@ -48,28 +48,28 @@ if KEY_PROVIDER_NAME != "pqc":
     logger.info(f"session_key_data (base64)={base64.b64encode(session_key_data).decode()}")
     logger.info(f"key length={len(session_key_data)} bytes")
 else:
-    # PQC: handshake KEM esplicito — session vars inizializzate in task_test().
-    # NOTA: con SESSION_CACHE_BACKEND=memory solo il primo agente registrato
-    # condivide la session cache con l'endpoint /stls/pqc/handshake.
-    # Per multi-agent PQC usare SESSION_CACHE_BACKEND=redis.
+    # PQC: explicit KEM handshake — session vars initialized in task_test().
+    # NOTE: with SESSION_CACHE_BACKEND=memory only the first registered agent
+    # shares the session cache with the /stls/pqc/handshake endpoint.
+    # For multi-agent PQC use SESSION_CACHE_BACKEND=redis.
     session_key_identifier = None
     session_key_data = None
-    logger.info("Provider PQC — handshake esplicito verrà eseguito in task_test()")
+    logger.info("PQC provider — explicit handshake will be performed in task_test()")
 
 import base64
 import mimetypes
 
 def file_to_base64(file_path: str) -> tuple[str, str]:
     """
-    Legge un file e lo converte in base64.
-    
+    Reads a file and converts it to base64.
+
     Returns:
         (data_base64, mime_type)
     """
-    # Rileva il MIME type automaticamente
+    # Auto-detect the MIME type
     mime_type, _ = mimetypes.guess_type(file_path)
     if mime_type is None:
-        mime_type = 'application/octet-stream'  # fallback generico
+        mime_type = 'application/octet-stream'  # generic fallback
 
     with open(file_path, 'rb') as f:
         data_base64 = base64.b64encode(f.read()).decode('utf-8')
@@ -86,19 +86,19 @@ async def call_agent(
     expect_401: bool = False,
 ) -> Dict[str, Any]:
         """
-        Chiama un agente tramite il canale cifrato STLS.
+        Calls an agent via the encrypted STLS channel.
 
-        Se bearer_token o api_key sono valorizzati, gli header di autorizzazione
-        vengono iniettati nella richiesta HTTP (prima del decrypt AES-256-GCM).
+        If bearer_token or api_key are set, the authorization headers
+        are injected into the HTTP request (before the AES-256-GCM decrypt).
 
-        Per il percorso sincrono viene usato SecureA2ATransportAdapter con il
-        client httpx patchato; per il percorso SSE viene usata la funzione
-        _secure_stream_with_auth che gestisce direttamente la connessione.
+        For the sync path, SecureA2ATransportAdapter is used with its httpx
+        client patched; for the SSE path, the _secure_stream_with_auth
+        function is used, which handles the connection directly.
 
-        expect_401: se True non solleva eccezione su HTTP 401, restituisce
+        expect_401: if True, doesn't raise on HTTP 401, instead returns
                     {"status_code": 401, "www_authenticate": ...}
         """
-        # ── Costruisci header auth ────────────────────────────────────────────
+        # ── Build auth headers ────────────────────────────────────────────────
         _auth: Dict[str, str] = {}
         if bearer_token:
             _auth["Authorization"] = f"Bearer {bearer_token}"
@@ -111,15 +111,15 @@ async def call_agent(
             base_url=BASE_URL + agent_path
         )
 
-        # ── Inietta header nel client sync (default_headers vengono merged da httpx) ─
+        # ── Inject headers into the sync client (default_headers merged by httpx) ─
         if _auth:
             await adapter.client.aclose()
             adapter.client = httpx.AsyncClient(timeout=30.0, headers=_auth)
 
         if stream and _auth:
-            # Il percorso SSE di send_secure_message crea il proprio httpx.AsyncClient
-            # con headers hardcoded: non è patchabile post-costruzione.
-            # Usiamo _secure_stream_with_auth che gestisce il canale direttamente.
+            # send_secure_message's SSE path creates its own httpx.AsyncClient
+            # with hardcoded headers: it's not patchable after construction.
+            # We use _secure_stream_with_auth which handles the channel directly.
             response = await _secure_stream_with_auth(
                 adapter=adapter,
                 message={'jsonrpc': '2.0', 'method': method, 'params': params, 'id': 1},
@@ -159,11 +159,11 @@ async def _secure_stream_with_auth(
     expect_401: bool = False,
 ) -> Dict[str, Any]:
     """
-    Percorso SSE cifrato con header di autorizzazione custom.
+    Encrypted SSE path with custom authorization headers.
 
-    Replica la logica di SecureA2ATransportAdapter.send_secure_message(stream=True)
-    ma usa un httpx.AsyncClient con auth_headers iniettati, necessario perché
-    il percorso SSE dell'adapter crea il proprio client con headers hardcoded.
+    Replicates the logic of SecureA2ATransportAdapter.send_secure_message(stream=True)
+    but uses an httpx.AsyncClient with injected auth_headers, needed because
+    the adapter's SSE path creates its own client with hardcoded headers.
     """
     _SSE_METHODS = {"messages/sendStream", "tasks/subscribe"}
     provided_method = message.get("method")
@@ -171,7 +171,7 @@ async def _secure_stream_with_auth(
         provided_method if provided_method in _SSE_METHODS else "messages/sendStream"
     )
 
-    # Cifra il messaggio con il transport dell'adapter
+    # Encrypts the message with the adapter's transport
     from stls_a2a.stls_a2a_transport import A2AMessage
     a2a_msg = A2AMessage(
         jsonrpc=message.get("jsonrpc", "2.0"),
@@ -236,7 +236,7 @@ async def _secure_stream_with_auth(
                         payload = _raw.get("result", _raw)   # ← unwrap JSON-RPC envelope
 
                     except Exception as e:
-                        logger.warning("[secure_stream_auth] chunk non decifrabile: %s", e)
+                        logger.warning("[secure_stream_auth] chunk not decryptable: %s", e)
                         continue
                     if event_type == "TaskArtifactUpdateEvent":
                         for part in payload.get("artifact", {}).get("parts", []):
@@ -264,22 +264,22 @@ async def _secure_stream_with_auth(
         },
     }
 
-# ── Configurazione plain endpoint ─────────────────────────────────────────────
-# Il server monta adk-agent su /agents/adk-agent/secure-a2a.
-# La regola di derivazione del server è:
+# ── Plain endpoint configuration ──────────────────────────────────────────────
+# The server mounts adk-agent on /agents/adk-agent/secure-a2a.
+# The server's derivation rule is:
 #   path.replace("secure-", "")  →  /agents/adk-agent/a2a
 PLAIN_AGENT_PATH = "/agents/adk-agent/a2a"
 
-# ── Configurazione auth lc-agent ──────────────────────────────────────────────
-# Valori speculari all'AuthConfig configurata nel server per lc-agent.
-# Il path plain è derivato da /agents/lc-agent/secure-a2a → /agents/lc-agent/a2a
-LC_SECURE_PATH   = "/agents/lc-agent"          # usato da call_agent (aggiunge /secure-a2a)
+# ── lc-agent auth configuration ───────────────────────────────────────────────
+# Values mirroring the AuthConfig configured in the server for lc-agent.
+# The plain path is derived from /agents/lc-agent/secure-a2a → /agents/lc-agent/a2a
+LC_SECURE_PATH   = "/agents/lc-agent"          # used by call_agent (adds /secure-a2a)
 LC_PLAIN_PATH    = "/agents/lc-agent/a2a"      # plain endpoint (sync + stream)
 LC_BEARER_TOKEN  = "my-secret-token"           # AuthConfig.bearer_tokens
 LC_API_KEY       = "key-abc123"                # AuthConfig.api_keys
 
 
-# ── Helper plain endpoint (nessuna cifratura STLS) ────────────────────────────
+# ── Plain endpoint helper (no STLS encryption) ────────────────────────────────
 
 async def call_plain_agent(
     agent_path: str,
@@ -292,10 +292,10 @@ async def call_plain_agent(
     expect_401: bool = False,
 ) -> Dict[str, Any]:
     """
-    Chiama l'endpoint plain /a2a con httpx — JSON-RPC standard, non cifrato.
-    expect_error=True: non solleva eccezione per error JSON-RPC.
-    expect_401=True:   non solleva eccezione per HTTP 401,
-                       restituisce {"status_code": 401, "www_authenticate": ...}
+    Calls the plain /a2a endpoint with httpx — standard, unencrypted JSON-RPC.
+    expect_error=True: doesn't raise on a JSON-RPC error.
+    expect_401=True:   doesn't raise on HTTP 401,
+                       instead returns {"status_code": 401, "www_authenticate": ...}
     """
     headers: Dict[str, str] = {"Content-Type": "application/json"}
     if bearer_token:
@@ -333,9 +333,9 @@ async def call_plain_agent_stream(
     expect_401: bool = False,
 ) -> Dict[str, Any]:
     """
-    Chiama l'endpoint plain /a2a/stream (SSE non cifrato).
-    Restituisce dict compatibile con extract_a2a_text/extract_a2a_result.
-    expect_401=True: restituisce {"status_code": 401, ...} invece di sollevare.
+    Calls the plain /a2a/stream endpoint (unencrypted SSE).
+    Returns a dict compatible with extract_a2a_text/extract_a2a_result.
+    expect_401=True: returns {"status_code": 401, ...} instead of raising.
     """
     headers: Dict[str, str] = {
         "Content-Type": "application/json",
@@ -418,7 +418,7 @@ async def call_plain_agent_stream(
 
 async def call_plain_agent_raw(agent_path: str, raw_body: bytes,
                                 content_type: str = "application/json") -> Dict[str, Any]:
-    """Invia un body grezzo — usato per testare il parse error -32700."""
+    """Sends a raw body — used to test the -32700 parse error."""
     url = f"{BASE_URL}{agent_path}"
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(url, content=raw_body,
@@ -438,16 +438,16 @@ def _fail(label: str, detail: str = ""):
 
 async def plain_endpoint_test():
     """
-    Test 5 — Endpoint plain /a2a e /a2a/stream (non cifrati).
-    Copre: sync, SSE, lifecycle, idempotenza, async+polling, subscribe, error codes.
+    Test 5 — Plain /a2a and /a2a/stream endpoints (unencrypted).
+    Covers: sync, SSE, lifecycle, idempotency, async+polling, subscribe, error codes.
     """
     print("\n" + "="*70)
     print(f"Test 5: Plain endpoint  ({PLAIN_AGENT_PATH})")
     print("="*70)
 
-    # ── 5.1 messages/send sincrono ────────────────────────────────────────────
-    print("\n── 5.1  messages/send (sincrono)")
-    request_text = "Qual è il prezzo di AAPL?"
+    # ── 5.1 messages/send synchronous ──────────────────────────────────────────
+    print("\n── 5.1  messages/send (synchronous)")
+    request_text = "What is the price of AAPL?"
     print(f"  📤 {request_text}")
     response = await call_plain_agent(
         PLAIN_AGENT_PATH, "messages/send",
@@ -462,9 +462,9 @@ async def plain_endpoint_test():
         _ok(f"taskId={task_id_51}  status={result.get('status')}")
         print(f"  📥 {extract_a2a_text(response)}")
 
-    # ── 5.2 messages/sendStream (SSE plain) ───────────────────────────────────
-    print("\n── 5.2  messages/sendStream (SSE plain)")
-    request_text = "Qual è il prezzo di META?"
+    # ── 5.2 messages/sendStream (plain SSE) ───────────────────────────────────
+    print("\n── 5.2  messages/sendStream (plain SSE)")
+    request_text = "What is the price of META?"
     print(f"  📤 {request_text}")
     response = await call_plain_agent_stream(
         PLAIN_AGENT_PATH, "messages/sendStream",
@@ -484,14 +484,14 @@ async def plain_endpoint_test():
     response = await call_plain_agent(PLAIN_AGENT_PATH, "tasks/list", {"limit": 50})
     tasks = response.get("result", [])
     if not isinstance(tasks, list):
-        _fail("tasks/list", f"attesa lista, ricevuto: {type(tasks)}")
+        _fail("tasks/list", f"expected a list, received: {type(tasks)}")
     else:
-        _ok(f"{len(tasks)} task nel TaskStore")
+        _ok(f"{len(tasks)} tasks in the TaskStore")
         for t in tasks[:3]:
             print(f"    taskId={t.get('taskId')}  status={t.get('status')}")
 
-    # ── 5.4 tasks/get valido ──────────────────────────────────────────────────
-    print("\n── 5.4  tasks/get (taskId valido)")
+    # ── 5.4 tasks/get valid ────────────────────────────────────────────────────
+    print("\n── 5.4  tasks/get (valid taskId)")
     response = await call_plain_agent(
         PLAIN_AGENT_PATH, "tasks/get", {"taskId": task_id_51}
     )
@@ -503,8 +503,8 @@ async def plain_endpoint_test():
             f"history={len(result.get('history', []))}msg  "
             f"artifacts={len(result.get('artifacts', []))}")
 
-    # ── 5.5 tasks/get con contextId errato → -32001 mismatch ─────────────────
-    print("\n── 5.5  tasks/get con contextId errato (atteso -32001)")
+    # ── 5.5 tasks/get with wrong contextId → -32001 mismatch ──────────────────
+    print("\n── 5.5  tasks/get with wrong contextId (expected -32001)")
     response = await call_plain_agent(
         PLAIN_AGENT_PATH, "tasks/get",
         {"taskId": task_id_51, "contextId": "00000000-0000-0000-0000-000000000000"},
@@ -514,28 +514,28 @@ async def plain_endpoint_test():
     if code == -32001:
         _ok(f"-32001 mismatch: {response['error']['message']}")
     else:
-        _fail("atteso -32001", f"ricevuto: {response.get('error')}")
+        _fail("expected -32001", f"received: {response.get('error')}")
 
-    # ── 5.6 Idempotenza: messages/send con taskId esistente ───────────────────
-    print("\n── 5.6  Idempotenza (messages/send con taskId esistente)")
+    # ── 5.6 Idempotency: messages/send with an existing taskId ─────────────────
+    print("\n── 5.6  Idempotency (messages/send with an existing taskId)")
     response = await call_plain_agent(
         PLAIN_AGENT_PATH, "messages/send",
-        {"taskId": task_id_51,   # task già completed — non deve essere rielaborato
+        {"taskId": task_id_51,   # task already completed — must not be reprocessed
          "message": {"role": "user",
-                     "parts": [{"type": "text", "text": "richiesta duplicata"}]}}
+                     "parts": [{"type": "text", "text": "duplicate request"}]}}
     )
     result, err = extract_a2a_result(response)
     if err:
-        _fail("idempotenza", str(err))
+        _fail("idempotency", str(err))
     else:
         returned_id = result.get("taskId")
         if returned_id == task_id_51 and _status_str(result.get("status")) == "completed":
-            _ok(f"task esistente restituito senza rielaborazione  taskId={returned_id}")
+            _ok(f"existing task returned without reprocessing  taskId={returned_id}")
         else:
-            _fail("idempotenza", f"taskId={returned_id}  status={result.get('status')}")
+            _fail("idempotency", f"taskId={returned_id}  status={result.get('status')}")
 
-    # ── 5.7 tasks/cancel su task completed → -32002 TaskNotCancelable ─────────
-    print("\n── 5.7  tasks/cancel su task completed (atteso -32002)")
+    # ── 5.7 tasks/cancel on a completed task → -32002 TaskNotCancelable ────────
+    print("\n── 5.7  tasks/cancel on a completed task (expected -32002)")
     response = await call_plain_agent(
         PLAIN_AGENT_PATH, "tasks/cancel",
         {"taskId": task_id_51},
@@ -545,19 +545,19 @@ async def plain_endpoint_test():
     if code == -32002:
         _ok(f"-32002 TaskNotCancelable: {response['error']['message']}")
     else:
-        _fail("atteso -32002", f"ricevuto: {response.get('error')}")
+        _fail("expected -32002", f"received: {response.get('error')}")
 
-    # ── 5.8 tasks/cancel su task in WORKING (async:true) → canceled ───────────
-    print("\n── 5.8  tasks/cancel su task in WORKING")
+    # ── 5.8 tasks/cancel on a task in WORKING (async:true) → canceled ──────────
+    print("\n── 5.8  tasks/cancel on a task in WORKING")
     response_async = await call_plain_agent(
         PLAIN_AGENT_PATH, "messages/send",
         {"async": True,
          "message": {"role": "user",
-                     "parts": [{"type": "text", "text": "Qual è il prezzo di TSLA?"}]}}
+                     "parts": [{"type": "text", "text": "What is the price of TSLA?"}]}}
     )
     result_async, err_a = extract_a2a_result(response_async)
     if err_a:
-        _fail("creazione task async per cancel", str(err_a))
+        _fail("creating async task for cancel", str(err_a))
     else:
         task_id_cancel = result_async.get("taskId")
         cancel_resp = await call_plain_agent(
@@ -569,19 +569,19 @@ async def plain_endpoint_test():
         if cancel_err:
             code = cancel_resp.get("error", {}).get("code")
             if code == -32002:
-                _ok("task già completato prima del cancel (race benigna) → -32002")
+                _ok("task already completed before the cancel (benign race) → -32002")
             else:
                 _fail("tasks/cancel", str(cancel_err))
         else:
             status = _status_str(cancel_result.get("status"))
             if status == "canceled":
-                _ok(f"task {task_id_cancel} cancellato  status={status}")
+                _ok(f"task {task_id_cancel} canceled  status={status}")
             else:
-                _fail("tasks/cancel", f"atteso 'canceled', ricevuto '{status}'")
+                _fail("tasks/cancel", f"expected 'canceled', received '{status}'")
 
     # ── 5.9 async:true + polling tasks/get ────────────────────────────────────
     print("\n── 5.9  async:true + polling tasks/get")
-    request_text = "Qual è il prezzo di GOOGL?"
+    request_text = "What is the price of GOOGL?"
     print(f"  📤 {request_text}")
     response = await call_plain_agent(
         PLAIN_AGENT_PATH, "messages/send",
@@ -595,10 +595,10 @@ async def plain_endpoint_test():
         task_id_59 = result.get("taskId")
         status_59  = _status_str(result.get("status"))
         if status_59 != "working":
-            _fail(f"atteso 'working', ricevuto '{status_59}'")
+            _fail(f"expected 'working', received '{status_59}'")
         else:
-            _ok(f"risposta immediata: taskId={task_id_59}  status={status_59}")
-            print(f"  ⏳ Polling ogni 500ms (max 10 tentativi)...")
+            _ok(f"immediate response: taskId={task_id_59}  status={status_59}")
+            print(f"  ⏳ Polling every 500ms (max 10 attempts)...")
             completed_59 = False
             current_59   = status_59
             for attempt in range(1, 11):
@@ -608,19 +608,19 @@ async def plain_endpoint_test():
                 )
                 poll_result, _ = extract_a2a_result(poll_resp)
                 current_59 = _status_str(poll_result.get("status")) if poll_result else "error"
-                print(f"    tentativo {attempt}: status={current_59}")
+                print(f"    attempt {attempt}: status={current_59}")
                 if current_59 in ("completed", "failed", "canceled"):
                     completed_59 = True
                     break
             if completed_59 and current_59 == "completed":
-                _ok(f"completato via polling")
+                _ok(f"completed via polling")
                 print(f"  📥 {extract_a2a_text(poll_resp)}")
             elif not completed_59:
-                _fail("task non completato entro timeout polling")
+                _fail("task not completed within the polling timeout")
 
-    # ── 5.10 async:true + tasks/subscribe (SSE plain) ─────────────────────────
-    print("\n── 5.10  async:true + tasks/subscribe (SSE plain)")
-    request_text = "Qual è il prezzo di AMZN?"
+    # ── 5.10 async:true + tasks/subscribe (plain SSE) ─────────────────────────
+    print("\n── 5.10  async:true + tasks/subscribe (plain SSE)")
+    request_text = "What is the price of AMZN?"
     print(f"  📤 {request_text}")
     response = await call_plain_agent(
         PLAIN_AGENT_PATH, "messages/send",
@@ -629,11 +629,11 @@ async def plain_endpoint_test():
     )
     result, err = extract_a2a_result(response)
     if err:
-        _fail("async messages/send per subscribe", str(err))
+        _fail("async messages/send for subscribe", str(err))
     else:
         task_id_510 = result.get("taskId")
-        _ok(f"task creato: taskId={task_id_510}  status={result.get('status')}")
-        print(f"  📡 tasks/subscribe SSE su taskId={task_id_510}...")
+        _ok(f"task created: taskId={task_id_510}  status={result.get('status')}")
+        print(f"  📡 tasks/subscribe SSE on taskId={task_id_510}...")
         sub_resp = await call_plain_agent_stream(
             PLAIN_AGENT_PATH, "tasks/subscribe", {"taskId": task_id_510}
         )
@@ -641,51 +641,51 @@ async def plain_endpoint_test():
         if sub_err:
             _fail("tasks/subscribe", str(sub_err))
         else:
-            _ok(f"subscribe completato  status={sub_result.get('status')}")
+            _ok(f"subscribe completed  status={sub_result.get('status')}")
             print(f"  📥 {extract_a2a_text(sub_resp)}")
 
     # ── 5.11 Error codes ──────────────────────────────────────────────────────
     print("\n── 5.11  Error codes")
 
-    # -32700: body non è JSON valido (endpoint sync)
+    # -32700: body is not valid JSON (sync endpoint)
     resp = await call_plain_agent_raw(PLAIN_AGENT_PATH, b"non-json{{{")
     code = resp.get("error", {}).get("code")
     if code == -32700:
-        _ok("-32700 Parse error (body non JSON — sync)")
+        _ok("-32700 Parse error (non-JSON body — sync)")
     else:
-        _fail("-32700 sync", f"ricevuto: {resp.get('error')}")
+        _fail("-32700 sync", f"received: {resp.get('error')}")
 
-    # -32600: method mancante
+    # -32600: missing method
     resp = await call_plain_agent(
         PLAIN_AGENT_PATH, "", {}, expect_error=True
     )
     code = resp.get("error", {}).get("code")
     if code == -32600:
-        _ok("-32600 Invalid request (method mancante)")
+        _ok("-32600 Invalid request (missing method)")
     else:
-        _fail("-32600", f"ricevuto: {resp.get('error')}")
+        _fail("-32600", f"received: {resp.get('error')}")
 
-    # -32602: taskId mancante in tasks/get
+    # -32602: missing taskId in tasks/get
     resp = await call_plain_agent(
         PLAIN_AGENT_PATH, "tasks/get", {}, expect_error=True
     )
     code = resp.get("error", {}).get("code")
     if code == -32602:
-        _ok("-32602 Invalid params (taskId mancante in tasks/get)")
+        _ok("-32602 Invalid params (missing taskId in tasks/get)")
     else:
-        _fail("-32602", f"ricevuto: {resp.get('error')}")
+        _fail("-32602", f"received: {resp.get('error')}")
 
-    # -32602: taskId mancante in tasks/cancel
+    # -32602: missing taskId in tasks/cancel
     resp = await call_plain_agent(
         PLAIN_AGENT_PATH, "tasks/cancel", {}, expect_error=True
     )
     code = resp.get("error", {}).get("code")
     if code == -32602:
-        _ok("-32602 Invalid params (taskId mancante in tasks/cancel)")
+        _ok("-32602 Invalid params (missing taskId in tasks/cancel)")
     else:
-        _fail("-32602 cancel", f"ricevuto: {resp.get('error')}")
+        _fail("-32602 cancel", f"received: {resp.get('error')}")
 
-    # -32001: taskId inesistente
+    # -32001: nonexistent taskId
     resp = await call_plain_agent(
         PLAIN_AGENT_PATH, "tasks/get",
         {"taskId": "00000000-0000-0000-0000-000000000000"},
@@ -693,11 +693,11 @@ async def plain_endpoint_test():
     )
     code = resp.get("error", {}).get("code")
     if code == -32001:
-        _ok("-32001 Task not found (taskId inesistente)")
+        _ok("-32001 Task not found (nonexistent taskId)")
     else:
-        _fail("-32001", f"ricevuto: {resp.get('error')}")
+        _fail("-32001", f"received: {resp.get('error')}")
 
-    # -32003: push notification non supportate
+    # -32003: push notifications not supported
     resp = await call_plain_agent(
         PLAIN_AGENT_PATH, "tasks/pushNotificationConfig/set",
         {"taskId": task_id_51}, expect_error=True,
@@ -706,9 +706,9 @@ async def plain_endpoint_test():
     if code == -32003:
         _ok("-32003 PushNotificationNotSupported")
     else:
-        _fail("-32003", f"ricevuto: {resp.get('error')}")
+        _fail("-32003", f"received: {resp.get('error')}")
 
-    # -32700: body non JSON sul canale SSE
+    # -32700: non-JSON body on the SSE channel
     url_stream = f"{BASE_URL}{PLAIN_AGENT_PATH}/stream"
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp_sse = await client.post(
@@ -717,11 +717,11 @@ async def plain_endpoint_test():
         )
         sse_body = resp_sse.text
     if "-32700" in sse_body:
-        _ok("-32700 Parse error (body non JSON — SSE)")
+        _ok("-32700 Parse error (non-JSON body — SSE)")
     else:
         _fail("-32700 SSE", f"body: {sse_body[:120]}")
 
-    # -32601: metodo non SSE sul canale /stream (es. tasks/get)
+    # -32601: non-SSE method on the /stream channel (e.g. tasks/get)
     sse_resp = await call_plain_agent_stream(
         PLAIN_AGENT_PATH, "tasks/get", {"taskId": task_id_51}
     )
@@ -729,39 +729,39 @@ async def plain_endpoint_test():
     if err_sse.get("code") == -32601:
         _ok(f"-32601 Method not supported on SSE endpoint")
     else:
-        _fail("-32601 SSE", f"ricevuto: {err_sse}")
+        _fail("-32601 SSE", f"received: {err_sse}")
 
     print()
-    print("  ── Riepilogo Test 5 completato ──")
+    print("  ── Test 5 summary complete ──")
 
 
 async def auth_endpoint_test():
     """
-    Test 6 — Endpoint lc-agent con autorizzazione (AuthConfig bearer + api_key).
+    Test 6 — lc-agent endpoint with authorization (AuthConfig bearer + api_key).
 
-    Copre tutti gli schemi di autenticazione su entrambi i canali:
-      - Canale cifrato STLS  (/agents/lc-agent/secure-a2a)
-      - Canale plain         (/agents/lc-agent/a2a)
+    Covers all authentication schemes on both channels:
+      - Encrypted STLS channel  (/agents/lc-agent/secure-a2a)
+      - Plain channel           (/agents/lc-agent/a2a)
     """
     print("\n" + "="*70)
-    print("Test 6: Endpoint con autorizzazione  (lc-agent)")
+    print("Test 6: Endpoint with authorization  (lc-agent)")
     print("="*70)
 
-    # ── 6.1 Canale cifrato — senza credenziali → HTTP 401 ────────────────────
-    print("\n── 6.1  Canale cifrato STLS senza credenziali (atteso HTTP 401)")
+    # ── 6.1 Encrypted channel — without credentials → HTTP 401 ────────────────
+    print("\n── 6.1  Encrypted STLS channel without credentials (expected HTTP 401)")
     resp = await call_agent(
         LC_SECURE_PATH, "messages/send",
         {"message": {"role": "user", "parts": [{"type": "text", "text": "test"}]}},
         expect_401=True,
     )
     if resp.get("status_code") == 401:
-        _ok(f"HTTP 401 ricevuto  WWW-Authenticate: {resp.get('www_authenticate', '')[:60]}")
+        _ok(f"HTTP 401 received  WWW-Authenticate: {resp.get('www_authenticate', '')[:60]}")
     else:
-        _fail("atteso HTTP 401", f"ricevuto: {resp}")
+        _fail("expected HTTP 401", f"received: {resp}")
 
-    # ── 6.2 Canale cifrato — con Bearer token → successo ─────────────────────
-    print("\n── 6.2  Canale cifrato STLS con Bearer token")
-    request_text = "Qual è il prezzo di TSLA?"
+    # ── 6.2 Encrypted channel — with Bearer token → success ───────────────────
+    print("\n── 6.2  Encrypted STLS channel with Bearer token")
+    request_text = "What is the price of TSLA?"
     print(f"  📤 {request_text}")
     response = await call_agent(
         LC_SECURE_PATH, "messages/send",
@@ -770,15 +770,15 @@ async def auth_endpoint_test():
     )
     result, err = extract_a2a_result(response)
     if err:
-        _fail("messages/send con bearer", str(err))
+        _fail("messages/send with bearer", str(err))
     else:
         task_id_62 = result.get("taskId")
         _ok(f"taskId={task_id_62}  status={result.get('status')}")
         print(f"  📥 {extract_a2a_text(response)}")
 
-    # ── 6.3 Canale cifrato — con API Key (header) → successo ─────────────────
-    print("\n── 6.3  Canale cifrato STLS con API Key (header X-API-Key)")
-    request_text = "Qual è il prezzo di NVDA?"
+    # ── 6.3 Encrypted channel — with API Key (header) → success ───────────────
+    print("\n── 6.3  Encrypted STLS channel with API Key (X-API-Key header)")
+    request_text = "What is the price of NVDA?"
     print(f"  📤 {request_text}")
     response = await call_agent(
         LC_SECURE_PATH, "messages/send",
@@ -787,14 +787,14 @@ async def auth_endpoint_test():
     )
     result, err = extract_a2a_result(response)
     if err:
-        _fail("messages/send con api_key", str(err))
+        _fail("messages/send with api_key", str(err))
     else:
         _ok(f"taskId={result.get('taskId')}  status={result.get('status')}")
         print(f"  📥 {extract_a2a_text(response)}")
 
-    # ── 6.4 Canale cifrato — SSE streaming con Bearer token ───────────────────
-    print("\n── 6.4  Canale cifrato STLS SSE streaming con Bearer token")
-    request_text = "Qual è il prezzo di META?"
+    # ── 6.4 Encrypted channel — SSE streaming with Bearer token ───────────────
+    print("\n── 6.4  Encrypted STLS channel, SSE streaming with Bearer token")
+    request_text = "What is the price of META?"
     print(f"  📤 {request_text}")
     response = await call_agent(
         LC_SECURE_PATH, "messages/sendStream",
@@ -805,13 +805,13 @@ async def auth_endpoint_test():
     )
     result, err = extract_a2a_result(response)
     if err:
-        _fail("messages/sendStream con bearer", str(err))
+        _fail("messages/sendStream with bearer", str(err))
     else:
         _ok(f"taskId={result.get('taskId')}  status={result.get('status')}")
         print(f"  📥 {extract_a2a_text(response)}")
 
-    # ── 6.5 Canale cifrato — SSE senza credenziali → HTTP 401 ────────────────
-    print("\n── 6.5  Canale cifrato STLS SSE senza credenziali (atteso HTTP 401)")
+    # ── 6.5 Encrypted channel — SSE without credentials → HTTP 401 ────────────
+    print("\n── 6.5  Encrypted STLS SSE channel without credentials (expected HTTP 401)")
     resp = await call_agent(
         LC_SECURE_PATH, "messages/sendStream",
         {"message": {"role": "user", "parts": [{"type": "text", "text": "test"}]}},
@@ -819,25 +819,25 @@ async def auth_endpoint_test():
         expect_401=True,
     )
     if resp.get("status_code") == 401:
-        _ok(f"HTTP 401 ricevuto su canale SSE cifrato")
+        _ok(f"HTTP 401 received on the encrypted SSE channel")
     else:
-        _fail("atteso HTTP 401 su SSE cifrato", f"ricevuto: {resp}")
+        _fail("expected HTTP 401 on encrypted SSE", f"received: {resp}")
 
-    # ── 6.6 Canale plain — senza credenziali → HTTP 401 ──────────────────────
-    print("\n── 6.6  Canale plain senza credenziali (atteso HTTP 401)")
+    # ── 6.6 Plain channel — without credentials → HTTP 401 ────────────────────
+    print("\n── 6.6  Plain channel without credentials (expected HTTP 401)")
     resp = await call_plain_agent(
         LC_PLAIN_PATH, "messages/send",
         {"message": {"role": "user", "parts": [{"type": "text", "text": "test"}]}},
         expect_401=True,
     )
     if resp.get("status_code") == 401:
-        _ok(f"HTTP 401 ricevuto  WWW-Authenticate: {resp.get('www_authenticate', '')[:60]}")
+        _ok(f"HTTP 401 received  WWW-Authenticate: {resp.get('www_authenticate', '')[:60]}")
     else:
-        _fail("atteso HTTP 401", f"ricevuto: {resp}")
+        _fail("expected HTTP 401", f"received: {resp}")
 
-    # ── 6.7 Canale plain — con Bearer token → successo ───────────────────────
-    print("\n── 6.7  Canale plain con Bearer token")
-    request_text = "Qual è il prezzo di AAPL?"
+    # ── 6.7 Plain channel — with Bearer token → success ───────────────────────
+    print("\n── 6.7  Plain channel with Bearer token")
+    request_text = "What is the price of AAPL?"
     print(f"  📤 {request_text}")
     response = await call_plain_agent(
         LC_PLAIN_PATH, "messages/send",
@@ -846,14 +846,14 @@ async def auth_endpoint_test():
     )
     result, err = extract_a2a_result(response)
     if err:
-        _fail("plain messages/send con bearer", str(err))
+        _fail("plain messages/send with bearer", str(err))
     else:
         task_id_67 = result.get("taskId")
         _ok(f"taskId={task_id_67}  status={result.get('status')}")
         print(f"  📥 {extract_a2a_text(response)}")
 
-    # ── 6.8 Canale plain — con API Key (header) → successo ───────────────────
-    print("\n── 6.8  Canale plain con API Key (header)")
+    # ── 6.8 Plain channel — with API Key (header) → success ───────────────────
+    print("\n── 6.8  Plain channel with API Key (header)")
     response = await call_plain_agent(
         LC_PLAIN_PATH, "tasks/get",
         {"taskId": task_id_67},
@@ -861,26 +861,26 @@ async def auth_endpoint_test():
     )
     result, err = extract_a2a_result(response)
     if err:
-        _fail("plain tasks/get con api_key", str(err))
+        _fail("plain tasks/get with api_key", str(err))
     else:
         _ok(f"tasks/get  status={result.get('status')}  "
             f"history={len(result.get('history', []))}msg")
 
-    # ── 6.9 Canale plain SSE — senza credenziali → HTTP 401 ──────────────────
-    print("\n── 6.9  Canale plain SSE senza credenziali (atteso HTTP 401)")
+    # ── 6.9 Plain SSE channel — without credentials → HTTP 401 ────────────────
+    print("\n── 6.9  Plain SSE channel without credentials (expected HTTP 401)")
     resp = await call_plain_agent_stream(
         LC_PLAIN_PATH, "messages/sendStream",
         {"message": {"role": "user", "parts": [{"type": "text", "text": "test"}]}},
         expect_401=True,
     )
     if resp.get("status_code") == 401:
-        _ok(f"HTTP 401 ricevuto su canale plain SSE")
+        _ok(f"HTTP 401 received on the plain SSE channel")
     else:
-        _fail("atteso HTTP 401 su plain SSE", f"ricevuto: {resp}")
+        _fail("expected HTTP 401 on plain SSE", f"received: {resp}")
 
-    # ── 6.10 Canale plain SSE — con Bearer token → successo ──────────────────
-    print("\n── 6.10  Canale plain SSE con Bearer token")
-    request_text = "Qual è il prezzo di MSFT?"
+    # ── 6.10 Plain SSE channel — with Bearer token → success ──────────────────
+    print("\n── 6.10  Plain SSE channel with Bearer token")
+    request_text = "What is the price of MSFT?"
     print(f"  📤 {request_text}")
     response = await call_plain_agent_stream(
         LC_PLAIN_PATH, "messages/sendStream",
@@ -890,13 +890,13 @@ async def auth_endpoint_test():
     )
     result, err = extract_a2a_result(response)
     if err:
-        _fail("plain SSE con bearer", str(err))
+        _fail("plain SSE with bearer", str(err))
     else:
         _ok(f"taskId={result.get('taskId')}  status={result.get('status')}")
         print(f"  📥 {extract_a2a_text(response)}")
 
-    # ── 6.11 Credenziali errate → HTTP 401 ────────────────────────────────────
-    print("\n── 6.11  Credenziali errate (atteso HTTP 401)")
+    # ── 6.11 Wrong credentials → HTTP 401 ──────────────────────────────────────
+    print("\n── 6.11  Wrong credentials (expected HTTP 401)")
     resp = await call_plain_agent(
         LC_PLAIN_PATH, "messages/send",
         {"message": {"role": "user", "parts": [{"type": "text", "text": "test"}]}},
@@ -904,9 +904,9 @@ async def auth_endpoint_test():
         expect_401=True,
     )
     if resp.get("status_code") == 401:
-        _ok("HTTP 401 con bearer token errato")
+        _ok("HTTP 401 with wrong bearer token")
     else:
-        _fail("atteso HTTP 401 con token errato", f"ricevuto: {resp}")
+        _fail("expected HTTP 401 with wrong token", f"received: {resp}")
 
     resp = await call_plain_agent(
         LC_PLAIN_PATH, "messages/send",
@@ -915,37 +915,37 @@ async def auth_endpoint_test():
         expect_401=True,
     )
     if resp.get("status_code") == 401:
-        _ok("HTTP 401 con api_key errata")
+        _ok("HTTP 401 with wrong api_key")
     else:
-        _fail("atteso HTTP 401 con api_key errata", f"ricevuto: {resp}")
+        _fail("expected HTTP 401 with wrong api_key", f"received: {resp}")
 
     print()
-    print("  ── Riepilogo Test 6 completato ──")
+    print("  ── Test 6 summary complete ──")
 
 
 
 async def stream_secure_message_test():
     """
-    Test 7 — stream_secure_message(): vero streaming incrementale cifrato.
+    Test 7 — stream_secure_message(): real incremental encrypted streaming.
 
-    Verifica che il nuovo AsyncGenerator yieldi chunk per chunk man mano
-    che arrivano dal server, invece di collezionarli tutti prima di restituire.
+    Verifies that the new AsyncGenerator yields chunk by chunk as they
+    arrive from the server, instead of collecting them all before returning.
 
-    Copre:
-      7.1  chunk yieldati in ordine: submitted → working → artifact(s) → completed
-      7.2  ogni TextPart arriva non vuota
-      7.3  testo finale ricostruito uguale a quello restituito da send_secure_message
-      7.4  almeno un chunk yieldato prima del completed (vero streaming, non batch)
-      7.5  primo chunk arriva prima della fine dello stream (latenza incrementale)
-      7.6  stream_secure_message su lc-agent con API key (auth funziona sul generator)
+    Covers:
+      7.1  chunks yielded in order: submitted → working → artifact(s) → completed
+      7.2  every TextPart arrives non-empty
+      7.3  final reconstructed text matches what send_secure_message returns
+      7.4  at least one chunk yielded before completed (real streaming, not batch)
+      7.5  first chunk arrives before the end of the stream (incremental latency)
+      7.6  stream_secure_message on lc-agent with an API key (auth works on the generator)
     """
     print("\n" + "="*70)
-    print("Test 7: stream_secure_message() — vero streaming incrementale")
+    print("Test 7: stream_secure_message() — real incremental streaming")
     print("="*70)
 
-    # ── 7.1-7.4  adk-agent: verifica ordine eventi e incrementalità ───────────
-    print("\n── 7.1-7.4  adk-agent: ordine eventi e incrementalità")
-    request_text = "Qual è il prezzo di AAPL?"
+    # ── 7.1-7.4  adk-agent: verify event order and incrementality ─────────────
+    print("\n── 7.1-7.4  adk-agent: event order and incrementality")
+    request_text = "What is the price of AAPL?"
     print(f"  📤 {request_text}")
 
     adapter = SecureA2ATransportAdapter(
@@ -992,31 +992,31 @@ async def stream_secure_message_test():
             print(f"  ◉ status={state}{'  [final]' if final else ''}")
 
         elif event == "error":
-            _fail("stream_secure_message errore inatteso",
+            _fail("stream_secure_message unexpected error",
                   f"code={chunk['code']} msg={chunk['message']}")
             return
 
-    # 7.1 — verifica ordine eventi: deve esserci almeno submitted/working e completed
+    # 7.1 — verify event order: there must be at least submitted/working and completed
     status_events = [c["status"] for c in events_received
                      if c["event"] == "TaskStatusUpdateEvent"]
     artifact_events = [c for c in events_received
                        if c["event"] == "TaskArtifactUpdateEvent"]
 
     if "completed" in status_events:
-        _ok(f"7.1  ordine eventi corretto — stati ricevuti: {status_events}")
+        _ok(f"7.1  correct event order — states received: {status_events}")
     else:
-        _fail("7.1  stato 'completed' non ricevuto", f"stati: {status_events}")
+        _fail("7.1  'completed' state not received", f"states: {status_events}")
 
-    # 7.2 — ogni TextPart non vuota
+    # 7.2 — every TextPart is non-empty
     empty_parts = [t for t in text_chunks if not t.strip()]
     if not empty_parts:
-        _ok(f"7.2  nessuna TextPart vuota ({len(text_chunks)} chunks)")
+        _ok(f"7.2  no empty TextPart ({len(text_chunks)} chunks)")
     else:
-        _fail("7.2  TextPart vuote ricevute", f"count={len(empty_parts)}")
+        _fail("7.2  empty TextParts received", f"count={len(empty_parts)}")
 
-    # 7.3 — testo finale = concatenazione dei chunk = risultato send_secure_message
+    # 7.3 — final text = concatenation of chunks = send_secure_message's result
     streamed_text = "".join(text_chunks)
-    # Confronta con send_secure_message(stream=True) sullo stesso contesto
+    # Compares against send_secure_message(stream=True) on the same context
     adapter2 = SecureA2ATransportAdapter(
         session_key=session_key_data,
         session_id=session_key_identifier,
@@ -1037,37 +1037,37 @@ async def stream_secure_message_test():
     batch_response = await adapter2.send_secure_message(message2, stream=True)
     batch_text = extract_a2a_text(batch_response) or ""
     if streamed_text.strip() and batch_text.strip():
-        _ok(f"7.3  testo streamed ({len(streamed_text)} chars) coerente "
-            f"con batch ({len(batch_text)} chars)")
+        _ok(f"7.3  streamed text ({len(streamed_text)} chars) consistent "
+            f"with batch ({len(batch_text)} chars)")
     else:
-        _fail("7.3  testo vuoto in streamed o batch",
+        _fail("7.3  empty text in streamed or batch",
               f"streamed={len(streamed_text)}  batch={len(batch_text)}")
-    print(f"  📥 Testo finale: {streamed_text[:120]}{'…' if len(streamed_text) > 120 else ''}")
+    print(f"  📥 Final text: {streamed_text[:120]}{'…' if len(streamed_text) > 120 else ''}")
 
-    # 7.4 — almeno un artifact chunk prima del completed
+    # 7.4 — at least one artifact chunk before completed
     if artifact_events:
-        _ok(f"7.4  {len(artifact_events)} artifact event(s) ricevuti prima del completed")
+        _ok(f"7.4  {len(artifact_events)} artifact event(s) received before completed")
     else:
-        _fail("7.4  nessun artifact event ricevuto — pseudo-streaming ancora attivo?")
+        _fail("7.4  no artifact event received — pseudo-streaming still active?")
 
-    # ── 7.5  latenza primo chunk ───────────────────────────────────────────────
-    print("\n── 7.5  latenza primo chunk (incrementalità)")
+    # ── 7.5  first chunk latency ───────────────────────────────────────────────
+    print("\n── 7.5  first chunk latency (incrementality)")
     if first_chunk_time is not None:
         total_time = _time.monotonic() - start_time
-        print(f"  ⏱  primo chunk: {first_chunk_time:.2f}s  |  totale: {total_time:.2f}s")
+        print(f"  ⏱  first chunk: {first_chunk_time:.2f}s  |  total: {total_time:.2f}s")
         if first_chunk_time < total_time * 0.9:
-            _ok(f"7.5  primo chunk arrivato a {first_chunk_time:.2f}s "
-                f"(< 90% del tempo totale {total_time:.2f}s) — streaming incrementale")
+            _ok(f"7.5  first chunk arrived at {first_chunk_time:.2f}s "
+                f"(< 90% of total time {total_time:.2f}s) — incremental streaming")
         else:
-            # Non è un hard fail: dipende dal modello e dalla latenza di rete
-            print(f"  ⚠️  7.5  primo chunk a {first_chunk_time:.2f}s su {total_time:.2f}s totali "
-                  f"— possibile batch del modello (non un errore del transport)")
+            # Not a hard fail: depends on the model and network latency
+            print(f"  ⚠️  7.5  first chunk at {first_chunk_time:.2f}s out of {total_time:.2f}s total "
+                  f"— possible model batching (not a transport error)")
     else:
-        _fail("7.5  nessun artifact chunk ricevuto, impossibile misurare latenza")
+        _fail("7.5  no artifact chunk received, cannot measure latency")
 
-    # ── 7.6  lc-agent con API key ─────────────────────────────────────────────
-    print("\n── 7.6  lc-agent: stream_secure_message con API key")
-    request_text_lc = "Qual è il prezzo di TSLA?"
+    # ── 7.6  lc-agent with an API key ──────────────────────────────────────────
+    print("\n── 7.6  lc-agent: stream_secure_message with an API key")
+    request_text_lc = "What is the price of TSLA?"
     print(f"  📤 {request_text_lc}")
 
     adapter_lc = SecureA2ATransportAdapter(
@@ -1093,9 +1093,9 @@ async def stream_secure_message_test():
     lc_final_status = ""
     lc_error = None
 
-    # extra_headers passa X-API-Key direttamente a stream_secure_message:
-    # non serve più patchare adapter_lc.client — l'header viene iniettato
-    # nell'AsyncClient SSE interno al generator.
+    # extra_headers passes X-API-Key directly to stream_secure_message:
+    # there's no need to patch adapter_lc.client anymore — the header is
+    # injected into the AsyncClient SSE instance internal to the generator.
     async for chunk in adapter_lc.stream_secure_message(
         message_lc, extra_headers={"X-API-Key": LC_API_KEY}
     ):
@@ -1111,7 +1111,7 @@ async def stream_secure_message_test():
             lc_final_status = chunk.get("status", "")
 
     if lc_error:
-        _fail("7.6  errore stream lc-agent",
+        _fail("7.6  lc-agent stream error",
               f"code={lc_error['code']} msg={lc_error['message']}")
     elif lc_final_status == "completed" and lc_text_chunks:
         lc_full = "".join(lc_text_chunks)
@@ -1119,40 +1119,40 @@ async def stream_secure_message_test():
             f"chunks={len(lc_text_chunks)}  chars={len(lc_full)}")
         print(f"  📥 {lc_full[:120]}{'…' if len(lc_full) > 120 else ''}")
     else:
-        _fail("7.6  stream lc-agent incompleto",
+        _fail("7.6  lc-agent stream incomplete",
               f"status={lc_final_status}  chunks={len(lc_text_chunks)}")
 
     print()
-    print("  ── Riepilogo Test 7 completato ──")
+    print("  ── Test 7 summary complete ──")
 
 
 async def task_test():
     global session_key_identifier, session_key_data
 
-    # ── Inizializzazione PQC: handshake KEM prima di qualsiasi chiamata ──────
+    # ── PQC initialization: KEM handshake before any call ────────────────────
     if KEY_PROVIDER_NAME == "pqc":
         from stls_a2a import create_pqc_a2a_transport
-        logger.info("PQC: esecuzione handshake KEM verso %s/stls/pqc/handshake", BASE_URL)
+        logger.info("PQC: performing KEM handshake towards %s/stls/pqc/handshake", BASE_URL)
         _pqc_adapter = await create_pqc_a2a_transport(
             BASE_URL,
             client_id="task-test-pqc",
         )
         session_key_identifier = _pqc_adapter.session_id
-        # session_key_data: chiave grezza conservata in SecureA2ATransport
-        # (usata da call_agent per costruire nuovi SecureA2ATransportAdapter)
+        # session_key_data: raw key kept in SecureA2ATransport
+        # (used by call_agent to build new SecureA2ATransportAdapter instances)
         session_key_data = _pqc_adapter.transport.session_key
         logger.info(
-            "PQC handshake completato: session_id=%s key_len=%d",
+            "PQC handshake completed: session_id=%s key_len=%d",
             session_key_identifier, len(session_key_data),
         )
 
     try:
         print("\n" + "="*70)
-        print("Test 1: Test ADK")
+        print("Test 1: ADK Test")
         print("="*70)
 
-        request_text = "Qual è il prezzo di AAPL?"
-        print(f"\n📤 Invio richiesta: {request_text}")
+        request_text = "What is the price of AAPL?"
+        print(f"\n📤 Sending request: {request_text}")
 
         response = await call_agent(
             agent_path='/agents/adk-agent',
@@ -1163,14 +1163,14 @@ async def task_test():
                 }}
             )
         
-        # Estrae solo il testo
+        # Extracts just the text
         #print(f'response={response}')
         text = extract_a2a_text(response)
-        print(f"📥 Risposta: {text}")
+        print(f"📥 Response: {text}")
         print()
 
-        request_text = "Qual è il prezzo di META?"
-        print(f"\n📤 Invio richiesta: {request_text}")
+        request_text = "What is the price of META?"
+        print(f"\n📤 Sending request: {request_text}")
 
         print("Test 1.a: Test ADK using Streaming")
         response = await call_agent(
@@ -1182,21 +1182,21 @@ async def task_test():
                     "role": "user",
                     "parts": [{ "type": "text", "text": request_text }]
                 }},
-            stream=True  
-            ) 
-        # Estrae solo il testo
+            stream=True
+            )
+        # Extracts just the text
         text = extract_a2a_text(response)
-        print(f"📥 Risposta: {text}")
-        print()    
-        
+        print(f"📥 Response: {text}")
+        print()
 
-        # Chiama lc-agent
+
+        # Calls lc-agent
         print("\n" + "="*70)
         print("Test 2: lc-agent (LangChain)")
-        print("="*70)   
+        print("="*70)
 
-        request_text = "Qual è il prezzo di TSLA?"
-        print(f"\n📤 Invio richiesta: {request_text}")
+        request_text = "What is the price of TSLA?"
+        print(f"\n📤 Sending request: {request_text}")
 
         response = await call_agent(
             agent_path='/agents/lc-agent',
@@ -1209,11 +1209,11 @@ async def task_test():
             )
         
         text = extract_a2a_text(response)
-        print(f"📥 Risposta: {text}")
+        print(f"📥 Response: {text}")
         print()
 
-        request_text = "Qual è il prezzo di NVDA?"
-        print(f"\n📤 Invio richiesta: {request_text}")
+        request_text = "What is the price of NVDA?"
+        print(f"\n📤 Sending request: {request_text}")
 
         print("Test 2.a: Test lc-agent using Streaming")
         response = await call_agent(
@@ -1226,21 +1226,21 @@ async def task_test():
                     "parts": [{ "type": "text", "text": request_text }]
                 }},
             api_key=LC_API_KEY,
-            stream=True  
-            ) 
-        # Estrae solo il testo
+            stream=True
+            )
+        # Extracts just the text
         text = extract_a2a_text(response)
-        print(f"📥 Risposta: {text}")
-        print()    
+        print(f"📥 Response: {text}")
+        print()
 
 
-        # Chiama sk-agent
+        # Calls sk-agent
         print("\n" + "="*70)
         print("Test 3: sk-agent (Semantic Kernel)")
-        print("="*70)   
+        print("="*70)
 
-        request_text = "Qual è il prezzo di MSFT?"
-        print(f"\n📤 Invio richiesta: {request_text}")
+        request_text = "What is the price of MSFT?"
+        print(f"\n📤 Sending request: {request_text}")
 
         response = await call_agent(
             agent_path='/agents/sk-agent',
@@ -1251,11 +1251,11 @@ async def task_test():
                 }}
             )
         text = extract_a2a_text(response)
-        print(f"📥 Risposta: {text}")
+        print(f"📥 Response: {text}")
         print()
 
-        request_text = "Mi estrai info su MSFT?"
-        print(f"\n📤 Invio richiesta: {request_text}")
+        request_text = "Can you pull info on MSFT for me?"
+        print(f"\n📤 Sending request: {request_text}")
 
         response = await call_agent(
             agent_path='/agents/sk-agent',
@@ -1267,8 +1267,8 @@ async def task_test():
             )
         
         text = extract_a2a_text(response)
-        print(f"📥 Risposta: {text}")
-        print() 
+        print(f"📥 Response: {text}")
+        print()
 
         print("Test 3.a: Test sk-agent using Streaming")
         response = await call_agent(
@@ -1280,14 +1280,14 @@ async def task_test():
                     "role": "user",
                     "parts": [{ "type": "text", "text": request_text }]
                 }},
-            stream=True  
-            ) 
-        # Estrae solo il testo
+            stream=True
+            )
+        # Extracts just the text
         text = extract_a2a_text(response)
-        print(f"📥 Risposta: {text}")
-        print()    
- 
-        # richiamo tasks/list
+        print(f"📥 Response: {text}")
+        print()
+
+        # tasks/list call
         response = await call_agent(
             agent_path='/agents/sk-agent',
             method='tasks/list',
@@ -1298,7 +1298,7 @@ async def task_test():
         for task in result:
             print(f'-> taskId={task.get("taskId")};contextId={task.get("contextId")};status={task.get("status")}')
         if len(result)>0:
-            # prendo il primo
+            # take the first one
             task=result[0]
             response = await call_agent(
                 agent_path='/agents/sk-agent',
@@ -1309,13 +1309,13 @@ async def task_test():
 
         # ── Test 4: Async processing + polling + subscribe ────────────────────
         print("\n" + "="*70)
-        print("Test 4: Async processing (messages/send con async:true)")
+        print("Test 4: Async processing (messages/send with async:true)")
         print("="*70)
 
-        request_text = "Qual è il prezzo di GOOGL?"
-        print(f"\n📤 Invio richiesta ASINCRONA: {request_text}")
+        request_text = "What is the price of GOOGL?"
+        print(f"\n📤 Sending an ASYNC request: {request_text}")
 
-        # 4.1 – messages/send con async:true → risponde subito con status working
+        # 4.1 – messages/send with async:true → responds immediately with status working
         response = await call_agent(
             agent_path='/agents/adk-agent',
             method='messages/send',
@@ -1329,15 +1329,15 @@ async def task_test():
         )
         result, error = extract_a2a_result(response)
         if error:
-            print(f"❌ Errore: {error}")
+            print(f"❌ Error: {error}")
         else:
             task_id   = result.get('taskId')
             status    = _status_str(result.get('status'))
-            print(f"✅ Task creato immediatamente: taskId={task_id}  status={status}")
-            assert status == "working", f"Atteso 'working', ricevuto '{status}'"
+            print(f"✅ Task created immediately: taskId={task_id}  status={status}")
+            assert status == "working", f"Expected 'working', received '{status}'"
 
-        # 4.2 – Polling con tasks/get: aspettiamo che il task termini
-        print(f"\n⏳ Polling tasks/get ogni 500ms (max 10 tentativi)...")
+        # 4.2 – Polling with tasks/get: wait for the task to finish
+        print(f"\n⏳ Polling tasks/get every 500ms (max 10 attempts)...")
         completed = False
         for attempt in range(1, 11):
             await asyncio.sleep(0.5)
@@ -1348,21 +1348,21 @@ async def task_test():
             )
             poll_result, poll_error = extract_a2a_result(poll_response)
             current_status = _status_str(poll_result.get('status')) if poll_result else "error"
-            print(f"  tentativo {attempt}: status={current_status}")
+            print(f"  attempt {attempt}: status={current_status}")
             if current_status in ("completed", "failed", "canceled"):
                 completed = True
                 break
 
         if completed and current_status == "completed":
             text = extract_a2a_text(poll_response)
-            print(f"📥 Risposta finale (via polling): {text}")
+            print(f"📥 Final response (via polling): {text}")
         elif not completed:
-            print("⚠️  Task non completato entro il timeout di polling")
+            print("⚠️  Task not completed within the polling timeout")
 
-        # 4.3 – Stesso scenario ma con tasks/subscribe (SSE) invece di polling.
-        #        Inviamo una nuova richiesta async e ci sottoscriviamo subito.
-        print(f"\n📤 Invio seconda richiesta ASINCRONA per test subscribe...")
-        request_text2 = "Qual è il prezzo di AMZN?"
+        # 4.3 – Same scenario but with tasks/subscribe (SSE) instead of polling.
+        #        We send a new async request and subscribe to it right away.
+        print(f"\n📤 Sending a second ASYNC request for the subscribe test...")
+        request_text2 = "What is the price of AMZN?"
 
         response2 = await call_agent(
             agent_path='/agents/adk-agent',
@@ -1377,12 +1377,12 @@ async def task_test():
         )
         result2, error2 = extract_a2a_result(response2)
         if error2:
-            print(f"❌ Errore nella seconda richiesta: {error2}")
+            print(f"❌ Error in the second request: {error2}")
         else:
             task_id2 = result2.get('taskId')
-            print(f"✅ Task creato: taskId={task_id2}  status={result2.get('status')}")
+            print(f"✅ Task created: taskId={task_id2}  status={result2.get('status')}")
 
-            print(f"\n📡 tasks/subscribe su taskId={task_id2} (SSE)...")
+            print(f"\n📡 tasks/subscribe on taskId={task_id2} (SSE)...")
             subscribe_response = await call_agent(
                 agent_path='/agents/adk-agent',
                 method='tasks/subscribe',
@@ -1391,25 +1391,25 @@ async def task_test():
             )
             sub_result, sub_error = extract_a2a_result(subscribe_response)
             if sub_error:
-                print(f"❌ Errore subscribe: {sub_error}")
+                print(f"❌ Subscribe error: {sub_error}")
             else:
                 sub_status = sub_result.get('status')
                 sub_text   = extract_a2a_text(subscribe_response)
-                print(f"📥 Subscribe completato — status={sub_status}")
-                print(f"📥 Testo risposta: {sub_text}")
+                print(f"📥 Subscribe completed — status={sub_status}")
+                print(f"📥 Response text: {sub_text}")
 
-        # ── Test 5: Plain endpoint (non cifrato) ──────────────────────────────
+        # ── Test 5: Plain endpoint (unencrypted) ──────────────────────────────
         await plain_endpoint_test()
 
-        # ── Test 6: Endpoint con autorizzazione (lc-agent) ────────────────────
+        # ── Test 6: Endpoint with authorization (lc-agent) ────────────────────
         await auth_endpoint_test()
 
-        # ── Test 7: stream_secure_message() — vero streaming incrementale ─────
+        # ── Test 7: stream_secure_message() — real incremental streaming ──────
         await stream_secure_message_test()
 
     finally:
         print("\n" + "="*70)
-        print("Fine del test")
+        print("End of test")
         print("="*70)
 
 if __name__ == "__main__":

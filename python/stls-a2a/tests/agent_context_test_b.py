@@ -1,11 +1,11 @@
 """
 agent_context_test_b.py
 -----------------------
-Agente B — diagnostica contesto utente.
+Agent B — user context diagnostics.
 
-Legge user_id e profile dal session.state tramite FunctionTool.
-NOTA: tool_context.state è un oggetto ADK State, non un dict.
-Usare state.get(key, default) oppure state.to_dict() — NON dict(state).
+Reads user_id and profile from session.state via FunctionTool.
+NOTE: tool_context.state is an ADK State object, not a dict.
+Use state.get(key, default) or state.to_dict() — NOT dict(state).
 """
 
 from google.adk.agents import Agent
@@ -30,13 +30,13 @@ def get_user_context(tool_context: ToolContext) -> dict:
         dict with user_id and profile found in session state.
     """
     try:
-        # State è un oggetto ADK custom — usa .get() o .to_dict()
-        # NON usare dict(state): State non implementa __iter__
+        # State is a custom ADK object — use .get() or .to_dict()
+        # Do NOT use dict(state): State doesn't implement __iter__
         state = tool_context.state
         user_id = state.get("user_id", "not set")
         profile  = state.get("profile", "not set")
     except Exception as e:
-        logger.warning("get_user_context: errore lettura state: %s", e)
+        logger.warning("get_user_context: error reading state: %s", e)
         user_id = "not set"
         profile  = "not set"
 

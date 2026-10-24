@@ -1,22 +1,22 @@
 """
 test_km_client.py
 -----------------
-Client di test completo per multi_agent_km_server.py.
+Complete test client for multi_agent_km_server.py.
 
-Testa tutti gli endpoint, tutti i backend auth e tutti i metodi A2A.
+Tests every endpoint, every auth backend, and every A2A method.
 
-Avvio:
-    # avvia prima il server
+Startup:
+    # start the server first
     uv run python multi_agent_km_server.py
 
-    # poi in un altro terminale
+    # then in another terminal
     uv run python test_km_client.py
 
-    # oppure con opzioni:
+    # or with options:
     uv run python test_km_client.py --host localhost --port 8001 --verbose
-    uv run python test_km_client.py --suite auth     # solo test autenticazione
-    uv run python test_km_client.py --suite a2a      # solo test metodi A2A
-    uv run python test_km_client.py --suite diag     # solo diagnostica
+    uv run python test_km_client.py --suite auth     # authentication tests only
+    uv run python test_km_client.py --suite a2a      # A2A method tests only
+    uv run python test_km_client.py --suite diag     # diagnostics only
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Configurazione
+# Configuration
 # ---------------------------------------------------------------------------
 
 BASE_URL     = os.getenv("TEST_BASE_URL", "http://localhost:8001")
@@ -49,7 +49,7 @@ TIMEOUT      = float(os.getenv("TEST_TIMEOUT", "15"))
 VERBOSE      = os.getenv("TEST_VERBOSE", "false").lower() == "true"
 
 # ---------------------------------------------------------------------------
-# Risultati
+# Results
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -103,7 +103,7 @@ def msg_params(text: str, task_id: str | None = None, context_id: str | None = N
         }
     }
     if task_id:
-        p["taskId"] = task_id  # spec §3.3.1: il server controlla params.taskId
+        p["taskId"] = task_id  # spec §3.3.1: the server checks params.taskId
     if context_id:
         p["contextId"] = context_id
     return p
@@ -162,7 +162,7 @@ async def sse_lines(
     max_events: int = 10,
     timeout: float = 20.0,
 ) -> list[dict]:
-    """Raccoglie eventi SSE e li restituisce come lista di dict parsed."""
+    """Collects SSE events and returns them as a list of parsed dicts."""
     headers: dict = {
         "Content-Type": "application/json",
         "Accept":        "text/event-stream",
@@ -194,7 +194,7 @@ async def sse_lines(
                     except Exception:
                         payload = {"_raw": raw}
                     events.append({"event": event_type, "data": payload})
-                    # termina se abbiamo abbastanza eventi o lo stato è finale
+                    # stop if we have enough events or the state is final
                     if len(events) >= max_events:
                         break
                     result = payload.get("result", {})
@@ -227,11 +227,11 @@ def _fmt(data: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Suite 1 — Diagnostica e discovery
+# Suite 1 — Diagnostics and discovery
 # ---------------------------------------------------------------------------
 
 async def suite_diagnostics(client: httpx.AsyncClient) -> Suite:
-    s = Suite("Diagnostica & Discovery")
+    s = Suite("Diagnostics & Discovery")
     print(f"\n{'─'*60}")
     print(f"🔍 {s.name}")
     print(f"{'─'*60}")
@@ -274,7 +274,7 @@ async def suite_diagnostics(client: httpx.AsyncClient) -> Suite:
     code, data, ms = await get(client, "/.well-known/agent.json?agent=/agents/calculator/secure-a2a")
     s.add(TestResult(
         "GET /.well-known/agent.json?agent=/agents/calculator/secure-a2a",
-        code in (200, 404),   # 404 se non ha un AgentCard strutturato
+        code in (200, 404),   # 404 if it doesn't have a structured AgentCard
         f"status={code}", ms,
     ))
 
@@ -282,7 +282,7 @@ async def suite_diagnostics(client: httpx.AsyncClient) -> Suite:
 
 
 # ---------------------------------------------------------------------------
-# Suite 2 — Autenticazione (tutti i backend)
+# Suite 2 — Authentication (all backends)
 # ---------------------------------------------------------------------------
 
 async def suite_auth(
@@ -291,22 +291,22 @@ async def suite_auth(
     file_key: str,
     pg_key: str | None,
 ) -> Suite:
-    s = Suite("Autenticazione — tutti i backend")
+    s = Suite("Authentication — all backends")
     print(f"\n{'─'*60}")
     print(f"🔐 {s.name}")
     print(f"{'─'*60}")
 
     body = rpc("messages/send", msg_params("test auth"))
 
-    # ── StaticLoader: chiave valida ───────────────────────────────────────
+    # ── StaticLoader: valid key ────────────────────────────────────────────
     code, data, ms = await post(client, "/agents/calculator/a2a", body, key=static_key)
     s.add(TestResult(
-        "StaticLoader: chiave valida (X-API-Key)",
+        "StaticLoader: valid key (X-API-Key)",
         code in (200,) and not _has_error(data, -32600),
         f"status={code} result_ok={_has_result(data)}", ms,
     ))
 
-    # ── StaticLoader: chiave valida via query param ───────────────────────
+    # ── StaticLoader: valid key via query param ────────────────────────────
     t0 = time.monotonic()
     r  = await client.post(
         f"{BASE_URL}/agents/calculator/a2a?api_key={static_key}",
@@ -314,116 +314,116 @@ async def suite_auth(
     )
     ms = (time.monotonic() - t0) * 1000
     s.add(TestResult(
-        "StaticLoader: chiave valida (?api_key= query param)",
+        "StaticLoader: valid key (?api_key= query param)",
         r.status_code in (200,) and r.json().get("error", {}).get("code") != -32600,
         f"status={r.status_code}", ms,
     ))
 
-    # ── StaticLoader: chiave assente → 401 ───────────────────────────────
+    # ── StaticLoader: missing key → 401 ────────────────────────────────────
     code, data, ms = await post(client, "/agents/calculator/a2a", body)
     s.add(TestResult(
-        "StaticLoader: nessuna chiave → 401",
+        "StaticLoader: no key → 401",
         code == 401,
         f"status={code} body={_fmt(data)}", ms,
     ))
 
-    # ── StaticLoader: chiave errata → 401 ────────────────────────────────
+    # ── StaticLoader: wrong key → 401 ──────────────────────────────────────
     code, data, ms = await post(client, "/agents/calculator/a2a", body, key="stls-static_wrong_key")
     s.add(TestResult(
-        "StaticLoader: chiave errata → 401",
+        "StaticLoader: wrong key → 401",
         code == 401,
         f"status={code}", ms,
     ))
 
-    # ── FileLoader: chiave valida ─────────────────────────────────────────
+    # ── FileLoader: valid key ───────────────────────────────────────────────
     code, data, ms = await post(client, "/agents/adk-agent/a2a", body, key=file_key)
     s.add(TestResult(
-        "FileLoader: chiave valida (api_keys.yaml)",
+        "FileLoader: valid key (api_keys.yaml)",
         code in (200,) and not _has_error(data, -32600),
         f"status={code} result_ok={_has_result(data)}", ms,
     ))
 
-    # ── FileLoader: chiave assente → 401 ─────────────────────────────────
+    # ── FileLoader: missing key → 401 ──────────────────────────────────────
     code, data, ms = await post(client, "/agents/adk-agent/a2a", body)
     s.add(TestResult(
-        "FileLoader: nessuna chiave → 401",
+        "FileLoader: no key → 401",
         code == 401,
         f"status={code}", ms,
     ))
 
-    # ── lc-agent: Postgres se DSN configurato, legacy altrimenti ─────────
-    # Rileva il backend attivo provando prima senza chiave:
-    # se risponde 401 c'è auth attiva; se risponde 200 è pubblico (non dovrebbe).
-    # Per capire se il server usa Postgres o legacy, controlliamo AUTH_PG_DSN.
+    # ── lc-agent: Postgres if DSN configured, legacy otherwise ────────────
+    # Detects the active backend by first trying without a key:
+    # a 401 means auth is active; a 200 means public (shouldn't happen).
+    # To tell whether the server uses Postgres or legacy, check AUTH_PG_DSN.
     import os as _os
     _pg_dsn_active = bool((_os.getenv("AUTH_PG_DSN") or "").split("#")[0].strip())
 
     if pg_key:
-        # Chiave Postgres fornita — test completo
+        # Postgres key provided — full test
         code, data, ms = await post(client, "/agents/lc-agent/a2a", body, key=pg_key)
         s.add(TestResult(
-            "PostgresLoader: chiave valida",
+            "PostgresLoader: valid key",
             code in (200,) and not _has_error(data, -32600),
             f"status={code}", ms,
         ))
         code, data, ms = await post(client, "/agents/lc-agent/a2a", body)
         s.add(TestResult(
-            "PostgresLoader: nessuna chiave → 401",
+            "PostgresLoader: no key → 401",
             code == 401,
             f"status={code}", ms,
         ))
     elif _pg_dsn_active:
-        # AUTH_PG_DSN impostato ma TEST_PG_KEY non fornita:
-        # il server usa PostgresLoader → verifica solo che il 401 funzioni
+        # AUTH_PG_DSN set but TEST_PG_KEY not provided:
+        # the server uses PostgresLoader → only verify the 401 works
         code, data, ms = await post(client, "/agents/lc-agent/a2a", body)
         s.add(TestResult(
-            "PostgresLoader attivo (no TEST_PG_KEY): nessuna chiave → 401",
+            "PostgresLoader active (no TEST_PG_KEY): no key → 401",
             code == 401,
-            f"status={code} — imposta TEST_PG_KEY per testare chiave valida", ms,
+            f"status={code} — set TEST_PG_KEY to test a valid key", ms,
         ))
         s.add(TestResult(
-            "PostgresLoader attivo (no TEST_PG_KEY): chiave valida — SKIP",
+            "PostgresLoader active (no TEST_PG_KEY): valid key — SKIP",
             True,
-            "⚠️  Imposta TEST_PG_KEY con un raw_key reale dal DB per questo test", 0,
+            "⚠️  Set TEST_PG_KEY with a real raw_key from the DB for this test", 0,
         ))
     else:
-        # Nessun DSN → il server usa AuthConfig legacy
+        # No DSN → the server uses legacy AuthConfig
         code, data, ms = await post(client, "/agents/lc-agent/a2a", body, bearer="legacy-bearer-token-lc")
         s.add(TestResult(
-            "AuthConfig legacy lc-agent (bearer): chiave valida",
+            "Legacy AuthConfig lc-agent (bearer): valid key",
             code in (200,) and not _has_error(data, -32600),
             f"status={code}", ms,
         ))
         code, data, ms = await post(client, "/agents/lc-agent/a2a", body, key="legacy-api-key-lc")
         s.add(TestResult(
-            "AuthConfig legacy lc-agent (api_key): chiave valida",
+            "Legacy AuthConfig lc-agent (api_key): valid key",
             code in (200,) and not _has_error(data, -32600),
             f"status={code}", ms,
         ))
 
-    # ── AuthConfig legacy sk-agent ────────────────────────────────────────
+    # ── Legacy AuthConfig sk-agent ──────────────────────────────────────────
     code, data, ms = await post(client, "/agents/sk-agent/a2a", body, bearer="sk-bearer-token")
     s.add(TestResult(
-        "AuthConfig legacy sk-agent (bearer): chiave valida",
+        "Legacy AuthConfig sk-agent (bearer): valid key",
         code in (200,) and not _has_error(data, -32600),
         f"status={code}", ms,
     ))
     code, data, ms = await post(client, "/agents/sk-agent/a2a", body, key="sk-api-key-123")
     s.add(TestResult(
-        "AuthConfig legacy sk-agent (api_key): chiave valida",
+        "Legacy AuthConfig sk-agent (api_key): valid key",
         code in (200,) and not _has_error(data, -32600),
         f"status={code}", ms,
     ))
     code, data, ms = await post(client, "/agents/sk-agent/a2a", body)
     s.add(TestResult(
-        "AuthConfig legacy sk-agent: nessuna chiave → 401",
+        "Legacy AuthConfig sk-agent: no key → 401",
         code == 401,
         f"status={code}", ms,
     ))
 
-    # ── invoices-classifier: nessuna auth (pubblico) ──────────────────────
-    # Usiamo un timeout corto: vogliamo solo verificare che il layer auth
-    # lasci passare la richiesta (non 401), non aspettare la risposta dell'agente.
+    # ── invoices-classifier: no auth (public) ──────────────────────────────
+    # We use a short timeout: we only want to verify that the auth layer
+    # lets the request through (not 401), not wait for the agent's response.
     t0 = time.monotonic()
     try:
         r = await client.post(
@@ -433,28 +433,28 @@ async def suite_auth(
             timeout=httpx.Timeout(3.0, connect=3.0),
         )
         ms = (time.monotonic() - t0) * 1000
-        # 200 = auth ok (agente risponde), oppure timeout lato agente ma auth ok
+        # 200 = auth ok (agent responds), or a timeout on the agent side but auth ok
         passed = r.status_code != 401
         s.add(TestResult(
-            "Nessuna auth (invoices-classifier): accesso senza chiave → non 401",
+            "No auth (invoices-classifier): access without a key → not 401",
             passed,
-            f"status={r.status_code} (200=ok, qualsiasi!=401 è auth ok)", ms,
+            f"status={r.status_code} (200=ok, anything!=401 means auth is ok)", ms,
         ))
     except httpx.TimeoutException:
         ms = (time.monotonic() - t0) * 1000
-        # Timeout = il server ha accettato la connessione e sta elaborando
-        # → il layer auth ha lasciato passare (non ha risposto 401 subito)
+        # Timeout = the server accepted the connection and is processing
+        # → the auth layer let it through (didn't immediately respond 401)
         s.add(TestResult(
-            "Nessuna auth (invoices-classifier): accesso senza chiave → non 401",
+            "No auth (invoices-classifier): access without a key → not 401",
             True,
-            "⏱ Timeout atteso: auth ok, agente lento (normale in test)", ms,
+            "⏱ Expected timeout: auth ok, agent slow (normal in tests)", ms,
         ))
 
     return s
 
 
 # ---------------------------------------------------------------------------
-# Suite 3 — Metodi A2A (messages/send, tasks/get, tasks/cancel)
+# Suite 3 — A2A methods (messages/send, tasks/get, tasks/cancel)
 # ---------------------------------------------------------------------------
 
 async def suite_a2a_methods(
@@ -462,13 +462,13 @@ async def suite_a2a_methods(
     key: str,
     path_plain: str = "/agents/calculator/a2a",
 ) -> Suite:
-    s = Suite(f"Metodi A2A JSON-RPC su {path_plain}")
+    s = Suite(f"A2A JSON-RPC methods on {path_plain}")
     print(f"\n{'─'*60}")
     print(f"📨 {s.name}")
     print(f"{'─'*60}")
 
     # ── messages/send ─────────────────────────────────────────────────────
-    body = rpc("messages/send", msg_params("Calcola 2 + 2"))
+    body = rpc("messages/send", msg_params("Compute 2 + 2"))
     code, data, ms = await post(client, path_plain, body, key=key)
     task_id    = data.get("result", {}).get("id") or data.get("result", {}).get("taskId", "")
     context_id = data.get("result", {}).get("contextId", "")
@@ -478,25 +478,25 @@ async def suite_a2a_methods(
         f"status={code} taskId={task_id}\n{_fmt(data)}", ms,
     ))
 
-    # ── messages/send — idempotenza (stesso taskId) ───────────────────────
+    # ── messages/send — idempotency (same taskId) ──────────────────────────
     if task_id:
-        body2 = rpc("messages/send", msg_params("Calcola 2 + 2", task_id=task_id))
+        body2 = rpc("messages/send", msg_params("Compute 2 + 2", task_id=task_id))
         code, data2, ms = await post(client, path_plain, body2, key=key)
         returned_id = data2.get("result", {}).get("id") or data2.get("result", {}).get("taskId", "")
         s.add(TestResult(
-            "messages/send — idempotenza (stesso taskId)",
+            "messages/send — idempotency (same taskId)",
             code == 200 and returned_id == task_id,
-            f"returned taskId={returned_id} (atteso {task_id})", ms,
+            f"returned taskId={returned_id} (expected {task_id})", ms,
         ))
 
     # ── tasks/get ─────────────────────────────────────────────────────────
     if task_id:
-        body = rpc("tasks/get", {"taskId": task_id})  # server legge params.taskId
+        body = rpc("tasks/get", {"taskId": task_id})  # server reads params.taskId
         code, data, ms = await post(client, path_plain, body, key=key)
         result_tg  = data.get("result") or {}
         status_tg  = result_tg.get("status") or {}
         state_tg   = status_tg.get("state", "") if isinstance(status_tg, dict) else str(status_tg)
-        # Passa se: 200 + result presente (anche con state vuoto = task appena creato)
+        # Passes if: 200 + result present (even with an empty state = task just created)
         tg_ok = code == 200 and ("result" in data) and not _has_error(data, -32600)
         s.add(TestResult(
             "tasks/get",
@@ -504,31 +504,31 @@ async def suite_a2a_methods(
             f"status={code} state={state_tg!r} result_keys={list(result_tg.keys()) if isinstance(result_tg, dict) else result_tg}", ms,
         ))
 
-    # ── tasks/get — task inesistente ──────────────────────────────────────
+    # ── tasks/get — nonexistent task ───────────────────────────────────────
     body = rpc("tasks/get", {"taskId": "nonexistent-task-id"})
     code, data, ms = await post(client, path_plain, body, key=key)
     s.add(TestResult(
-        "tasks/get — task inesistente → errore",
+        "tasks/get — nonexistent task → error",
         code == 200 and _has_error(data),
         f"error={data.get('error')}", ms,
     ))
 
     # ── tasks/cancel ──────────────────────────────────────────────────────
     if task_id:
-        body = rpc("tasks/cancel", {"taskId": task_id})  # server legge params.taskId
+        body = rpc("tasks/cancel", {"taskId": task_id})  # server reads params.taskId
         code, data, ms = await post(client, path_plain, body, key=key)
-        # può essere ok (canceled) o errore se già terminato
+        # can be ok (canceled) or an error if already finished
         s.add(TestResult(
             "tasks/cancel",
             code == 200,
             f"status={code} resp={_fmt(data)}", ms,
         ))
 
-    # ── tasks/cancel — task inesistente ───────────────────────────────────
+    # ── tasks/cancel — nonexistent task ────────────────────────────────────
     body = rpc("tasks/cancel", {"taskId": "nonexistent-task-id"})
     code, data, ms = await post(client, path_plain, body, key=key)
     s.add(TestResult(
-        "tasks/cancel — task inesistente → errore",
+        "tasks/cancel — nonexistent task → error",
         code == 200 and _has_error(data),
         f"error={data.get('error')}", ms,
     ))
@@ -539,17 +539,17 @@ async def suite_a2a_methods(
     mnf_err    = data.get("error")
     mnf_code   = mnf_err.get("code") if mnf_err else None
     mnf_result = data.get("result")
-    # ✅ = server risponde con un error code qualsiasi (ideale -32601)
-    # ❌ = server risponde con result (bug: metodo ignoto non gestito)
+    # ✅ = server responds with any error code (ideally -32601)
+    # ❌ = server responds with a result (bug: unknown method not handled)
     s.add(TestResult(
-        "metodo inesistente → errore (ideale -32601)",
+        "nonexistent method → error (ideally -32601)",
         code == 200 and mnf_err is not None,
         f"error_code={mnf_code} (spec: -32601)"
-        + (f" — server ha risposto con result={mnf_result!r} invece di error (bug server)" if mnf_err is None else ""),
+        + (f" — server responded with result={mnf_result!r} instead of error (server bug)" if mnf_err is None else ""),
         ms,
     ))
 
-    # ── parse error (body non JSON) ───────────────────────────────────────
+    # ── parse error (non-JSON body) ────────────────────────────────────────
     t0 = time.monotonic()
     r = await client.post(
         f"{BASE_URL}{path_plain}",
@@ -558,7 +558,7 @@ async def suite_a2a_methods(
     )
     ms = (time.monotonic() - t0) * 1000
     s.add(TestResult(
-        "body non-JSON → -32700",
+        "non-JSON body → -32700",
         r.status_code == 200 and r.json().get("error", {}).get("code") == -32700,
         f"status={r.status_code} error={r.json().get('error')}", ms,
     ))
@@ -584,7 +584,7 @@ async def suite_sse(
     key: str,
     path_stream: str = "/agents/calculator/a2a/stream",
 ) -> Suite:
-    s = Suite(f"SSE Streaming su {path_stream}")
+    s = Suite(f"SSE Streaming on {path_stream}")
     print(f"\n{'─'*60}")
     print(f"📡 {s.name}")
     print(f"{'─'*60}")
@@ -601,15 +601,15 @@ async def suite_sse(
         for e in events
     )
     s.add(TestResult(
-        "messages/sendStream — riceve eventi SSE",
+        "messages/sendStream — receives SSE events",
         len(events) > 0 and has_status,
-        f"eventi ricevuti: {len(events)}\n"
-        f"tipi: {event_types}\n"
+        f"events received: {len(events)}\n"
+        f"types: {event_types}\n"
         f"has_status={has_status} has_artifact={has_artifact} has_final={has_final}",
         0,
     ))
 
-    # Estrae task_id dall'ultimo evento di status
+    # Extracts task_id from the last status event
     stream_task_id = ""
     for e in events:
         result = e.get("data", {}).get("result", {})
@@ -623,33 +623,33 @@ async def suite_sse(
         events2 = await sse_lines(client, path_stream, body2, key=key, max_events=5, timeout=10.0)
         event_types2 = [e.get("event") for e in events2 if "event" in e]
         s.add(TestResult(
-            "tasks/subscribe — task esistente",
+            "tasks/subscribe — existing task",
             len(events2) > 0,
-            f"eventi: {len(events2)} tipi: {event_types2}", 0,
+            f"events: {len(events2)} types: {event_types2}", 0,
         ))
     else:
         s.add(TestResult(
-            "tasks/subscribe — skip (nessun task_id da sendStream)",
+            "tasks/subscribe — skip (no task_id from sendStream)",
             False,
-            "sendStream non ha restituito taskId", 0,
+            "sendStream did not return a taskId", 0,
         ))
 
-    # ── tasks/subscribe — task inesistente ───────────────────────────────
+    # ── tasks/subscribe — nonexistent task ─────────────────────────────────
     body3 = rpc("tasks/subscribe", {"taskId": "nonexistent-task-999"})
     events3 = await sse_lines(client, path_stream, body3, key=key, max_events=2, timeout=5.0)
     got_error = any(e.get("event") == "error" for e in events3)
     s.add(TestResult(
-        "tasks/subscribe — task inesistente → evento error",
+        "tasks/subscribe — nonexistent task → error event",
         got_error,
-        f"eventi: {events3}", 0,
+        f"events: {events3}", 0,
     ))
 
-    # ── SSE senza chiave → 401 ────────────────────────────────────────────
+    # ── SSE without a key → 401 ────────────────────────────────────────────
     body4 = rpc("messages/sendStream", msg_params("no auth"))
     events4 = await sse_lines(client, path_stream, body4, key=None, max_events=1, timeout=5.0)
     got_401 = any(e.get("_status") == 401 for e in events4)
     s.add(TestResult(
-        "SSE senza chiave → 401",
+        "SSE without a key → 401",
         got_401,
         f"events={events4}", 0,
     ))
@@ -658,7 +658,7 @@ async def suite_sse(
 
 
 # ---------------------------------------------------------------------------
-# Suite 5 — contextId e multi-turn
+# Suite 5 — contextId and multi-turn
 # ---------------------------------------------------------------------------
 
 async def suite_context(
@@ -666,40 +666,40 @@ async def suite_context(
     key: str,
     path_plain: str = "/agents/calculator/a2a",
 ) -> Suite:
-    s = Suite("contextId e multi-turn")
+    s = Suite("contextId and multi-turn")
     print(f"\n{'─'*60}")
     print(f"🔄 {s.name}")
     print(f"{'─'*60}")
 
     ctx = str(uuid.uuid4())
 
-    # Prima chiamata con contextId
-    body = rpc("messages/send", msg_params("Prima domanda", context_id=ctx))
+    # First call with contextId
+    body = rpc("messages/send", msg_params("First question", context_id=ctx))
     code, data, ms = await post(client, path_plain, body, key=key)
     returned_ctx = data.get("result", {}).get("contextId", "")
     s.add(TestResult(
-        "messages/send con contextId esplicito",
+        "messages/send with explicit contextId",
         code == 200 and _has_result(data),
         f"sent contextId={ctx}\nreturned contextId={returned_ctx}", ms,
     ))
 
-    # Seconda chiamata sullo stesso contesto
+    # Second call on the same context
     task_id = data.get("result", {}).get("id") or data.get("result", {}).get("taskId", "")
-    body2 = rpc("messages/send", msg_params("Seconda domanda", context_id=ctx))
+    body2 = rpc("messages/send", msg_params("Second question", context_id=ctx))
     code2, data2, ms2 = await post(client, path_plain, body2, key=key)
     task_id2 = data2.get("result", {}).get("id") or data2.get("result", {}).get("taskId", "")
     s.add(TestResult(
-        "messages/send secondo turno stesso contextId",
+        "messages/send second turn, same contextId",
         code2 == 200 and _has_result(data2) and task_id2 != task_id,
         f"task1={task_id} task2={task_id2} ctx={returned_ctx}", ms2,
     ))
 
-    # tasks/get con mismatch contextId/taskId (deve dare errore)
+    # tasks/get with mismatched contextId/taskId (must return an error)
     if task_id:
         body3 = rpc("tasks/get", {"id": task_id, "contextId": str(uuid.uuid4())})
         code3, data3, ms3 = await post(client, path_plain, body3, key=key)
         s.add(TestResult(
-            "tasks/get con contextId errato → errore mismatch",
+            "tasks/get with wrong contextId → mismatch error",
             code3 == 200 and _has_error(data3),
             f"error={data3.get('error')}", ms3,
         ))
@@ -708,23 +708,23 @@ async def suite_context(
 
 
 # ---------------------------------------------------------------------------
-# Suite 6 — secure-a2a (endpoint cifrato STLS)
+# Suite 6 — secure-a2a (encrypted STLS endpoint)
 # ---------------------------------------------------------------------------
 
 def _build_stls_client(base_url: str, api_key: str) -> Any:
     """
-    Crea un SecureA2ATransportAdapter lato client.
+    Creates a client-side SecureA2ATransportAdapter.
 
-    Usa la stessa KeySessionProviderFactory del server, leggendo
-    KEY_PROVIDER_NAME e KEY_SESSION_PORT dal .env.
+    Uses the same KeySessionProviderFactory as the server, reading
+    KEY_PROVIDER_NAME and KEY_SESSION_PORT from .env.
 
-    API reale del provider (da stls_a2a_provider.py):
+    Real provider API (from stls_a2a_provider.py):
         provider.getSessionKeyIdentifier()         → str  (session_id / SKI)
-        provider.getSessionKeyData(ski) → bytes    (chiave AES-256)
-        factory.resolve_if_awaitable(x)            → risolve Java Future / coroutine
+        provider.getSessionKeyData(ski) → bytes    (AES-256 key)
+        factory.resolve_if_awaitable(x)            → resolves a Java Future / coroutine
 
-    Restituisce l'adapter pronto all'uso, oppure None se il provider
-    non è disponibile (es. Java mancante, KEY_PROVIDER_NAME errato).
+    Returns the adapter ready to use, or None if the provider
+    is not available (e.g. missing Java, wrong KEY_PROVIDER_NAME).
     """
     try:
         from stls_a2a import KeySessionProviderFactory, KeySessionProvider
@@ -734,21 +734,21 @@ def _build_stls_client(base_url: str, api_key: str) -> Any:
         port     = int(os.getenv("KEY_SESSION_PORT", 8081))
         factory  = KeySessionProviderFactory()
 
-        # Crea la sessione CLIENT con lo stesso provider del server
+        # Creates the CLIENT session with the same provider as the server
         provider = factory.get_session_provider(
             session_type=KeySessionProvider.KeySessionProviderType.CLIENT,
             port=port,
         )
 
-        # 1. Session Key Identifier — identifica la sessione (= X-A2A-Session-ID)
-        #    Può essere una coroutine (Arqit async) o una stringa diretta (base/simple)
+        # 1. Session Key Identifier — identifies the session (= X-A2A-Session-ID)
+        #    Can be a coroutine (Arqit async) or a plain string (base/simple)
         ski = factory.resolve_if_awaitable(provider.getSessionKeyIdentifier())
 
-        # 2. Session Key bytes — chiave AES-256-GCM per cifrare/decifrare
+        # 2. Session Key bytes — AES-256-GCM key to encrypt/decrypt
         session_key = factory.resolve_if_awaitable(provider.getSessionKeyData(ski))
 
         logger.info(
-            "STLS client pronto: provider=%s ski=%s key_len=%d",
+            "STLS client ready: provider=%s ski=%s key_len=%d",
             os.getenv("KEY_PROVIDER_NAME", "base"),
             ski,
             len(session_key) if isinstance(session_key, (bytes, bytearray)) else -1,
@@ -756,23 +756,23 @@ def _build_stls_client(base_url: str, api_key: str) -> Any:
 
         adapter = SecureA2ATransportAdapter(
             session_key=session_key,
-            session_id=ski,       # il server usa ski come chiave del dict sessions
+            session_id=ski,       # the server uses ski as the sessions dict key
             base_url=base_url,
         )
-        # Percorso sync (self.client): inietta X-API-Key nell'header
+        # Sync path (self.client): injects X-API-Key in the header
         adapter.client = _httpx.AsyncClient(
             timeout=15.0,
             headers={"X-API-Key": api_key},
         )
-        # Percorso SSE (send_secure_message stream=True): usa un nuovo AsyncClient
-        # interno senza self.client — inietta la chiave come query param ?api_key=
-        # Il server accetta sia X-API-Key header sia ?api_key= query param.
+        # SSE path (send_secure_message stream=True): uses a new internal
+        # AsyncClient without self.client — injects the key as a ?api_key= query param.
+        # The server accepts both the X-API-Key header and the ?api_key= query param.
         adapter._stream_url = f"{adapter._stream_url}?api_key={api_key}"
 
         return adapter
 
     except Exception as exc:
-        logger.warning("STLS client non disponibile: %s", exc)
+        logger.warning("STLS client not available: %s", exc)
         return None
 
 
@@ -780,47 +780,47 @@ async def suite_secure_endpoint(
     client: httpx.AsyncClient,
     key: str,
 ) -> Suite:
-    s = Suite("Endpoint cifrato /secure-a2a")
+    s = Suite("Encrypted endpoint /secure-a2a")
     print(f"\n{'─'*60}")
     print(f"🔒 {s.name}")
     print(f"{'─'*60}")
 
-    # ── 1. Payload plain su /secure-a2a → errore atteso ───────────────────
-    # Il server richiede AES-256-GCM — un body JSON-RPC standard deve fallire.
-    body_plain = rpc("messages/send", msg_params("test plain su secure"))
+    # ── 1. Plain payload on /secure-a2a → error expected ───────────────────
+    # The server requires AES-256-GCM — a standard JSON-RPC body must fail.
+    body_plain = rpc("messages/send", msg_params("test plain on secure"))
     code, data, ms = await post(client, "/agents/calculator/secure-a2a", body_plain, key=key)
     s.add(TestResult(
-        "POST /secure-a2a payload plain → errore (atteso)",
+        "POST /secure-a2a plain payload → error (expected)",
         code in (400, 200) and ("error" in data or "session_id" in str(data)),
         f"status={code} resp={_fmt(data)}", ms,
     ))
 
-    # ── 2. Nessuna chiave → 401 (auth layer prima di decifrare) ───────────
+    # ── 2. No key → 401 (auth layer before decrypting) ──────────────────
     code, data, ms = await post(client, "/agents/calculator/secure-a2a", body_plain)
     s.add(TestResult(
-        "POST /secure-a2a senza chiave → 401",
+        "POST /secure-a2a without a key → 401",
         code == 401,
         f"status={code}", ms,
     ))
 
-    # ── 3. SSE cifrato senza chiave → 401 ─────────────────────────────────
+    # ── 3. Encrypted SSE without a key → 401 ───────────────────────────────
     events = await sse_lines(
         client, "/agents/calculator/secure-a2a/stream", body_plain,
         key=None, max_events=1, timeout=5.0,
     )
     got_401 = any(e.get("_status") == 401 for e in events)
     s.add(TestResult(
-        "POST /secure-a2a/stream senza chiave → 401",
+        "POST /secure-a2a/stream without a key → 401",
         got_401,
         f"events={events}", 0,
     ))
 
-    # ── 4. Sessione STLS cifrata reale ────────────────────────────────────
-    # Costruisce un SecureA2ATransportAdapter client-side usando lo stesso
-    # KEY_PROVIDER_NAME configurato nel .env del server.
-    # Flusso: get_session_key() → AES-256-GCM encrypt → POST /secure-a2a
-    #         → server decripta con lo stesso provider → risposta cifrata
-    #         → client decripta → risultato.
+    # ── 4. Real encrypted STLS session ─────────────────────────────────────
+    # Builds a client-side SecureA2ATransportAdapter using the same
+    # KEY_PROVIDER_NAME configured in the server's .env.
+    # Flow: get_session_key() → AES-256-GCM encrypt → POST /secure-a2a
+    #       → server decrypts with the same provider → encrypted response
+    #       → client decrypts → result.
     stls_adapter = _build_stls_client(
         base_url=f"{BASE_URL}/agents/calculator",
         api_key=key,
@@ -830,30 +830,30 @@ async def suite_secure_endpoint(
             msg = {
                 "jsonrpc": "2.0",
                 "method":  "messages/send",
-                "params":  msg_params("Sessione STLS cifrata — test end-to-end"),
+                "params":  msg_params("Encrypted STLS session — end-to-end test"),
                 "id":      1,
             }
             t0 = time.monotonic()
             result = await stls_adapter.send_secure_message(msg)
             ms = (time.monotonic() - t0) * 1000
             await stls_adapter.close()
-            # Successo = risposta decifrata senza errore auth (-32600)
+            # Success = decrypted response without an auth error (-32600)
             auth_ok  = result.get("error", {}).get("code") != -32600
             has_data = "result" in result or ("error" in result and result["error"].get("code") != -32600)
             s.add(TestResult(
-                "STLS sessione cifrata end-to-end (messages/send)",
+                "STLS encrypted session end-to-end (messages/send)",
                 auth_ok and has_data,
                 f"ms={ms:.0f} keys={list(result.keys())} "
                 f"err={result.get('error')}", ms,
             ))
         except Exception as exc:
             s.add(TestResult(
-                "STLS sessione cifrata end-to-end (messages/send)",
+                "STLS encrypted session end-to-end (messages/send)",
                 False,
-                f"Eccezione: {exc}", 0,
+                f"Exception: {exc}", 0,
             ))
 
-        # ── 5. Sessione STLS SSE cifrata reale ───────────────────────────
+        # ── 5. Real encrypted STLS SSE session ───────────────────────────
         stls_sse = _build_stls_client(
             base_url=f"{BASE_URL}/agents/calculator",
             api_key=key,
@@ -863,7 +863,7 @@ async def suite_secure_endpoint(
                 msg_stream = {
                     "jsonrpc": "2.0",
                     "method":  "messages/sendStream",
-                    "params":  msg_params("Streaming STLS cifrato — test"),
+                    "params":  msg_params("Encrypted STLS streaming — test"),
                     "id":      2,
                 }
                 t0 = time.monotonic()
@@ -872,30 +872,30 @@ async def suite_secure_endpoint(
                 await stls_sse.close()
                 stream_ok = "result" in result_s and result_s.get("error", {}).get("code") != -32600
                 s.add(TestResult(
-                    "STLS sessione SSE cifrata end-to-end (messages/sendStream)",
+                    "STLS encrypted SSE session end-to-end (messages/sendStream)",
                     stream_ok,
                     f"ms={ms:.0f} status={result_s.get('result',{}).get('status')}", ms,
                 ))
             except Exception as exc:
                 s.add(TestResult(
-                    "STLS sessione SSE cifrata end-to-end (messages/sendStream)",
+                    "STLS encrypted SSE session end-to-end (messages/sendStream)",
                     False,
-                    f"Eccezione: {exc}", 0,
+                    f"Exception: {exc}", 0,
                 ))
     else:
         provider_name = os.getenv("KEY_PROVIDER_NAME", "base")
         s.add(TestResult(
-            "STLS sessione cifrata end-to-end — SKIP",
+            "STLS encrypted session end-to-end — SKIP",
             True,
-            f"KeySessionProvider non disponibile (KEY_PROVIDER_NAME={provider_name}). "
-            "Verifica KEY_PROVIDER_NAME, KEY_SESSION_PORT e dipendenze Java/JPype.", 0,
+            f"KeySessionProvider not available (KEY_PROVIDER_NAME={provider_name}). "
+            "Check KEY_PROVIDER_NAME, KEY_SESSION_PORT and the Java/JPype dependencies.", 0,
         ))
 
     return s
 
 
 # ---------------------------------------------------------------------------
-# Runner principale
+# Main runner
 # ---------------------------------------------------------------------------
 
 async def run(
@@ -934,26 +934,26 @@ async def run(
         if not suite_filter or suite_filter == "secure":
             suites.append(await suite_secure_endpoint(client, static_key))
 
-    # ── Riepilogo ─────────────────────────────────────────────────────────
+    # ── Summary ──────────────────────────────────────────────────────────
     total_ok  = sum(s.passed for s in suites)
     total_ko  = sum(s.failed for s in suites)
     total_all = total_ok + total_ko
 
     print(f"\n{'═'*60}")
-    print(f"📊 Riepilogo")
+    print(f"📊 Summary")
     print(f"{'═'*60}")
     for s in suites:
         bar = "✅" * s.passed + "❌" * s.failed
         print(f"  {s.name:<40} {s.passed}/{len(s.results)}  {bar}")
     print(f"{'─'*60}")
-    print(f"  Totale: {total_ok}/{total_all} passati", end="")
+    print(f"  Total: {total_ok}/{total_all} passed", end="")
     if total_ko:
-        print(f"  ← {total_ko} FALLITI ❌")
+        print(f"  ← {total_ko} FAILED ❌")
     else:
-        print("  — tutti OK ✅")
+        print("  — all OK ✅")
     print(f"{'═'*60}\n")
 
-    return total_ko  # exit code: 0 = tutto ok
+    return total_ko  # exit code: 0 = all ok
 
 
 # ---------------------------------------------------------------------------
@@ -962,13 +962,13 @@ async def run(
 
 def _get_keys() -> tuple[str, str, str | None]:
     """
-    Legge le chiavi di test dall'env o usa le chiavi legacy hard-coded
-    come fallback per AuthConfig (retrocompatibile con suite auth).
+    Reads the test keys from the env, or falls back to hard-coded legacy
+    keys for AuthConfig (backward compatible with the auth suite).
 
     Env vars:
-        TEST_STATIC_KEY   chiave per StaticLoader (stampata dal server all'avvio)
-        TEST_FILE_KEY     chiave per FileLoader   (da api_keys.yaml raw_key)
-        TEST_PG_KEY       chiave per PostgresLoader (da migration_api_keys.sql)
+        TEST_STATIC_KEY   key for StaticLoader (printed by the server at startup)
+        TEST_FILE_KEY     key for FileLoader   (from api_keys.yaml raw_key)
+        TEST_PG_KEY       key for PostgresLoader (from migration_api_keys.sql)
     """
     static = os.getenv("TEST_STATIC_KEY", "")
     file_k = os.getenv("TEST_FILE_KEY",
@@ -978,18 +978,18 @@ def _get_keys() -> tuple[str, str, str | None]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Test client per multi_agent_km_server")
+    parser = argparse.ArgumentParser(description="Test client for multi_agent_km_server")
     parser.add_argument("--host",    default="localhost")
     parser.add_argument("--port",    default=8001, type=int)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
         "--suite",
         choices=["diag", "auth", "a2a", "sse", "context", "secure"],
-        help="Esegui solo una suite specifica",
+        help="Run only a specific suite",
     )
-    parser.add_argument("--static-key", default="", help="Chiave StaticLoader")
-    parser.add_argument("--file-key",   default="", help="Chiave FileLoader")
-    parser.add_argument("--pg-key",     default="", help="Chiave PostgresLoader")
+    parser.add_argument("--static-key", default="", help="StaticLoader key")
+    parser.add_argument("--file-key",   default="", help="FileLoader key")
+    parser.add_argument("--pg-key",     default="", help="PostgresLoader key")
     args = parser.parse_args()
 
     global BASE_URL
@@ -1001,16 +1001,16 @@ def main() -> None:
     pg_key     = args.pg_key     or env_pg
 
     if not static_key:
-        print("⚠️  TEST_STATIC_KEY non impostata.")
-        print("   Copia la KEY_1 stampata dal server all'avvio e impostala:")
+        print("⚠️  TEST_STATIC_KEY not set.")
+        print("   Copy the KEY_1 printed by the server at startup and set it:")
         print("   export TEST_STATIC_KEY='stls-static_...'")
-        print("   oppure usa --static-key <valore>\n")
+        print("   or use --static-key <value>\n")
 
     print(f"\n{'═'*60}")
     print(f"🧪 Test client → {BASE_URL}")
-    print(f"   static_key : {(static_key[:20] + '…') if static_key else '(non impostata)'}")
+    print(f"   static_key : {(static_key[:20] + '…') if static_key else '(not set)'}")
     print(f"   file_key   : {file_key[:20]}…")
-    print(f"   pg_key     : {(pg_key[:20] + '…') if pg_key else '(non impostata — usa legacy)'}")
+    print(f"   pg_key     : {(pg_key[:20] + '…') if pg_key else '(not set — using legacy)'}")
     print(f"{'═'*60}")
 
     exit_code = asyncio.run(run(

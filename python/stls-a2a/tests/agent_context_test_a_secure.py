@@ -1,21 +1,21 @@
 """
 agent_context_test_a_secure.py
 -------------------------------
-Variante CIFRATA di agent_context_test_a.py — stesso identico scenario
-(root agent A delega a B, propagazione user_id/profile), ma la delega
-verso B transita su /secure-a2a (AES-256-GCM via handshake PQC) invece
-che sul plain /a2a in chiaro.
+ENCRYPTED variant of agent_context_test_a.py — the exact same scenario
+(root agent A delegates to B, user_id/profile propagation), but the
+delegation to B goes over /secure-a2a (AES-256-GCM via PQC handshake)
+instead of the plain, unencrypted /a2a.
 
-Unica differenza rispetto all'originale: ContextualRemoteA2aAgent →
-ContextualSecureRemoteA2aAgent, e niente httpx_client esplicito (lo
-costruisce la classe stessa con lo STLSHttpxTransport iniettato).
+Only difference from the original: ContextualRemoteA2aAgent →
+ContextualSecureRemoteA2aAgent, and no explicit httpx_client (the
+class itself builds one with the STLSHttpxTransport injected).
 
-Uso come banco di prova: puntare questo file e agent_context_test_a.py
-sullo stesso agent_context_test_b.py (deve esporre l'endpoint PQC
-handshake, cioè girare con KEY_PROVIDER_NAME=pqc) e confrontare il
-traffico osservato — ci si aspetta /secure-a2a con body cifrato invece
-di /a2a in chiaro, stesso risultato applicativo (user_id/profile
-propagati identici).
+Use as a test bench: point this file and agent_context_test_a.py at
+the same agent_context_test_b.py (which must expose the PQC handshake
+endpoint, i.e. run with KEY_PROVIDER_NAME=pqc) and compare the observed
+traffic — expect /secure-a2a with an encrypted body instead of plain
+/a2a, with the same application-level result (identical user_id/profile
+propagated).
 """
 
 import os
@@ -32,13 +32,13 @@ MODEL_GEMINI_3_5_FLASH = "gemini-3.5-flash"
 BASE_URL_B = os.getenv("BASE_URL_B", "http://localhost:8002").rstrip("/")
 API_KEY_B  = os.getenv("API_KEY_B",  "test-key-agent-b")
 
-# Un solo SecureSessionManager condiviso fra i due sub-agent sotto: se B è
-# lo stesso host per entrambi, la seconda istanza riusa la sessione già
-# handshakata dalla prima invece di aprirne una seconda inutilmente.
+# A single SecureSessionManager shared between the two sub-agents below: if B is
+# the same host for both, the second instance reuses the session already
+# handshaken by the first instead of needlessly opening a second one.
 _session_manager = SecureSessionManager(client_id="agent_a_secure")
 
 
-# ── Sub-agent remoto B con propagazione contesto, traffico cifrato ───────────
+# ── Remote sub-agent B with context propagation, encrypted traffic ──────────
 agent_b_remote_secure = ContextualSecureRemoteA2aAgent(
     name="agent_b",
     description=(
@@ -52,7 +52,7 @@ agent_b_remote_secure = ContextualSecureRemoteA2aAgent(
 )
 
 
-# ── Sub-agent remoto B con header statici X-STLS-*, traffico cifrato ────────
+# ── Remote sub-agent B with static X-STLS-* headers, encrypted traffic ──────
 STATIC_USER_ID = "service-account-agent-a@tim-sparkle.com"
 STATIC_PROFILE = {"tenant": "tim-sparkle", "role": "service", "department": "AI-Platform"}
 
@@ -70,8 +70,8 @@ agent_b_remote_static_secure = ContextualSecureRemoteA2aAgent(
         "X-STLS-User-Id": STATIC_USER_ID,
         "X-STLS-Profile": _json.dumps(STATIC_PROFILE),
     },
-    # context_keys vuoto: il contesto arriva solo dagli header statici sopra,
-    # propagati come extra_headers e letti server-side da _extract_http_context.
+    # Empty context_keys: the context comes only from the static headers above,
+    # propagated as extra_headers and read server-side by _extract_http_context.
     context_keys=[],
 )
 

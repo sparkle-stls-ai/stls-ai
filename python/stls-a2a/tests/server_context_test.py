@@ -1,32 +1,32 @@
 """
 server_context_test.py
 -----------------------
-Server di test per la verifica della propagazione del contesto utente.
+Test server for verifying user context propagation.
 
-Espone due agenti su porte diverse:
-  - Agente B (porta 8002): diagnostica — risponde con user_id e profile ricevuti
-  - Agente A (porta 8001): root — delega a B via ContextualRemoteA2aAgent
+Exposes two agents on different ports:
+  - Agent B (port 8002): diagnostics — replies with the received user_id and profile
+  - Agent A (port 8001): root — delegates to B via ContextualRemoteA2aAgent
 
-Avvio:
-  # Terminale 1 — server B (va avviato per primo)
-  # Con --secure su A serve KEY_PROVIDER_NAME=pqc qui, per esporre
-  # l'endpoint di handshake /stls/pqc/handshake.
+Startup:
+  # Terminal 1 — server B (must be started first)
+  # With --secure on A, this needs KEY_PROVIDER_NAME=pqc here, to expose
+  # the /stls/pqc/handshake endpoint.
   PORT=8002 BASE_URL=http://localhost:8002 KEY_PROVIDER_NAME=pqc \
       python server_context_test.py --agent b
 
-  # Terminale 2 — server A, delega PLAIN a B (comportamento di default)
+  # Terminal 2 — server A, PLAIN delegation to B (default behavior)
   PORT=8001 BASE_URL=http://localhost:8001 python server_context_test.py --agent a
 
-  # Terminale 2bis — server A, delega CIFRATA a B (/secure-a2a, handshake PQC)
+  # Terminal 2bis — server A, ENCRYPTED delegation to B (/secure-a2a, PQC handshake)
   PORT=8001 BASE_URL=http://localhost:8001 python server_context_test.py --agent a --secure
 
-Variabili d'ambiente:
-  PORT          Porta di ascolto (default: 8001 per A, 8002 per B)
-  BASE_URL      URL base dell'agente (usato per costruire l'AgentCard)
-  API_KEY_A     API key richiesta per chiamare A (default: test-key-agent-a)
-  API_KEY_B     API key richiesta per chiamare B (default: test-key-agent-b)
-  BASE_URL_B    URL di B visto da A (default: http://localhost:8002)
-  KEY_PROVIDER_NAME  Provider chiavi STLS (default: base — no JVM)
+Environment variables:
+  PORT          Listen port (default: 8001 for A, 8002 for B)
+  BASE_URL      Base URL of the agent (used to build the AgentCard)
+  API_KEY_A     API key required to call A (default: test-key-agent-a)
+  API_KEY_B     API key required to call B (default: test-key-agent-b)
+  BASE_URL_B    URL of B as seen by A (default: http://localhost:8002)
+  KEY_PROVIDER_NAME  STLS key provider (default: base — no JVM)
 """
 
 from __future__ import annotations
@@ -60,9 +60,9 @@ from stls_a2a import (
 
 def build_app_b() -> FastAPI:
     """
-    Server B — agente di diagnostica.
-    Espone agent_b su /agents/agent-b/secure-a2a.
-    Protetto da API key statica (AuthConfig) per semplicità nel test.
+    Server B — diagnostic agent.
+    Exposes agent_b on /agents/agent-b/secure-a2a.
+    Protected by a static API key (AuthConfig) for simplicity in the test.
     """
     from agent_context_test_b import agent_b
 
@@ -72,9 +72,9 @@ def build_app_b() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        logger.info("Server B avviato su %s (port %d)", base_url, port)
+        logger.info("Server B started on %s (port %d)", base_url, port)
         yield
-        logger.info("Server B in shutdown")
+        logger.info("Server B shutting down")
 
     app = FastAPI(title="Context Test — Agent B", lifespan=lifespan)
     start_task_store_cleanup(app=app)
@@ -100,20 +100,20 @@ def build_app_b() -> FastAPI:
 
 def build_app_a(secure: bool = False) -> FastAPI:
     """
-    Server A — root agent che delega a B.
+    Server A — root agent that delegates to B.
 
-    secure=False (default): usa agent_context_test_a.agent_a — delega
-        plain via ContextualRemoteA2aAgent (traffico /a2a in chiaro).
-    secure=True: usa agent_context_test_a_secure.agent_a_secure — delega
-        cifrata via ContextualSecureRemoteA2aAgent (traffico /secure-a2a,
-        handshake PQC lazy verso B al primo utilizzo).
+    secure=False (default): uses agent_context_test_a.agent_a — plain
+        delegation via ContextualRemoteA2aAgent (unencrypted /a2a traffic).
+    secure=True: uses agent_context_test_a_secure.agent_a_secure —
+        encrypted delegation via ContextualSecureRemoteA2aAgent
+        (/secure-a2a traffic, lazy PQC handshake towards B on first use).
 
-    NOTA: con secure=True, il SERVER B deve girare con
-    KEY_PROVIDER_NAME=pqc per esporre l'endpoint di handshake
-    (/stls/pqc/handshake) — altrimenti l'handshake di A verso B fallisce
-    subito alla prima richiesta. Questo è indipendente dal KEY_PROVIDER_NAME
-    con cui gira A stesso (che riguarda solo il /secure-a2a di A verso i
-    SUOI chiamanti, non le chiamate di A verso B).
+    NOTE: with secure=True, SERVER B must run with
+    KEY_PROVIDER_NAME=pqc to expose the handshake endpoint
+    (/stls/pqc/handshake) — otherwise A's handshake towards B fails
+    immediately on the first request. This is independent of the
+    KEY_PROVIDER_NAME A itself runs with (which only concerns A's own
+    /secure-a2a towards ITS callers, not A's calls towards B).
     """
     if secure:
         from agent_context_test_a_secure import agent_a_secure as agent_a
@@ -126,9 +126,9 @@ def build_app_a(secure: bool = False) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        logger.info("Server A avviato su %s (port %d)", base_url, port)
+        logger.info("Server A started on %s (port %d)", base_url, port)
         yield
-        logger.info("Server A in shutdown")
+        logger.info("Server A shutting down")
 
     app = FastAPI(title="Context Test — Agent A", lifespan=lifespan)
     start_task_store_cleanup(app=app)
@@ -158,52 +158,52 @@ def main() -> None:
         "--agent",
         choices=["a", "b"],
         required=True,
-        help="Quale agente esporre: 'a' (root) o 'b' (diagnostica)",
+        help="Which agent to expose: 'a' (root) or 'b' (diagnostics)",
     )
     parser.add_argument(
         "--secure",
         action="store_true",
         help=(
-            "Solo per --agent a: usa ContextualSecureRemoteA2aAgent "
-            "(delega cifrata via /secure-a2a con handshake PQC) invece "
-            "di ContextualRemoteA2aAgent (delega plain via /a2a). "
-            "Richiede che il server B giri con KEY_PROVIDER_NAME=pqc."
+            "Only for --agent a: use ContextualSecureRemoteA2aAgent "
+            "(encrypted delegation via /secure-a2a with PQC handshake) "
+            "instead of ContextualRemoteA2aAgent (plain delegation via /a2a). "
+            "Requires server B to run with KEY_PROVIDER_NAME=pqc."
         ),
     )
     args = parser.parse_args()
 
     if args.secure and args.agent == "b":
         logger.warning(
-            "--secure non ha effetto su --agent b: il flag sceglie solo "
-            "come A delega a B. Assicurati invece che B stia girando con "
-            "KEY_PROVIDER_NAME=pqc, altrimenti l'handshake di A fallirà."
+            "--secure has no effect on --agent b: the flag only chooses "
+            "how A delegates to B. Instead make sure B is running with "
+            "KEY_PROVIDER_NAME=pqc, otherwise A's handshake will fail."
         )
 
     if args.agent == "b":
         app  = build_app_b()
         port = int(os.getenv("PORT", 8012))
-        label = "B (diagnostica)"
+        label = "B (diagnostics)"
         path  = "/agents/agent-b/secure-a2a"
     else:
         app  = build_app_a(secure=args.secure)
         port = int(os.getenv("PORT", 8011))
-        label = "A (root)" + (" — delega CIFRATA verso B" if args.secure else " — delega plain verso B")
+        label = "A (root)" + (" — ENCRYPTED delegation to B" if args.secure else " — plain delegation to B")
         path  = "/agents/agent-a/secure-a2a"
 
     print("\n" + "=" * 60)
-    print(f"Context Propagation Test — Agente {label}")
+    print(f"Context Propagation Test — Agent {label}")
     print("=" * 60)
-    print(f"  Endpoint cifrato : http://localhost:{port}{path}")
-    print(f"  Endpoint plain   : http://localhost:{port}{path.replace('secure-', '')}")
-    print(f"  Agent card       : http://localhost:{port}/.well-known/agent.json")
-    print(f"  KEY_PROVIDER_NAME: {os.getenv('KEY_PROVIDER_NAME', 'base')}")
+    print(f"  Encrypted endpoint: http://localhost:{port}{path}")
+    print(f"  Plain endpoint    : http://localhost:{port}{path.replace('secure-', '')}")
+    print(f"  Agent card        : http://localhost:{port}/.well-known/agent.json")
+    print(f"  KEY_PROVIDER_NAME : {os.getenv('KEY_PROVIDER_NAME', 'base')}")
     if args.agent == "a":
-        print(f"  BASE_URL_B       : {os.getenv('BASE_URL_B', 'http://localhost:8002')}")
-        print(f"  Delega verso B   : {'CIFRATA (secure-a2a, handshake PQC)' if args.secure else 'PLAIN (a2a)'}")
+        print(f"  BASE_URL_B        : {os.getenv('BASE_URL_B', 'http://localhost:8002')}")
+        print(f"  Delegation to B   : {'ENCRYPTED (secure-a2a, PQC handshake)' if args.secure else 'PLAIN (a2a)'}")
         if args.secure and os.getenv("KEY_PROVIDER_NAME", "base") != "pqc":
             print(
-                "  ATTENZIONE       : --secure richiede che B giri con "
-                "KEY_PROVIDER_NAME=pqc (verifica sul processo di B, non su questo)."
+                "  WARNING           : --secure requires B to run with "
+                "KEY_PROVIDER_NAME=pqc (check B's own process, not this one)."
             )
     print()
 
