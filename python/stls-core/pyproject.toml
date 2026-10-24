@@ -17,33 +17,33 @@ dependencies = [
     "cryptography>=46.0.5",
     # KeyRecord / HandshakeRequest / HandshakeResponse Pydantic models
     "pydantic>=2.0.0",
-    # Env var loading (.env support nei provider)
+    # Env var loading (.env support in providers)
     "python-dotenv>=1.2.1",
 ]
 
 [project.optional-dependencies]
 
-# Cache Redis per ApiKeyManager (RedisKeyCache, BackgroundRefresher).
-# Installazione:  uv pip install -e ".[redis]"
+# Redis cache for ApiKeyManager (RedisKeyCache, BackgroundRefresher).
+# Install:  uv pip install -e ".[redis]"
 redis = [
     "redis>=7.4.0",
 ]
 
-# PostgresLoader (stls_core.auth) — backend AUTH_LOADER_BACKEND=postgres
-# per ApiKeyManager. Separato da [redis]: sono due backend indipendenti
-# (cache sessioni/chiavi vs sorgente dati chiavi), non c'è motivo che
-# installare l'uno tiri dentro l'altro. Prima di questa modifica asyncpg
-# viveva (per errore) dentro [redis] — chi dipendeva da quel comportamento
-# (uv pip install -e ".[redis]" per ottenere anche asyncpg) deve ora
-# aggiungere esplicitamente anche [postgres], es.
+# PostgresLoader (stls_core.auth) — AUTH_LOADER_BACKEND=postgres backend
+# for ApiKeyManager. Separate from [redis]: these are two independent
+# backends (session/key cache vs. key data source), no reason installing
+# one should pull in the other. Before this change asyncpg lived
+# (by mistake) inside [redis] — anyone who relied on that behavior
+# (uv pip install -e ".[redis]" to also get asyncpg) must now
+# explicitly add [postgres] too, e.g.
 # uv pip install -e ".[redis,postgres]".
-# Installazione:  uv pip install -e ".[postgres]"
+# Install:  uv pip install -e ".[postgres]"
 postgres = [
     "asyncpg>=0.31.0",
 ]
 
-# Arqit SKA-Platform™ Python SDK (wheel locali in arqit_wheels/).
-# Installazione:
+# Arqit SKA-Platform™ Python SDK (local wheels in arqit_wheels/).
+# Install:
 #   uv pip install -e ".[arqit_py]" \
 #     --find-links arqit_wheels/arqit-skaplatform-common/ \
 #     --find-links arqit_wheels/arqit-skaplatform-policy/ \
@@ -62,24 +62,24 @@ arqit_py = [
     "arqit-skaplatform-monitoring",
 ]
 
-# Provider PQC — ibrido X25519 + ML-KEM-768 (NIST FIPS 203).
-# Quantum-safe senza dipendenza da servizi esterni (Arqit non richiesto).
-# liboqs-python include liboqs compilata (C library): richiede build tools
-# o wheel pre-built disponibili su PyPI per le piattaforme principali.
-# Installazione: uv pip install -e ".[pqc]"
+# PQC provider — hybrid X25519 + ML-KEM-768 (NIST FIPS 203).
+# Quantum-safe with no dependency on external services (Arqit not required).
+# liboqs-python bundles compiled liboqs (C library): requires build tools
+# or pre-built wheels available on PyPI for the main platforms.
+# Install: uv pip install -e ".[pqc]"
 pqc = [
-    # Deve corrispondere alla versione della liboqs C library installata
-    # sul sistema (/usr/local/lib/liboqs.so.*). Un mismatch di versione
-    # tra la C library e il wrapper Python causa AttributeError a runtime.
-    # Verificare la versione C: strings /usr/local/lib/liboqs.so.* | grep "^0\."
-    # Installazione: uv pip install -e ".[pqc]"
+    # Must match the version of the liboqs C library installed on the
+    # system (/usr/local/lib/liboqs.so.*). A version mismatch between
+    # the C library and the Python wrapper causes an AttributeError at runtime.
+    # Check the C library version: strings /usr/local/lib/liboqs.so.* | grep "^0\."
+    # Install: uv pip install -e ".[pqc]"
     "liboqs-python>=0.14.1",
 ]
 
-# Dipendenze di sviluppo e test.
-# fastapi/uvicorn/httpx servono solo per il test E2E over-the-wire
-# (test_e2e_client_server.py) — non sono dipendenze runtime del package.
-# Installazione:  uv pip install -e ".[dev]"
+# Development and test dependencies.
+# fastapi/uvicorn/httpx are only needed for the over-the-wire E2E test
+# (test_e2e_client_server.py) — not runtime dependencies of the package.
+# Install:  uv pip install -e ".[dev]"
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
@@ -87,8 +87,8 @@ dev = [
     "fastapi>=0.129.0",
     "uvicorn>=0.40.0",
     "httpx>=0.28.1",
-    # Fake Redis per i test del keystore Redis senza un server reale.
-    # Supporta GETEX, ZRANGEBYSCORE, pipeline — copre tutto RedisArqitKeyStore.
+    # Fake Redis for the Redis keystore tests, no real server needed.
+    # Supports GETEX, ZRANGEBYSCORE, pipeline — covers all of RedisArqitKeyStore.
     "fakeredis>=2.23.0",
 ]
 

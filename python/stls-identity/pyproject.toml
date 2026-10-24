@@ -33,14 +33,14 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# Risolve stls_core come pacchetto locale del monorepo (path relativo a
-# questo pyproject.toml). In produzione, sostituire con la versione
-# pubblicata su un index privato e rimuovere questa sezione.
+# Resolves stls_core as a local package of the monorepo (path relative to
+# this pyproject.toml). In production, replace with the version published
+# on a private index and remove this section.
 #
-# Usato per: stls_core.auth (AuditEntry, AuthResult, default_audit_hook) —
-# issuer.py scrive le VC issuance/revocation nello stesso audit stream di
-# ApiKeyManager. NON usato per il keystore (vedi keystore.py: ArqitKeyStoreBase
-# ha semantica TTL/ephemeral sbagliata per una chiave di firma persistente).
+# Used for: stls_core.auth (AuditEntry, AuthResult, default_audit_hook) —
+# issuer.py writes VC issuance/revocation to the same audit stream as
+# ApiKeyManager. NOT used for the keystore (see keystore.py: ArqitKeyStoreBase
+# has the wrong TTL/ephemeral semantics for a persistent signing key).
 [tool.uv.sources]
 stls_core = { path = "../stls-core" }
 
