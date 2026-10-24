@@ -10,11 +10,10 @@
  * used by the Python arqit_py provider (a dedicated KeyProviderClient/
  * Server per session).
  *
- * WARNING: only verified against the sidecar with provider_name="base"
- * (no Arqit SKA-Platform™ credentials available in this development
- * environment) — this validates the RPC mechanics, not real Arqit
- * peering. Anyone using this in production with provider_name="arqit_py"
- * must validate it against a real Arqit deployment.
+ * Validated against both provider_name="base" (RPC mechanics, smoke
+ * tests) and real provider_name="arqit_py" peering against the live
+ * Arqit SKA-Platform™ cloud — see tests/interop/arqit-sidecar-real.live.ts
+ * and tests/interop/provider-factory-arqit-real.live.ts.
  */
 
 import { createConnection, type Socket } from "node:net";
