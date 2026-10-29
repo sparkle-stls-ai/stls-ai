@@ -7,6 +7,8 @@ RUN npm ci
 
 COPY . .
 
+# NOTE: VITE_AUTH_MODE=none means no login at all — anyone reaching the URL can
+# use every configured agent. Use it only behind another auth layer / internal network.
 ARG VITE_MODE=production
 ARG VITE_AUTH_MODE=none
 ARG VITE_BASE=/

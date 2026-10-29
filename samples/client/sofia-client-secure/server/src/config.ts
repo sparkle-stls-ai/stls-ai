@@ -14,6 +14,8 @@ function optional(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
 }
 
+export const DEV_SESSION_SECRET = 'dev-secret-not-for-production';
+
 const rawMode = optional('VITE_MODE', 'debug') as 'debug' | 'production';
 const rawAuth = optional('VITE_AUTH_MODE', 'none') as 'none' | 'app' | 'user';
 
@@ -28,7 +30,7 @@ export const config = {
   MODE: rawMode,
   AUTH_MODE: rawAuth,
 
-  SESSION_SECRET: rawMode === 'production' ? required('SESSION_SECRET') : 'dev-secret-not-for-production',
+  SESSION_SECRET: rawMode === 'production' ? required('SESSION_SECRET') : DEV_SESSION_SECRET,
   SESSION_TIMEOUT_MS: parseInt(optional('SESSION_TIMEOUT_MINUTES', '30'), 10) * 60 * 1000,
 
   // Space-separated list of origins allowed to embed this app in an <iframe>

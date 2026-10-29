@@ -18,7 +18,10 @@ function JsonTree({ value }: { value: unknown }) {
   const str = JSON.stringify(value, null, 2);
   const highlighted = str.replace(
     /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
-    (match) => {
+    (raw) => {
+      // Escape HTML in the matched token: values come from the agent and are
+      // injected via dangerouslySetInnerHTML.
+      const match = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       if (/^"/.test(match)) {
         if (/:$/.test(match)) return `<span class="jt-key">${match}</span>`;
         return `<span class="jt-str">${match}</span>`;

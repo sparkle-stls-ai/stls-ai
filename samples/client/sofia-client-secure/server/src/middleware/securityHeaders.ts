@@ -32,5 +32,10 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
   // framing restriction (equivalent to the historical no-X-Frame-Options
   // default), so any site can embed the app.
   res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (config.NODE_ENV === 'production') {
+    // Ignored by browsers over plain http; no includeSubDomains on purpose.
+    res.setHeader('Strict-Transport-Security', 'max-age=15552000');
+  }
   next();
 }

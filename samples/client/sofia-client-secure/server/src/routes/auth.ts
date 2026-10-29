@@ -4,8 +4,23 @@ import bcrypt from 'bcryptjs';
 import { pool } from '../db';
 import { config } from '../config';
 import type { SfUser } from '../types';
+import { rejectIfLimited, recordFailure, recordSuccess } from '../middleware/loginRateLimit';
 
 const router = Router();
+
+// New session id on every successful authentication (prevents session fixation).
+function regenerateSession(req: Request): Promise<void> {
+  return new Promise((resolve, reject) => req.session.regenerate(err => (err ? reject(err) : resolve())));
+}
+
+// Compared against when the user doesn't exist, so a missing user costs the
+// same bcrypt time as a wrong password (no user enumeration via timing).
+const DUMMY_HASH = bcrypt.hashSync('sofia-dummy-password', 10);
+
+async function checkPassword(password: string, hash: string | undefined): Promise<boolean> {
+  const ok = await bcrypt.compare(password, hash ?? DUMMY_HASH);
+  return ok && hash !== undefined;
+}
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/app-login
@@ -39,16 +54,20 @@ router.post('/app-login', async (req: Request, res: Response): Promise<void> => 
     return;
   }
 
+  if (rejectIfLimited(req, res, user_id)) return;
+
   try {
     const result = await pool.query<SfUser>(
       'SELECT pwd_hash FROM sf_user WHERE user_id = $1 AND app_name = $2 AND type = $3 AND active = TRUE',
       [user_id, app_name, 'app']
     );
 
-    if (!result.rows.length || !(await bcrypt.compare(password, result.rows[0].pwd_hash))) {
+    if (!(await checkPassword(password, result.rows[0]?.pwd_hash))) {
+      recordFailure(req, user_id);
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
+    recordSuccess(req, user_id);
 
     // One-time token valid for 5 minutes
     const token = crypto.randomBytes(32).toString('hex');
@@ -111,6 +130,8 @@ router.get('/exchange', async (req: Request, res: Response): Promise<void> => {
       profile: Record<string, unknown> | null;
     };
 
+    await regenerateSession(req);
+
     // Mark token as used (one-time)
     await pool.query('UPDATE sf_app_tokens SET used = TRUE WHERE token = $1', [app_token]);
 
@@ -151,6 +172,8 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
+  if (rejectIfLimited(req, res, user_id)) return;
+
   try {
     const result = await pool.query<SfUser>(
       `SELECT pwd_hash FROM sf_user
@@ -158,11 +181,14 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       [user_id]
     );
 
-    if (!result.rows.length || !(await bcrypt.compare(password, result.rows[0].pwd_hash))) {
+    if (!(await checkPassword(password, result.rows[0]?.pwd_hash))) {
+      recordFailure(req, user_id);
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
+    recordSuccess(req, user_id);
 
+    await regenerateSession(req);
     req.session.userId        = user_id;
     req.session.appAuthUserId = null;
     req.session.userType      = 'user';

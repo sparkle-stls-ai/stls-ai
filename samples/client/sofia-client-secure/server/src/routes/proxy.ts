@@ -35,6 +35,12 @@ async function resolveRpcUrl(baseUrl: string, apiKey: string | null): Promise<st
         const rpcUrl = (card['secureUrl'] as string | undefined)
           ?? (card['url'] as string | undefined)
           ?? baseUrl;
+        // Log-only: the card decides where requests (and the X-API-Key) go.
+        try {
+          if (new URL(rpcUrl).host !== new URL(baseUrl).host) {
+            console.warn(`[proxy] agent card url host differs from configured url: configured=${new URL(baseUrl).host} card=${new URL(rpcUrl).host}`);
+          }
+        } catch { /* unparsable URL — nothing to compare */ }
         rpcUrlCache.set(baseUrl, { rpcUrl, cachedAt: Date.now() });
         return rpcUrl;
       }
@@ -61,7 +67,12 @@ function injectMetadata(
 
   const params = (payload.params ?? {}) as Record<string, unknown>;
   const message = (params.message ?? {}) as Record<string, unknown>;
-  const existing = (message.metadata ?? {}) as Record<string, unknown>;
+  // Identity fields are server-owned: drop anything the client put there so it
+  // can't spoof a profile/app when the session has none.
+  const {
+    user_id: _uid, app_name: _app, profile: _prof,
+    ...existing
+  } = (message.metadata ?? {}) as Record<string, unknown>;
 
   return {
     ...payload,
@@ -219,9 +230,11 @@ router.post('/direct/stream', requireAuth, async (req: Request, res: Response): 
     }, 30_000);
 
     const reader = (upstream.body as unknown as ReadableStream<Uint8Array>).getReader();
-    req.on('close', () => {
+    // res (not req): since Node 16 the request's 'close' fires once the body has
+    // been read, so a listener added here never saw the client disconnecting.
+    res.on('close', () => {
       controller.abort();
-      reader.cancel();
+      reader.cancel().catch(() => { /* already finished/errored */ });
       if (!endedNormally) {
         console.warn(`[proxy] direct/stream connection closed early url=${url} elapsed=${elapsedS()}s chunks=${chunkCount} bytes=${bytesForwarded}`);
       }
@@ -467,9 +480,11 @@ router.post('/stream', requireAuth, async (req: Request, res: Response): Promise
     }, 30_000);
 
     const reader = (upstream.body as unknown as ReadableStream<Uint8Array>).getReader();
-    req.on('close', () => {
+    // res (not req): since Node 16 the request's 'close' fires once the body has
+    // been read, so a listener added here never saw the client disconnecting.
+    res.on('close', () => {
       controller.abort();
-      reader.cancel();
+      reader.cancel().catch(() => { /* already finished/errored */ });
       if (!endedNormally) {
         console.warn(`[proxy] stream connection closed early agent=${agentName} elapsed=${elapsedS()}s chunks=${chunkCount} bytes=${bytesForwarded}`);
       }

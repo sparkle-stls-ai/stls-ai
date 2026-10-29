@@ -9,7 +9,10 @@ function JsonBlock({ label, value }: { label: string; value: unknown }) {
   const str = JSON.stringify(value, null, 2);
   const highlighted = str.replace(
     /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
-    (m) => {
+    (raw) => {
+      // Escape HTML in the matched token: values come from the agent and are
+      // injected via dangerouslySetInnerHTML.
+      const m = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       if (/^"/.test(m)) return /:$/.test(m) ? `<span class="jt-key">${m}</span>` : `<span class="jt-str">${m}</span>`;
       if (/true|false/.test(m)) return `<span class="jt-bool">${m}</span>`;
       if (/null/.test(m)) return `<span class="jt-null">${m}</span>`;

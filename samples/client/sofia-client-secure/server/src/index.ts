@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import cors from 'cors';
-import { config } from './config';
+import { config, DEV_SESSION_SECRET } from './config';
 import { sessionMiddleware } from './middleware/session';
 import { bearerAuth } from './middleware/bearerAuth';
 import { securityHeaders } from './middleware/securityHeaders';
@@ -14,6 +14,7 @@ const app = express();
 
 // Trust proxy (needed for secure cookies behind nginx/reverse proxy)
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
 app.use(cors({
   origin: config.NODE_ENV === 'development' ? 'http://localhost:5173' : false,
@@ -53,4 +54,10 @@ if (config.NODE_ENV !== 'development') {
 
 app.listen(config.PORT, () => {
   console.log(`[sofia-server] Running on port ${config.PORT} | mode=${config.MODE} | auth=${config.AUTH_MODE}`);
+  if (config.NODE_ENV === 'production' && config.AUTH_MODE !== 'none' && config.SESSION_SECRET === DEV_SESSION_SECRET) {
+    console.warn('[sofia-server] WARNING: using the built-in development SESSION_SECRET (VITE_MODE is not "production"). Run with VITE_MODE=production and set SESSION_SECRET.');
+  }
+  if (config.NODE_ENV === 'production' && config.AUTH_MODE === 'none') {
+    console.warn('[sofia-server] WARNING: AUTH_MODE=none — no authentication. Anyone reaching this URL can use all configured agents. Make sure it is protected by another layer (internal network, IAP, reverse-proxy auth).');
+  }
 });
