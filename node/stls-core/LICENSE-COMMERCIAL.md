@@ -11,6 +11,6 @@ source-disclosure obligations (§13).
 
 Full dual-licensing terms and scope: [`../../LICENSE-COMMERCIAL.md`](../../LICENSE-COMMERCIAL.md) at the root of this repository.
 
-**Contact:** bigdata-analytics@ms.tisparkle.com
+**Contact:** ettore.pulieri@tisparkle.com
 
 Copyright (C) 2026 Sparkle SpA.

@@ -1,6 +1,6 @@
 # stls-identity
 
-DID + Verifiable Credential identity layer per l'ecosistema STLS AI.
+DID + Verifiable Credential identity layer per l'ecosistema STLS-AI.
 
 Quarto package del monorepo, sopra `stls-core`: aggiunge un'identità
 persistente e verificabile da terzi agli agenti — separata

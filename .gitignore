@@ -23,6 +23,7 @@ aq-*.json
 # Internal Server
 samples/server/server*
 samples/server/wheels
+samples/adk_tests
 
 # Arqit SKA-Platform proprietary example utilities (Copyright Arqit Limited,
 # "cannot be copied and/or distributed without the express permission of

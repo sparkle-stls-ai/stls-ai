@@ -1,4 +1,4 @@
-# STLS AI
+# STLS-AI
 
 **Symmetric Transport Layer Security for AI agents.** Quantum-safe,
 application-layer encryption for Agent-to-Agent (A2A) and Model Context
@@ -175,7 +175,7 @@ licensing described below — see [Licensing](#licensing).
 
 ## Licensing
 
-STLS AI is **dual-licensed**:
+STLS-AI is **dual-licensed**:
 
 - **[GNU Affero General Public License v3.0 (AGPLv3)](LICENSE)** — free
   and open source. Use, study, modify, and redistribute it under the
@@ -185,12 +185,14 @@ STLS AI is **dual-licensed**:
 - **[Commercial license](LICENSE-COMMERCIAL.md)** — for embedding STLS
   in closed-source or proprietary products, or distributing it as part
   of a commercial SaaS offering, without the AGPLv3's source-disclosure
-  obligations. Contact **bigdata-analytics@ms.tisparkle.com**.
+  obligations. Contact **ettore.pulieri@tisparkle.com**.
 
 This applies to the six packages under `python/` and `node/` listed
 above, each carrying its own `LICENSE` and `LICENSE-COMMERCIAL.md`.
 `samples/` is excluded from this grant (see above). Vendored Arqit
 SKA-Platform™ wheels (`*/arqit_wheels/`) remain under Arqit's own
-proprietary license, unaffected by the above.
+proprietary license, unaffected by the above — for commercial
+inquiries about the Arqit SKA-Platform™, reach out to the same
+contact, **ettore.pulieri@tisparkle.com**.
 
 Copyright (C) 2026 Sparkle SpA.

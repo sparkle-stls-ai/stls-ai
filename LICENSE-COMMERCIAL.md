@@ -63,7 +63,7 @@ negotiated directly with Sparkle SpA.
 
 ## Getting a commercial license
 
-Contact: **bigdata-analytics@ms.tisparkle.com**
+Contact: **ettore.pulieri@tisparkle.com**
 
 Please include which package(s) you intend to use, your intended
 deployment model (embedded, SaaS, on-prem, redistributed), and expected
