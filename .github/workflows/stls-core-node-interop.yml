@@ -20,7 +20,7 @@ on:
       - ".github/workflows/stls-core-node-interop.yml"
 
 jobs:
-  interop:
+  stls-core-interop:
     runs-on: ubuntu-latest
 
     # Redis and Postgres as service containers — disposable, scoped to
