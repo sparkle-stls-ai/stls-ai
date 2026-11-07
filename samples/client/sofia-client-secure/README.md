@@ -109,7 +109,7 @@ npm run dev
 | `BASE_PATH` | `` \| `/a` | Runtime base path prefix. Set to the same path as `VITE_BASE` (without trailing slash). Required when behind a path-based load balancer. |
 | `SESSION_SECRET` | *(required in prod)* | Express session secret |
 | `SESSION_TIMEOUT_MINUTES` | `30` | Session inactivity timeout |
-| `FRAME_ANCESTORS` | *(empty)* | Space-separated origins allowed to embed the app in an `<iframe>` (CSP `frame-ancestors`). Empty/unset = no restriction, any site can embed the app. Set to restrict to known integrator origins, e.g. a Salesforce Customer Portal domain — see `server/src/middleware/securityHeaders.ts`. |
+| `FRAME_ANCESTORS` | *(empty)* | Space-separated origins allowed to embed the app in an `<iframe>` (CSP `frame-ancestors`). Empty/unset = no restriction, any site can embed the app. Set to restrict to known integrator origins — see `server/src/middleware/securityHeaders.ts`. |
 | `DB_HOST` | `localhost` | PostgreSQL host |
 | `DB_PORT` | `5432` | PostgreSQL port |
 | `DB_NAME` | `sofia` | PostgreSQL database |
@@ -326,7 +326,7 @@ Identical to sofia-client:
 
 ### Cross-site iframe embeds (`app` mode)
 
-When the app is loaded inside an `<iframe>` from a third-party portal (e.g. a Salesforce Customer Portal), browsers refuse to persist/send the `sofia.sid` session cookie in that context. To keep working there, `GET /api/auth/exchange` also returns `sessionToken` (the session id); the SPA keeps it in memory/`sessionStorage` and sends it back as `Authorization: Bearer <sessionToken>` on every subsequent `/api/*` call — including the key-session calls (`/api/proxy/connect`, `/disconnect`, `/heartbeat`) — instead of relying on the cookie (see `server/src/middleware/bearerAuth.ts` and `src/api/apiFetch.ts`). Same-site/standalone use is unaffected — it keeps working via the cookie exactly as before. Only `app` mode is covered; `user` mode remains cookie-only.
+When the app is loaded inside an `<iframe>` from a third-party portal, browsers refuse to persist/send the `sofia.sid` session cookie in that context. To keep working there, `GET /api/auth/exchange` also returns `sessionToken` (the session id); the SPA keeps it in memory/`sessionStorage` and sends it back as `Authorization: Bearer <sessionToken>` on every subsequent `/api/*` call — including the key-session calls (`/api/proxy/connect`, `/disconnect`, `/heartbeat`) — instead of relying on the cookie (see `server/src/middleware/bearerAuth.ts` and `src/api/apiFetch.ts`). Same-site/standalone use is unaffected — it keeps working via the cookie exactly as before. Only `app` mode is covered; `user` mode remains cookie-only.
 
 Who is allowed to embed the app is controlled by `FRAME_ANCESTORS` (see [Environment variables](#environment-variables)).
 

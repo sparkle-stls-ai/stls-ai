@@ -441,18 +441,18 @@ class LangChainAdapter(AgentAdapter):
         if self.__is_langgraph_agent() and hasattr(self.agent, "astream"):
             try:
                 chunk_count = 0
-                last_parts: list[dict] = []
                 async for chunk in self.agent.astream(lc_input, stream_mode="messages",
                                                        config=_lc_config):
                     parts = _chunk_to_parts(chunk)
                     if not parts:
                         continue
-                    last_parts = parts
                     chunk_count += 1
                     yield {"parts": parts, "append": True, "last_chunk": False}
 
                 if chunk_count > 0:
-                    yield {"parts": last_parts, "append": True, "last_chunk": True}
+                    # Completion is already signaled by the TaskStatusUpdateEvent
+                    # the caller sends after this generator ends — re-yielding
+                    # last_parts here would duplicate the final token(s).
                     return
                 # zero chunks → fallback below
 
@@ -462,17 +462,17 @@ class LangChainAdapter(AgentAdapter):
         # ── Classic chain streaming via astream ─────────────────────────────
         if hasattr(self.agent, "astream"):
             chunk_count = 0
-            last_parts: list[dict] = []
             async for chunk in self.agent.astream(lc_input, config=_lc_config):
                 parts = _chunk_to_parts(chunk)
                 if not parts:
                     continue
-                last_parts = parts
                 chunk_count += 1
                 yield {"parts": parts, "append": True, "last_chunk": False}
 
             if chunk_count > 0:
-                yield {"parts": last_parts, "append": True, "last_chunk": True}
+                # Completion is already signaled by the TaskStatusUpdateEvent
+                # the caller sends after this generator ends — re-yielding
+                # last_parts here would duplicate the final token(s).
                 return
 
         # ── Fallback: ainvoke → single final chunk ─────────────────────────

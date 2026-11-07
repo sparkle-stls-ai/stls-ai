@@ -41,7 +41,7 @@ export async function* streamChatProd(
   parts: Part[],
   contextId?: string,
   signal?: AbortSignal,
-): AsyncGenerator<{ parts: Part[]; context_id: string; done: boolean; rawEvent?: Record<string, unknown> }> {
+): AsyncGenerator<{ parts: Part[]; context_id: string; done: boolean; rawEvent?: Record<string, unknown>; append?: boolean }> {
   const payload = jsonRpcPayload('message/stream', buildMessage(parts, contextId));
   const res = await apiFetch(`${apiBase}/api/proxy/stream`, {
     method: 'POST',
@@ -86,11 +86,17 @@ export async function* streamChatProd(
 
     const kind = result['kind'] as string | undefined;
     let outParts: Part[] = [];
+    // True only for TaskArtifactUpdateEvent chunks explicitly marked as a
+    // continuation (A2A "append" semantics) — text chunks streamed this way
+    // must be concatenated onto the previous text, not rendered as a new
+    // paragraph (see useChatProd/useChat's merge logic).
+    let append = false;
 
     if (kind === 'artifact-update') {
       // TaskArtifactUpdateEvent — content in result.artifact.parts
       const artifact = (result['artifact'] ?? {}) as Record<string, unknown>;
       outParts = ((artifact['parts'] as Record<string, unknown>[] | undefined) ?? []).map(normalizePart);
+      append = (artifact['append'] as boolean | undefined) ?? true;
     } else if (kind === 'status-update') {
       // TaskStatusUpdateEvent — content optionally in result.status.message.parts
       const msg = (status?.['message'] ?? {}) as Record<string, unknown>;
@@ -114,7 +120,7 @@ export async function* streamChatProd(
     }
 
     if (outParts.length > 0 || isFinal) {
-      return { parts: outParts, context_id: currentContextId, done: isFinal, rawEvent: event };
+      return { parts: outParts, context_id: currentContextId, done: isFinal, rawEvent: event, append };
     }
     return null;
   };

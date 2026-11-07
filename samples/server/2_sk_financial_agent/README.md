@@ -34,11 +34,10 @@ pip install semantic-kernel fastapi uvicorn python-dotenv yfinance
 
 ## Configuration
 
-Create a `.env` file in this directory (or edit the existing one):
+Copy `.env.example` to `.env` and fill in `OPENAI_API_KEY`:
 
 ```bash
-KEY_PROVIDER_NAME=base
-OPENAI_API_KEY=sk-...
+cp .env.example .env
 ```
 
 | Variable | Required | Notes |

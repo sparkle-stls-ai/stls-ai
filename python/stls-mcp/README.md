@@ -49,11 +49,11 @@ flowchart TB
     end
 
     subgraph Server["stls-mcp Server (one Starlette app)"]
-        SA["Starlette app (SDK)\nroute \"/mcp\" — untouched"]
-        PLAIN["Mount(\"/\")\nplain, unchanged"]
-        HS["Route(\"/stls/handshake\")\nHMAC challenge/response\n(base / arqit_py)"]
-        PQC["Route(\"/stls/pqc/handshake\")\nKEM X25519 + ML-KEM-768\n(KEY_PROVIDER_NAME=pqc)"]
-        STLS["Mount(\"/mcp-stls\")\nStlsMcpMiddleware"]
+        SA["Starlette app (SDK)\nroute #quot;/mcp#quot; — untouched"]
+        PLAIN["Mount(#quot;/#quot;)\nplain, unchanged"]
+        HS["Route(#quot;/stls/handshake#quot;)\nHMAC challenge/response\n(base / arqit_py)"]
+        PQC["Route(#quot;/stls/pqc/handshake#quot;)\nKEM X25519 + ML-KEM-768\n(KEY_PROVIDER_NAME=pqc)"]
+        STLS["Mount(#quot;/mcp-stls#quot;)\nStlsMcpMiddleware"]
     end
 
     STD["Standard MCP client\n(Claude Desktop, etc.)"]

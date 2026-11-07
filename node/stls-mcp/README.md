@@ -78,10 +78,10 @@ flowchart TB
 
     subgraph Server["stls-mcp Server (no router — one shared function)"]
         IH["innerHandle()\nfresh McpServer + fresh\nWebStandardStreamableHTTPServerTransport\nper request"]
-        PLAIN["plainPath (\"/mcp\")\nwrapWithAuth()"]
+        PLAIN["plainPath (#quot;/mcp#quot;)\nwrapWithAuth()"]
         HS["HANDSHAKE_PATH\nHMAC challenge/response\n(base / arqit_py)"]
         PQC["HANDSHAKE_PQC_PATH\nKEM X25519 + ML-KEM-768\n(KEY_PROVIDER_NAME=pqc)"]
-        STLS["stlsPath (\"/mcp-stls\")\nencryptedHandler()\nwrapWithAuth()"]
+        STLS["stlsPath (#quot;/mcp-stls#quot;)\nencryptedHandler()\nwrapWithAuth()"]
     end
 
     STD["Standard MCP client\n(any spec-compliant client)"]

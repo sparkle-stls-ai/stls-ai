@@ -384,17 +384,17 @@ class SemanticKernelAdapter(AgentAdapter):
                 history.add_user_message(input_text)
 
                 chunk_count = 0
-                last_parts: list[dict] = []
                 async for chunk in self.agent_or_kernel.get_streaming_response(messages=history):
                     parts = _sk_chunk_to_parts(chunk)
                     if not parts:
                         continue
-                    last_parts = parts
                     chunk_count += 1
                     yield {"parts": parts, "append": True, "last_chunk": False}
 
                 if chunk_count > 0:
-                    yield {"parts": last_parts, "append": True, "last_chunk": True}
+                    # Completion is already signaled by the TaskStatusUpdateEvent
+                    # the caller sends after this generator ends — re-yielding
+                    # the last parts here would duplicate the final token(s).
                     return
                 # zero chunks → fallback below
 
@@ -424,17 +424,17 @@ class SemanticKernelAdapter(AgentAdapter):
 
                 if inspect.isasyncgen(raw):
                     chunk_count = 0
-                    last_parts: list[dict] = []
                     async for chunk in raw:
                         parts = _sk_chunk_to_parts(chunk)
                         if not parts:
                             continue
-                        last_parts = parts
                         chunk_count += 1
                         yield {"parts": parts, "append": True, "last_chunk": False}
 
                     if chunk_count > 0:
-                        yield {"parts": last_parts, "append": True, "last_chunk": True}
+                        # Completion is already signaled by the TaskStatusUpdateEvent
+                        # the caller sends after this generator ends — re-yielding
+                        # the last parts here would duplicate the final token(s).
                         return
 
             except (TypeError, NotImplementedError, AttributeError):

@@ -84,7 +84,7 @@ from stls_a2a import (
     create_pqc_a2a_transport,
 )
 
-load_dotenv()
+load_dotenv(override=True)
 
 logging.basicConfig(
     level=logging.INFO,

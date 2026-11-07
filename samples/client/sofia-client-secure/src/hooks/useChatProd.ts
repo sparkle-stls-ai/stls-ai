@@ -103,7 +103,18 @@ export function useChatProd({ agentName, sessionId, streaming, onError, onSessio
             if (chunk.context_id) contextIdRef.current = chunk.context_id;
             if (chunk.rawEvent) rawEvents.push(chunk.rawEvent);
             if (chunk.parts.length > 0) {
-              accumulated.push(...chunk.parts);
+              for (const part of chunk.parts) {
+                const last = accumulated[accumulated.length - 1];
+                // Token-by-token text streaming (e.g. LangChain) sends many
+                // small TextParts marked "append" — merge them into one
+                // running TextPart instead of rendering each as its own
+                // markdown paragraph.
+                if (chunk.append && part.kind === 'text' && last?.kind === 'text') {
+                  accumulated[accumulated.length - 1] = { ...last, text: last.text + part.text };
+                } else {
+                  accumulated.push(part);
+                }
+              }
               updateMessage(agentMsgId, m => ({ ...m, parts: [...accumulated] }));
             }
             if (chunk.done) {
