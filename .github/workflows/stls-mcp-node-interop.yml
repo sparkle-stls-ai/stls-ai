@@ -32,7 +32,7 @@ on:
       - ".github/workflows/stls-mcp-node-interop.yml"
 
 jobs:
-  interop:
+  stls-mcp-interop:
     runs-on: ubuntu-latest
 
     steps:
