@@ -42,31 +42,33 @@ executed correctly, with Claude Desktop having no knowledge that
 
 ## Architecture
 
-```
-                     ┌─────────────────────────────┐
-                     │   FastMCP (official SDK)    │
-                     │   tool / resource / prompt   │
-                     │   registered by the developer │
-                     └──────────────┬───────────────┘
-                                    │
-                    mcp.streamable_http_app()
-                                    │
-                     ┌──────────────┴───────────────┐
-                     │      Starlette app (SDK)      │
-                     │   route "/mcp" — untouched     │
-                     └──────────────┬───────────────┘
-                                    │
-        ┌───────────────────────────┼────────────────────────────────────────┐
-        │                           │                           │            │
-   Mount("/")          Route("/stls/handshake")    Route("/stls/pqc/handshake")  Mount("/mcp-stls")
-   plain, unchanged    HMAC challenge/response      KEM X25519+ML-KEM-768         StlsMcpMiddleware
-        │              (base / arqit_py)            (only KEY_PROVIDER_NAME=pqc)        │
-        │                                                                               │
-   standard MCP client                                                       decrypts inbound
-   (Claude Desktop, etc.)                                                     → invokes the SAME
-                                                                                  Starlette app with
-                                                                                  a synthetic scope
-                                                                                → encrypts outbound
+```mermaid
+flowchart TB
+    subgraph App["Application Layer"]
+        FM["FastMCP (official SDK)\ntool / resource / prompt\nregistered by the developer"]
+    end
+
+    subgraph Server["stls-mcp Server (one Starlette app)"]
+        SA["Starlette app (SDK)\nroute \"/mcp\" — untouched"]
+        PLAIN["Mount(\"/\")\nplain, unchanged"]
+        HS["Route(\"/stls/handshake\")\nHMAC challenge/response\n(base / arqit_py)"]
+        PQC["Route(\"/stls/pqc/handshake\")\nKEM X25519 + ML-KEM-768\n(KEY_PROVIDER_NAME=pqc)"]
+        STLS["Mount(\"/mcp-stls\")\nStlsMcpMiddleware"]
+    end
+
+    STD["Standard MCP client\n(Claude Desktop, etc.)"]
+    SEC["STLS-aware client"]
+
+    FM -->|"mcp.streamable_http_app()"| SA
+    SA --> PLAIN
+    SA --> HS
+    SA --> PQC
+    SA --> STLS
+    STD --> PLAIN
+    SEC --> HS
+    SEC --> PQC
+    SEC -->|"encrypted"| STLS
+    STLS -->|"decrypt → synthetic scope\ninvoke SAME app\n→ encrypt"| SA
 ```
 
 `StlsMcpMiddleware` does not duplicate application logic: it receives the
@@ -87,7 +89,8 @@ Everything under [src/stls_mcp](./src/stls_mcp):
 - `stls_mcp_auth.py` — API key protection (`AuthConfig`, `wrap_with_auth()`),
   applied at the ASGI transport level in front of `/mcp` and `/mcp-stls`
 - `stls_mcp_secure_toolset.py` — client-side integration with Google ADK
-  (`STLSMCPToolset`, `create_stls_mcp_toolset()`). Lazy `google-adk` import:
+  (`STLSMCPToolset`, `create_stls_mcp_toolset()`, and `SecureToolsetManager`
+  for multi-server/multi-session caching). Lazy `google-adk` import:
   `import stls_mcp` stays valid without ADK installed, required only
   if and when an encrypted toolset is actually built (extra `[adk]`)
 
@@ -418,7 +421,7 @@ async with MCPStreamableHttpPlugin(
 
 Three complete test scripts, same server (`vault_server.py`), same tool
 set, `--secure` flag to compare plain and encrypted:
-[tests/vault_agent_test.py](./tests/vault_agent_test.py) (ADK),
+[tests/vault_agent_test_adk.py](./tests/vault_agent_test_adk.py) (ADK),
 [tests/vault_agent_test_lg.py](./tests/vault_agent_test_lg.py) (LangChain/LangGraph),
 [tests/vault_agent_test_sk.py](./tests/vault_agent_test_sk.py) (Semantic Kernel).
 
@@ -447,7 +450,7 @@ agent framework on top).
 
 For the same server seen through a real LLM agent, with real tool-calling
 instead of direct calls, see
-[tests/vault_agent_test.py](./tests/vault_agent_test.py) (ADK),
+[tests/vault_agent_test_adk.py](./tests/vault_agent_test_adk.py) (ADK),
 [tests/vault_agent_test_lg.py](./tests/vault_agent_test_lg.py) (LangChain/LangGraph)
 and [tests/vault_agent_test_sk.py](./tests/vault_agent_test_sk.py) (Semantic Kernel)
 — see the "Integration with agent frameworks" section above.
@@ -548,7 +551,9 @@ through `/mcp-stls`.
 
 - Chunk-by-chunk encrypted SSE streaming on `/mcp-stls`
 - stdio support (if a real use case emerges)
-- Automated E2E test with `arqit_py` on real Arqit infrastructure
+- Automated pytest test suite for `stls-mcp` (currently none — only
+  manual `vault_*.py` scripts), including E2E coverage with `arqit_py`
+  against real Arqit infrastructure
 - Publishing `stls-core` to a private index, to remove the dependency on
   the local monorepo path in production
 

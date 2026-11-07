@@ -1,15 +1,15 @@
 """
 tools_redis.py
 --------------
-Tools per sofia_redis_agent.
-Naviga i key namespace di STLS-A2A su Redis:
+Tools for sofia_redis_agent.
+Navigates STLS-A2A's key namespaces on Redis:
   - stls:task:{id}        → task data (JSON)
   - stls:ctx:{context_id} → context data (JSON)
-  - stls:index            → sorted set dei task IDs
+  - stls:index            → sorted set of task IDs
   - stls:key:{sha256}     → API key record (JSON)
-  - stls:revoked          → SET di key_id revocati
+  - stls:revoked          → SET of revoked key_ids
 
-Env vars attese (con defaults):
+Expected env vars (with defaults):
   REDIS_URL    redis://localhost:6379
   REDIS_DB     0
 """
@@ -26,10 +26,10 @@ import redis as _redis
 
 logger = logging.getLogger(__name__)
 
-# ── Connessione ────────────────────────────────────────────────────────────────
+# ── Connection ────────────────────────────────────────────────────────────────
 
 def _client() -> _redis.Redis:
-    """Restituisce un client Redis sync (non pooled, usa short-lived connections)."""
+    """Returns a sync Redis client (not pooled, uses short-lived connections)."""
     return _redis.from_url(
         os.environ.get("REDIS_URL", "redis://localhost:6379"),
         db=int(os.environ.get("REDIS_DB", 0)),
@@ -58,15 +58,15 @@ def list_tasks(
     newest_first: bool = True,
 ) -> dict:
     """
-    Elenca i task IDs presenti nell'indice Redis (stls:index).
+    Lists the task IDs present in the Redis index (stls:index).
 
     Args:
-        limit:        Numero massimo di task da restituire (default 50).
-        offset:       Offset per la paginazione (default 0).
-        newest_first: Se True, ordina dal più recente (score descrescente).
+        limit:        Maximum number of tasks to return (default 50).
+        offset:       Offset for pagination (default 0).
+        newest_first: If True, sorts from most recent (descending score).
 
     Returns:
-        dict con 'task_ids' (lista), 'total' (int nel sorted set), 'offset', 'limit'.
+        dict with 'task_ids' (list), 'total' (int in the sorted set), 'offset', 'limit'.
     """
     r = _client()
     try:
@@ -85,19 +85,19 @@ def list_tasks(
 
 def get_task(task_id: str) -> dict:
     """
-    Recupera il payload completo di un task da Redis.
+    Retrieves a task's full payload from Redis.
 
     Args:
-        task_id: ID del task (es. "abc123").
+        task_id: the task's ID (e.g. "abc123").
 
     Returns:
-        dict con il contenuto del task oppure {"error": "..."} se non trovato.
+        dict with the task's content, or {"error": "..."} if not found.
     """
     r = _client()
     try:
         raw = r.get(f"stls:task:{task_id}")
         if raw is None:
-            return {"error": f"Task '{task_id}' non trovato"}
+            return {"error": f"Task '{task_id}' not found"}
         data = _safe_json(raw)
         return {"task_id": task_id, "data": data}
     except Exception as e:
@@ -109,19 +109,19 @@ def get_task(task_id: str) -> dict:
 
 def get_task_context(context_id: str) -> dict:
     """
-    Recupera il contesto associato a un task (stls:ctx:{context_id}).
+    Retrieves the context associated with a task (stls:ctx:{context_id}).
 
     Args:
-        context_id: ID del context.
+        context_id: the context's ID.
 
     Returns:
-        dict con i dati del contesto.
+        dict with the context's data.
     """
     r = _client()
     try:
         raw = r.get(f"stls:ctx:{context_id}")
         if raw is None:
-            return {"error": f"Context '{context_id}' non trovato"}
+            return {"error": f"Context '{context_id}' not found"}
         return {"context_id": context_id, "data": _safe_json(raw)}
     except Exception as e:
         logger.error("get_task_context error: %s", e)
@@ -132,15 +132,15 @@ def get_task_context(context_id: str) -> dict:
 
 def search_tasks_by_state(state: str, limit: int = 20) -> dict:
     """
-    Cerca task filtrati per stato (es. 'working', 'completed', 'failed', 'submitted').
-    Scansiona le chiavi stls:task:* e filtra per il campo 'status.state'.
+    Searches for tasks filtered by state (e.g. 'working', 'completed', 'failed', 'submitted').
+    Scans the stls:task:* keys and filters by the 'status.state' field.
 
     Args:
-        state: Stato da cercare (es. 'working', 'completed', 'failed', 'submitted').
-        limit: Numero massimo di risultati (default 20).
+        state: the state to search for (e.g. 'working', 'completed', 'failed', 'submitted').
+        limit: maximum number of results (default 20).
 
     Returns:
-        dict con 'tasks' (lista di {task_id, state, context_id}) e 'count'.
+        dict with 'tasks' (list of {task_id, state, context_id}) and 'count'.
     """
     r = _client()
     try:
@@ -174,11 +174,11 @@ def search_tasks_by_state(state: str, limit: int = 20) -> dict:
 
 def get_tasks_stats() -> dict:
     """
-    Restituisce statistiche aggregate sui task: totale nell'indice,
-    conteggio per stato, TTL medio.
+    Returns aggregate statistics on tasks: total in the index,
+    count by state, average TTL.
 
     Returns:
-        dict con 'total_in_index', 'counts_by_state', 'total_scanned'.
+        dict with 'total_in_index', 'counts_by_state', 'total_scanned'.
     """
     r = _client()
     try:
@@ -214,33 +214,33 @@ def get_tasks_stats() -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-# Prefissi per loader — stls:{loader}:key:{sha256}
+# Per-loader prefixes — stls:{loader}:key:{sha256}
 _KEY_LOADER_PREFIXES = [
     "stls:file:key:",
     "stls:pg:key:",
     "stls:static:key:",
 ]
 
-# Indici per loader
+# Per-loader indices
 _KEY_INDEX_KEYS = [
     "stls:file:keys:index",
     "stls:pg:keys:index",
     "stls:static:keys:index",
-    "stls:keys:index",          # eventuale indice globale
+    "stls:keys:index",          # possible global index
 ]
 
 
 def list_cached_api_keys(limit: int = 50) -> dict:
     """
-    Elenca le API key presenti nella cache Redis per tutti i loader
+    Lists the API keys present in the Redis cache for all loaders
     (stls:file:key:*, stls:pg:key:*, stls:static:key:*).
 
     Args:
-        limit: Numero massimo di chiavi da restituire (default 50).
+        limit: Maximum number of keys to return (default 50).
 
     Returns:
-        dict con 'keys' (lista di {redis_key, loader, key_id}), 'count',
-        'by_loader' (conteggio per loader).
+        dict with 'keys' (list of {redis_key, loader, key_id}), 'count',
+        'by_loader' (count per loader).
     """
     r = _client()
     try:
@@ -253,7 +253,7 @@ def list_cached_api_keys(limit: int = 50) -> dict:
             while True:
                 cursor, keys = r.scan(cursor, match=f"{prefix}*", count=100)
                 for k in keys:
-                    key_id = k[len(prefix):]    # la parte dopo il prefisso
+                    key_id = k[len(prefix):]    # the part after the prefix
                     found.append({
                         "redis_key": k,
                         "loader":    loader,
@@ -275,15 +275,15 @@ def list_cached_api_keys(limit: int = 50) -> dict:
 
 def get_cached_api_key(key_id: str, loader: Optional[str] = None) -> dict:
     """
-    Recupera i dettagli di una API key dalla cache Redis.
-    Cerca in tutti i loader se 'loader' non è specificato.
+    Retrieves an API key's details from the Redis cache.
+    Searches across all loaders if 'loader' isn't specified.
 
     Args:
-        key_id: SHA-256 hex (o ID raw) della chiave.
-        loader: Loader specifico: 'file', 'pg', 'static'. None = cerca in tutti.
+        key_id: the key's SHA-256 hex (or raw ID).
+        loader: specific loader: 'file', 'pg', 'static'. None = search all.
 
     Returns:
-        dict con i campi della KeyRecord + 'redis_key', 'loader', 'ttl_seconds'.
+        dict with the KeyRecord's fields + 'redis_key', 'loader', 'ttl_seconds'.
     """
     r = _client()
     try:
@@ -309,7 +309,7 @@ def get_cached_api_key(key_id: str, loader: Optional[str] = None) -> dict:
 
         searched = [f"{p}{key_id}" for p in prefixes_to_try]
         return {
-            "error":    f"Key '{key_id}' non trovata in cache Redis",
+            "error":    f"Key '{key_id}' not found in Redis cache",
             "searched": searched,
         }
     except Exception as e:
@@ -321,13 +321,13 @@ def get_cached_api_key(key_id: str, loader: Optional[str] = None) -> dict:
 
 def is_api_key_revoked(key_id: str) -> dict:
     """
-    Verifica se una API key è nel SET dei revocati (stls:revoked).
+    Checks whether an API key is in the revoked SET (stls:revoked).
 
     Args:
-        key_id: SHA-256 hex della chiave.
+        key_id: the key's SHA-256 hex.
 
     Returns:
-        dict con 'key_id', 'revoked' (bool).
+        dict with 'key_id', 'revoked' (bool).
     """
     r = _client()
     try:
@@ -342,10 +342,10 @@ def is_api_key_revoked(key_id: str) -> dict:
 
 def list_revoked_key_ids() -> dict:
     """
-    Elenca tutti i key_id presenti nel SET stls:revoked.
+    Lists all key_ids present in the stls:revoked SET.
 
     Returns:
-        dict con 'revoked_key_ids' (lista) e 'count'.
+        dict with 'revoked_key_ids' (list) and 'count'.
     """
     r = _client()
     try:
@@ -364,11 +364,11 @@ def list_revoked_key_ids() -> dict:
 
 def get_redis_server_info() -> dict:
     """
-    Restituisce informazioni sul server Redis: versione, memoria usata,
-    client connessi, uptime, keyspace.
+    Returns information about the Redis server: version, memory used,
+    connected clients, uptime, keyspace.
 
     Returns:
-        dict con 'version', 'used_memory_human', 'connected_clients',
+        dict with 'version', 'used_memory_human', 'connected_clients',
         'uptime_in_seconds', 'keyspace'.
     """
     r = _client()
@@ -392,12 +392,12 @@ def get_redis_server_info() -> dict:
 
 def cleanup_stale_index_entries() -> dict:
     """
-    Rimuove da stls:index tutte le entry scadute (score <= now).
-    Equivale a chiamare RedisTaskStore.cleanup_index() via agent.
-    Sicuro da eseguire in qualsiasi momento — operazione O(log n + k).
+    Removes all expired entries (score <= now) from stls:index.
+    Equivalent to calling RedisTaskStore.cleanup_index() via the agent.
+    Safe to run at any time — an O(log n + k) operation.
 
     Returns:
-        dict con 'removed' (int), 'remaining' (int), 'index_key'.
+        dict with 'removed' (int), 'remaining' (int), 'index_key'.
     """
     r = _client()
     try:
@@ -418,12 +418,12 @@ def cleanup_stale_index_entries() -> dict:
 
 def count_keys_by_namespace() -> dict:
     """
-    Conta le chiavi per ciascun namespace STLS-A2A:
+    Counts the keys for each STLS-A2A namespace:
     stls:task:*, stls:ctx:*, stls:key:*.
-    Riporta anche la cardinalità di stls:index e stls:revoked.
+    Also reports the cardinality of stls:index and stls:revoked.
 
     Returns:
-        dict con i conteggi per namespace.
+        dict with the counts per namespace.
     """
     r = _client()
     try:

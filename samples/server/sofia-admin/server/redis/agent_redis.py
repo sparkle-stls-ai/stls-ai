@@ -16,8 +16,8 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-# Modello LLM passato dall'esterno (variabile d'ambiente AGENT_MODEL).
-# Il default mantiene il modello usato finora se la variabile non e' impostata.
+# LLM model passed in from outside (AGENT_MODEL environment variable).
+# The default keeps the model used so far if the variable isn't set.
 DEFAULT_AGENT_MODEL = "gemini-3.5-flash"
 AGENT_MODEL = (os.getenv("AGENT_MODEL") or DEFAULT_AGENT_MODEL).strip()
 logger.info(f"--- Agent model: {AGENT_MODEL} ---")
@@ -37,7 +37,7 @@ from tools_redis import (
     get_redis_server_info,
     count_keys_by_namespace,
     cleanup_stale_index_entries,
-    # Session Cache (stls:sc:*) — rilevante per PQC e tutti i provider Redis
+    # Session Cache (stls:sc:*) — relevant for PQC and all Redis-backed providers
     list_stls_sessions,
     get_stls_session,
     get_stls_sessions_stats,

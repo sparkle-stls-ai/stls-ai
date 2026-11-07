@@ -11,9 +11,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Performance and cleanup pass on `stls-core`'s hot paths, found during a
 code assessment ahead of the package's migration to the `stls-ai` repo.
-No wire-format or public API changes; all 250 unit/e2e tests (+ 80 PQC
-tests with real `liboqs`) and the full Node↔Python interoperability
-suite pass unchanged.
+No wire-format or public API changes; the full unit/e2e suite (including
+the PQC tests, with real `liboqs`) and the full Node↔Python
+interoperability suite pass unchanged.
 
 ### Added (follow-up, 2026-10-23)
 

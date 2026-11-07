@@ -28,7 +28,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Concurrent `arqit_py` MCP sessions against one long-running server used
 to fail with "Invalid proof of possession" once `stls-core`'s
-`_ARQIT_PY_START_LOCK` fix (see `python/stls-core/CHAGELOG.md`) stopped
+`_ARQIT_PY_START_LOCK` fix (see `python/stls-core/CHANGELOG.md`) stopped
 them from deadlocking first: the server resolved its kid via plain
 FIFO with no correlation to which incoming handshake it was for, so
 concurrent handshakes could get cross-wired. Fixed by threading a

@@ -305,111 +305,28 @@ gcloud run services update sofia-api-keys \
 
 ## GCP Architecture
 
+```mermaid
+flowchart TB
+    EXT["External A2A clients"]
+
+    subgraph CloudRun["Cloud Run — europe-west8"]
+        API["api-keys\nAPI key manager"]
+        MON["monitoring\nPlatform monitor"]
+        RED["redis\nRedis interface"]
+    end
+
+    AR["Artifact Registry\n(Docker images)"]
+    SM["Secret Manager\n(API keys, DSN)"]
+    VPC["Serverless VPC Connector"]
+
+    subgraph PrivateVPC["sofia-network — private VPC"]
+        MR["Memorystore Redis 7\nTask store · Auth cache\nBASIC · DIRECT_PEERING"]
+        SQL["Cloud SQL PostgreSQL 16\nsf_api_keys · sf_agents\nZONAL · private IP"]
+    end
+
+    EXT -->|HTTPS| CloudRun
+    AR -.->|images| CloudRun
+    SM -.->|secrets| CloudRun
+    CloudRun --> VPC
+    VPC --> PrivateVPC
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     External A2A clients                            │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │ HTTPS
-       ┌───────────┐            ▼                                ┌───────────────┐
-       │ Artifact  │  ┌──────────────────────────────────────┐   │ Secret        │
-       │ Registry  │─▶│       Cloud Run — europe-west8      │◀  │ Manager       │
-       │ (images)  │  │  ┌──────────┐┌────────────┐┌───────┐ │   │ (secrets)     │
-       └───────────┘  │  │ api-keys ││ monitoring ││ redis │ │   └───────────────┘
-                      │  └──────────┘└────────────┘└───────┘ │
-                      └─────────────────┬────────────────────┘
-                                        │
-                          ┌─────────────▼───────────────┐
-                          │  Serverless VPC Connector   │
-                          └──────────────┬──────────────┘
-                                         │
-        ┌────────────────────────────────▼─────────────────────────────┐
-        │                  sofia-network — private VPC                 │
-        │  ┌───────────────────────────┐  ┌──────────────────────────┐ │
-        │  │   Memorystore Redis 7     │  │  Cloud SQL PostgreSQL 16 │ │
-        │  │  Task store · Auth cache  │  │  sf_api_keys · sf_agents │ │
-        │  │  BASIC · DIRECT_PEERING   │  │  ZONAL · private IP      │ │
-        │  └───────────────────────────┘  └──────────────────────────┘ │
-        └──────────────────────────────────────────────────────────────┘
-```
-
-<div align="center">
-
-<!-- Architecture diagram — auto-generated -->
-<svg width="680" viewBox="0 0 680 480" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;font-family:sans-serif">
-<defs>
-  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-    <path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  </marker>
-  <marker id="arr-d" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-    <path d="M2 1L8 5L2 9" fill="none" stroke="#B4B2A9" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  </marker>
-</defs>
-
-<!-- External clients -->
-<rect x="240" y="20" width="200" height="44" rx="8" fill="#F1EFE8" stroke="#888780" stroke-width="0.5"/>
-<text x="340" y="45" text-anchor="middle" font-size="13" font-weight="500" fill="#444441">External A2A clients</text>
-
-<!-- Arrow: External → Cloud Run -->
-<line x1="340" y1="64" x2="340" y2="89" stroke="#888780" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
-
-<!-- Cloud Run container -->
-<rect x="120" y="90" width="440" height="130" rx="12" fill="none" stroke="#185FA5" stroke-width="0.5" stroke-dasharray="5 3"/>
-<text x="132" y="107" text-anchor="start" font-size="11" fill="#185FA5">Cloud Run — europe-west8</text>
-
-<!-- api-keys -->
-<rect x="135" y="115" width="130" height="90" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
-<text x="200" y="148" text-anchor="middle" font-size="13" font-weight="500" fill="#3C3489">api-keys</text>
-<text x="200" y="168" text-anchor="middle" font-size="11" fill="#534AB7">API key manager</text>
-
-<!-- monitoring -->
-<rect x="280" y="115" width="130" height="90" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
-<text x="345" y="148" text-anchor="middle" font-size="13" font-weight="500" fill="#3C3489">monitoring</text>
-<text x="345" y="168" text-anchor="middle" font-size="11" fill="#534AB7">Platform monitor</text>
-
-<!-- redis -->
-<rect x="425" y="115" width="130" height="90" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
-<text x="490" y="148" text-anchor="middle" font-size="13" font-weight="500" fill="#3C3489">redis</text>
-<text x="490" y="168" text-anchor="middle" font-size="11" fill="#534AB7">Redis interface</text>
-
-<!-- Artifact Registry -->
-<rect x="5" y="115" width="105" height="90" rx="8" fill="#F1EFE8" stroke="#888780" stroke-width="0.5"/>
-<text x="57" y="147" text-anchor="middle" font-size="13" font-weight="500" fill="#444441">Artifact</text>
-<text x="57" y="165" text-anchor="middle" font-size="13" font-weight="500" fill="#444441">Registry</text>
-<text x="57" y="183" text-anchor="middle" font-size="11" fill="#5F5E5A">Docker images</text>
-<line x1="110" y1="160" x2="119" y2="160" stroke="#B4B2A9" stroke-width="1" stroke-dasharray="3 2" fill="none" marker-end="url(#arr-d)"/>
-
-<!-- Secret Manager -->
-<rect x="568" y="115" width="107" height="90" rx="8" fill="#F1EFE8" stroke="#888780" stroke-width="0.5"/>
-<text x="621" y="147" text-anchor="middle" font-size="13" font-weight="500" fill="#444441">Secret</text>
-<text x="621" y="165" text-anchor="middle" font-size="13" font-weight="500" fill="#444441">Manager</text>
-<text x="621" y="183" text-anchor="middle" font-size="11" fill="#5F5E5A">API keys, DSN</text>
-<line x1="568" y1="160" x2="561" y2="160" stroke="#B4B2A9" stroke-width="1" stroke-dasharray="3 2" fill="none" marker-end="url(#arr-d)"/>
-
-<!-- Arrow: Cloud Run → VPC Connector -->
-<line x1="340" y1="220" x2="340" y2="233" stroke="#888780" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
-
-<!-- VPC Connector -->
-<rect x="200" y="234" width="280" height="36" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
-<text x="340" y="252" text-anchor="middle" font-size="11" fill="#085041">Serverless VPC Connector</text>
-
-<!-- Arrow: VPC Connector → Private VPC -->
-<line x1="340" y1="270" x2="340" y2="279" stroke="#888780" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
-
-<!-- Private VPC container -->
-<rect x="10" y="280" width="660" height="162" rx="16" fill="none" stroke="#0F6E56" stroke-width="0.5" stroke-dasharray="5 3"/>
-<text x="22" y="298" text-anchor="start" font-size="11" fill="#0F6E56">sofia-network — private VPC</text>
-
-<!-- Memorystore Redis -->
-<rect x="55" y="305" width="215" height="112" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
-<text x="162" y="340" text-anchor="middle" font-size="13" font-weight="500" fill="#633806">Memorystore Redis 7</text>
-<text x="162" y="360" text-anchor="middle" font-size="11" fill="#854F0B">Task store · Auth cache</text>
-<text x="162" y="378" text-anchor="middle" font-size="11" fill="#854F0B">BASIC · DIRECT_PEERING</text>
-
-<!-- Cloud SQL PostgreSQL -->
-<rect x="410" y="305" width="240" height="112" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
-<text x="530" y="340" text-anchor="middle" font-size="13" font-weight="500" fill="#0C447C">Cloud SQL PostgreSQL 16</text>
-<text x="530" y="360" text-anchor="middle" font-size="11" fill="#185FA5">sf_api_keys · sf_agents</text>
-<text x="530" y="378" text-anchor="middle" font-size="11" fill="#185FA5">ZONAL · private IP</text>
-</svg>
-
-</div>

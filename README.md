@@ -46,7 +46,7 @@ flowchart TB
 
     subgraph Protocols["Protocol extensions"]
         direction LR
-        A2A["stls-a2a<br/>A2A JSON-RPC over /a2a-stls"]
+        A2A["stls-a2a<br/>A2A JSON-RPC over /secure-a2a"]
         MCP["stls-mcp<br/>MCP JSON-RPC over /mcp-stls"]
     end
 
@@ -165,6 +165,9 @@ packages above against real agent frameworks and deployment targets:
 
 - [`samples/client/a2a_sdk`](samples/client/a2a_sdk) — plain A2A SDK client.
 - [`samples/client/sofia-client-secure`](samples/client/sofia-client-secure) — React + TypeScript chat client routed through a secure transport proxy.
+- [`samples/client/10_client_ms`](samples/client/10_client_ms) / [`samples/server/10_server_ms`](samples/server/10_server_ms) — multi-server/multi-session `arqit_py` client+server test pair for `stls_a2a.SecureSessionManager`.
+- [`samples/client/11_client_mcp_ms`](samples/client/11_client_mcp_ms) / [`samples/server/11_server_mcp_ms`](samples/server/11_server_mcp_ms) — the MCP analogue of the pair above, for `stls_mcp.SecureToolsetManager`.
+- [`samples/client/12_client_mcp_ms`](samples/client/12_client_mcp_ms) / [`samples/server/12_server_mcp_ms`](samples/server/12_server_mcp_ms) — Node/TypeScript port of the `11_*_mcp_ms` pair.
 - [`samples/server/2_sk_financial_agent`](samples/server/2_sk_financial_agent) — Semantic Kernel financial agent.
 - [`samples/server/5_adk_doc_gen`](samples/server/5_adk_doc_gen) — Google ADK document-generation agent.
 - [`samples/server/sofia-admin`](samples/server/sofia-admin) — admin/management server with cloud deployment scaffolding.

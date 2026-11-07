@@ -246,8 +246,8 @@ class StlsTransport:
         """
         if envelope.session_id != self.session_id:
             raise ValueError(
-                f"Session ID mismatch: atteso {self.session_id!r}, "
-                f"ricevuto {envelope.session_id!r}"
+                f"Session ID mismatch: expected {self.session_id!r}, "
+                f"got {envelope.session_id!r}"
             )
 
         # Verifies the HMAC before attempting decryption (fail-fast)
@@ -256,7 +256,7 @@ class StlsTransport:
         )
         if not self._constant_time_equal(expected_mac, envelope.mac):
             raise ValueError(
-                "MAC verification failed — integrità del messaggio compromessa"
+                "MAC verification failed — message integrity compromised"
             )
 
         # AES-256-GCM decryption (verifies the GCM tag internally)

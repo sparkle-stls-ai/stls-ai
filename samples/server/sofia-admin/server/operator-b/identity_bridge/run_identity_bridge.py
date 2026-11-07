@@ -1,24 +1,24 @@
 """
 run_identity_bridge.py
 ------------------------
-Fa girare l'Identity Bridge (DID Document + status list pubblici) come
-server HTTP locale — stesso principio di agent_identity.py: file
-esterno al package stls-identity, importa solo la sua API pubblica.
+Runs the Identity Bridge (public DID Document + status list) as a
+local HTTP server — same principle as agent_identity.py: a file
+external to the stls-identity package, importing only its public API.
 
-Indipendente da agent_identity.py: legge la propria configurazione da
-.env.identity_bridge, non dal .env generico — così i due processi
-(agente conversazionale, server bridge) restano separabili, ognuno col
-proprio file di configurazione, anche se girano nella stessa directory
-o nello stesso repo.
+Independent of agent_identity.py: reads its own configuration from
+.env.identity_bridge, not from the generic .env — so the two processes
+(conversational agent, bridge server) stay separable, each with its
+own configuration file, even if they run in the same directory or
+repo.
 
-NOTA: la firma esatta di create_identity_bridge_router() qui sotto è
-ricostruita dalla documentazione di progetto, non riverificata contro
-il sorgente reale (perso in un reset del sandbox) — da confermare
-contro stls_id_bridge.py prima di considerarlo definitivo.
+NOTE: the exact signature of create_identity_bridge_router() below is
+reconstructed from the project documentation, not re-verified against
+the real source (lost in a sandbox reset) — to be confirmed against
+stls_id_bridge.py before considering it final.
 
-Uso:
+Usage:
     uv run python run_identity_bridge.py
-    # oppure, con reload per sviluppo:
+    # or, with reload for development:
     uv run uvicorn run_identity_bridge:app --reload --port 8000
 """
 
@@ -54,8 +54,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Stesse env vars di tools_identity.py — nessuna nuova convenzione introdotta,
-# tranne le due per il refresher (in fondo a questo blocco).
+# Same env vars as tools_identity.py — no new convention introduced,
+# except the two for the refresher (at the bottom of this block).
 _GOVERNING_AUTHORITY_DID = os.environ.get("GOVERNING_AUTHORITY_DID", "did:web:sofia.sparkle.example.com")
 _GOVERNING_AUTHORITY_HOST = os.environ.get("GOVERNING_AUTHORITY_HOST", "sofia.sparkle.example.com")
 _GOVERNING_AUTHORITY_AGENT_ID = os.environ.get("GOVERNING_AUTHORITY_AGENT_ID", "governing-authority")
@@ -64,9 +64,9 @@ _STATUS_LIST_PUBLISH_URL = os.environ.get(
     "STATUS_LIST_PUBLISH_URL", "https://sofia.sparkle.example.com/identity/status-list"
 )
 
-# Deve stare SOTTO l'MRI (5 minuti nel codice, verifier.py) — altrimenti un
-# verificatore esterno che legge questa cache può trovarla già stale secondo
-# le sue stesse regole, anche se qui l'abbiamo appena ripubblicata.
+# Must stay BELOW the MRI (5 minutes in verifier.py's code) — otherwise an
+# external verifier reading this cache might find it already stale by
+# its own rules, even though we just republished it here.
 _REFRESH_INTERVAL_SECONDS = int(os.environ.get("STATUS_LIST_REFRESH_INTERVAL_SECONDS", "60"))
 
 did_store = PostgresDIDDocumentStore(
@@ -78,15 +78,15 @@ status_cache_store = PostgresStatusListCacheStore(
     table=os.environ.get("IDENTITY_PG_STATUS_LIST_TABLE"),
 )
 
-# Stessa Redis/authority_id di tools_identity.py — DEVE essere la stessa
-# bitstring che IdentityManager.revoke() aggiorna, altrimenti il bridge
-# pubblicherebbe lo stato di revoca di un'altra Authority.
+# Same Redis/authority_id as tools_identity.py — MUST be the same
+# bitstring that IdentityManager.revoke() updates, otherwise the
+# bridge would publish another Authority's revocation state.
 #
-# decode_responses=False QUI È CRITICO: la bitstring è dato binario
-# grezzo (scritto con SETBIT), non testo. Con decode_responses=True,
-# GET la restituisce come str, e StatusListManager.publish() la passa a
-# gzip.compress() — che si aspetta bytes, non str — sollevando
-# TypeError ad ogni ciclo di pubblicazione (bug reale, trovato in log:
+# decode_responses=False IS CRITICAL HERE: the bitstring is raw binary
+# data (written with SETBIT), not text. With decode_responses=True,
+# GET returns it as str, and StatusListManager.publish() passes it to
+# gzip.compress() — which expects bytes, not str — raising a
+# TypeError on every publish cycle (a real bug, found in the logs:
 # "TypeError: a bytes-like object is required, not 'str'").
 _status_list_redis = redis_asyncio.from_url(
     os.environ.get("STATUS_LIST_REDIS_URL", "redis://localhost:6379"),
@@ -110,11 +110,11 @@ _refresher_task: asyncio.Task | None = None
 
 
 async def _publish_once() -> None:
-    """Legge la bitstring corrente da Redis (StatusListManager.publish(),
-    compressa+incapsulata), la scrive nella cache Postgres che il bridge
-    serve. Senza questo, /identity/status-list resta vuoto per sempre —
-    IdentityManager.revoke() aggiorna solo il bit su Redis, non pubblica
-    da solo nulla verso l'esterno."""
+    """Reads the current bitstring from Redis (StatusListManager.publish(),
+    compressed+encapsulated), writes it into the Postgres cache the
+    bridge serves. Without this, /identity/status-list stays empty
+    forever — IdentityManager.revoke() only updates the bit on Redis,
+    it doesn't publish anything externally on its own."""
     encoded_list, valid_from = await status_list_manager.publish()
     credential = StatusListCredential(
         id=_STATUS_LIST_PUBLISH_URL,
@@ -123,7 +123,7 @@ async def _publish_once() -> None:
         encoded_list=encoded_list,
     )
     await status_cache_store.put(_IDENTITY_AUTHORITY_ID, credential)
-    logger.info("status list pubblicata (valid_from=%s)", valid_from.isoformat())
+    logger.info("status list published (valid_from=%s)", valid_from.isoformat())
 
 
 async def _refresh_status_list_periodically() -> None:
@@ -131,14 +131,14 @@ async def _refresh_status_list_periodically() -> None:
         try:
             await _publish_once()
         except Exception:
-            logger.exception("pubblicazione periodica della status list fallita, riprovo al prossimo giro")
+            logger.exception("periodic status list publish failed, retrying next cycle")
         await asyncio.sleep(_REFRESH_INTERVAL_SECONDS)
 
 
 @app.on_event("startup")
 async def _ensure_schema() -> None:
-    """Crea le tabelle se non esistono — stesso self-bootstrap di
-    tools_identity.py, nessuna migrazione manuale richiesta."""
+    """Creates the tables if they don't exist — same self-bootstrap as
+    tools_identity.py, no manual migration required."""
     pool = await did_store._get_pool()
     async with pool.acquire() as conn:
         await conn.execute(did_store.get_ddl())
@@ -147,35 +147,35 @@ async def _ensure_schema() -> None:
     async with pool2.acquire() as conn:
         await conn.execute(status_cache_store.get_ddl())
 
-    # Il DID Document dell'AUTHORITY stessa — questo processo è
-    # indipendente da agent_identity.py (può partire per primo, o da
-    # solo), quindi non può assumere che qualcun altro l'abbia già
-    # pubblicato. Stesso IDENTITY_KEYSTORE_BACKEND del .env dell'agente
-    # -> bootstrap_signing_key è idempotente (get-or-create): se
-    # l'agente ha già girato, questa chiamata recupera la STESSA chiave,
-    # non ne genera una seconda. Senza questo passo, GET
-    # /.well-known/did.json risponde "authority DID Document not
-    # bootstrapped yet" per sempre — non un errore transitorio.
+    # The AUTHORITY's own DID Document — this process is independent
+    # of agent_identity.py (it may start first, or on its own), so it
+    # can't assume someone else has already published it. Same
+    # IDENTITY_KEYSTORE_BACKEND as the agent's .env ->
+    # bootstrap_signing_key is idempotent (get-or-create): if the
+    # agent has already run, this call retrieves the SAME key, it
+    # doesn't generate a second one. Without this step, GET
+    # /.well-known/did.json responds "authority DID Document not
+    # bootstrapped yet" forever — not a transient error.
     keystore = IdentityKeystoreFactory.build()
     _, authority_pub, _ = bootstrap_signing_key(_GOVERNING_AUTHORITY_AGENT_ID, keystore)
     authority_document = build_did_document(
         host=_GOVERNING_AUTHORITY_HOST,
-        agent_path_segments=[],  # DID puro (did:web:<host>), non un "agente" chiamato per caso governing-authority
-        governing_authority_did=_GOVERNING_AUTHORITY_DID,  # auto-referenziale: root of trust, controller = se stessa
+        agent_path_segments=[],  # plain DID (did:web:<host>), not an "agent" that happens to be called governing-authority
+        governing_authority_did=_GOVERNING_AUTHORITY_DID,  # self-referential: root of trust, controller = itself
         signing_public_key=authority_pub,
     )
     await did_store.put(_GOVERNING_AUTHORITY_AGENT_ID, authority_document)
 
-    # Pubblicazione immediata all'avvio — senza questa, /identity/status-list
-    # risponderebbe "not published yet" fino al primo giro del task periodico.
+    # Immediate publish at startup — without this, /identity/status-list
+    # would respond "not published yet" until the periodic task's first cycle.
     await _publish_once()
 
     global _refresher_task
     _refresher_task = asyncio.create_task(_refresh_status_list_periodically())
 
     logger.info(
-        "Identity Bridge pronto — DID store, status cache store, DID Document "
-        "dell'Authority e refresher (ogni %ss) inizializzati", _REFRESH_INTERVAL_SECONDS,
+        "Identity Bridge ready — DID store, status cache store, Authority "
+        "DID Document and refresher (every %ss) initialized", _REFRESH_INTERVAL_SECONDS,
     )
 
 
@@ -188,5 +188,5 @@ async def _stop_refresher() -> None:
 
 if __name__ == "__main__":
     port = int(os.environ.get("IDENTITY_BRIDGE_PORT", "8000"))
-    logger.info("Avvio Identity Bridge su http://localhost:%s", port)
+    logger.info("Starting Identity Bridge on http://localhost:%s", port)
     uvicorn.run(app, host="0.0.0.0", port=port)

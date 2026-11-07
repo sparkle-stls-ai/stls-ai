@@ -35,6 +35,12 @@ framework — it works only on bytes and JSON-serializable dicts.
   (Arqit SKA-Platform™ via the native Python SDK, quantum-safe key
   exchange via QKD), and `pqc` (hybrid X25519 + ML-KEM-768, software-based
   quantum-safe, redistributable, no dependency on external services).
+- **`KeySessionResolver`** (`providers/stls_core_providers_session_resolver.py`):
+  generic resolution of `{kid, kdata}` for an arbitrary caller-defined
+  `target_key`, with a per-`target_key` async lock and an optional
+  `target_configs={target_key: config_path}` map for `arqit_py` — lets one
+  process hold distinct `arqit_py` device identities for different remote
+  counterparts instead of being limited to a single device/config per process.
 - **API key authentication**: two composable levels. `AuthConfig`
   (static, in-memory, timing-safe) for quick tests and small deployments
   with no infrastructure — shared by stls-a2a and stls-mcp, not

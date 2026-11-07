@@ -19,7 +19,7 @@ logging.getLogger("opentelemetry.context").setLevel(logging.CRITICAL)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Imports STLS-A2A
+# STLS-A2A imports
 # ---------------------------------------------------------------------------
 from stls_a2a import (
     KeySessionProvider,
@@ -33,7 +33,7 @@ from stls_a2a import (
 )
 
 # ---------------------------------------------------------------------------
-# Configurazione globale
+# Global configuration
 # ---------------------------------------------------------------------------
 
 PORT        = int(os.getenv("PORT", "8080"))
@@ -42,10 +42,10 @@ AUTH_PG_DSN = os.getenv("AUTH_PG_DSN", "")
 
 def _resolve_base_url() -> str:
     """
-    Risolve BASE_URL nell'ordine:
-      1. Variabile d'ambiente BASE_URL (override esplicito / dev locale)
-      2. Metadata server GCP (istanza Cloud Run in esecuzione)
-      3. Fallback localhost (sviluppo locale senza GCP)
+    Resolves BASE_URL in order:
+      1. BASE_URL environment variable (explicit override / local dev)
+      2. GCP metadata server (running Cloud Run instance)
+      3. Fallback to localhost (local development without GCP)
     """
     if url := os.getenv("BASE_URL"):
         return url.rstrip("/")
@@ -102,7 +102,7 @@ def build_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info(
-            "Avvio ApiKeyManagerGroup (%d manager: %s)…",
+            "Starting ApiKeyManagerGroup (%d managers: %s)…",
             len(managers),
             ", ".join(managers._managers),
         )
@@ -124,7 +124,7 @@ def build_app() -> FastAPI:
         agent=coordinator_agent,
         key_session_provider=key_session_provider,
         path="/agents/sofia-admin-coordinator/secure-a2a",
-        base_url=BASE_URL, # necesserio per costruire l'agent card con URL corretto
+        base_url=BASE_URL, # needed to build the agent card with the correct URL
         framework="google-adk",
         # api_key_manager=pg_manager
     )
@@ -152,19 +152,19 @@ def main() -> None:
 
     _pg_status = (
         f"postgresql ({AUTH_PG_DSN[:20]}…)" if AUTH_PG_DSN
-        else "disabled (AUTH_PG_DSN non impostato)"
+        else "disabled (AUTH_PG_DSN not set)"
     )
     _redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     _use_redis = os.getenv("AUTH_KM_USE_REDIS", "true").lower() not in ("false", "0", "no")
 
     print("\n" + "=" * 70)
-    print("📡 sofia-admin — Porta", PORT)
+    print("📡 sofia-admin — Port", PORT)
     print("=" * 70)
     print(f"\n🌐 BASE_URL : {BASE_URL}")
     print(f"\n🔐 Auth backends:")
     print(f"   PostgresLoader → {_pg_status}")
-    print(f"   Redis cache    : {'abilitata (' + _redis_url + ')' if _use_redis else 'disabilitata'}")
-    print(f"\n🤖 Agenti:")
+    print(f"   Redis cache    : {'enabled (' + _redis_url + ')' if _use_redis else 'disabled'}")
+    print(f"\n🤖 Agents:")
     print(f"   sofia-admin   {BASE_URL}/agents/sofia-admin-coordinator/secure-a2a")
     print()
 

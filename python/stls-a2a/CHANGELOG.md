@@ -26,7 +26,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for different remote counterparts, instead of being limited to the
   single device/config the whole process's `ARQIT_PY_CLIENT_CONFIG` env
   var pointed at. Resolved per `base_url` via `stls_core`'s new shared
-  `KeySessionResolver` (see `python/stls-core/CHAGELOG.md` — also used
+  `KeySessionResolver` (see `python/stls-core/CHANGELOG.md` — also used
   by `stls-mcp`'s `SecureToolsetManager`); falls back to the env var
   when no entry matches a given `base_url` (or the argument is
   omitted), so existing callers are unaffected. Works identically with
@@ -48,7 +48,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   needed no code change of its own, since `SecureSessionManager` calls
   into the now-fixed `stls_core` provider/resolver. See the `arqit_py`
   section of `README.md`'s "Current Limitations and Notes" and
-  `python/stls-core/CHAGELOG.md` for the full write-up.
+  `python/stls-core/CHANGELOG.md` for the full write-up.
 
 ### Changed
 
@@ -61,87 +61,87 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **SSE heartbeat** (`STLS_SSE_HEARTBEAT_SECONDS`, default 15s; `0` = disabilitato)
-  in `process_plain_stream()` / `process_secure_stream()`, sia sul path
-  streaming (`adapter.stream()`) sia sul fallback sincrono
-  (`adapter.handle_request()`). Emette periodicamente un commento SSE
-  (`: keep-alive`) mentre l'adapter è bloccato in una delega long-running
-  (es. sub-agent non-streaming), senza mai perdere o interrompere il chunk
-  in attesa. Risolve la disconnessione silenziosa dei client (default httpx
-  120s, proxy/LB con read-timeout stretti) mentre il lavoro server-side
-  prosegue fino al completamento.
+- **SSE heartbeat** (`STLS_SSE_HEARTBEAT_SECONDS`, default 15s; `0` = disabled)
+  in `process_plain_stream()` / `process_secure_stream()`, both on the
+  streaming path (`adapter.stream()`) and on the synchronous fallback
+  (`adapter.handle_request()`). Periodically emits an SSE comment
+  (`: keep-alive`) while the adapter is blocked in a long-running
+  delegation (e.g. a non-streaming sub-agent), without ever losing or
+  interrupting the pending chunk. Fixes silent client disconnection
+  (default httpx 120s, proxies/LBs with tight read-timeouts) while
+  server-side work keeps running to completion.
 
-- **`TaskStoreBase.touch(task_id)`** — non-abstract, default no-op per
-  retrocompatibilità con implementazioni esterne. Chiamato ad ogni battito
-  del heartbeat SSE: rinnova `updatedAt` (in-memory) o solo il TTL via
-  `EXPIRE` (Redis — volutamente **non** un get-modify-save, per non
-  sovrascrivere update concorrenti applicati via script Lua). Evita che un
-  job più lungo del TTL venga rimosso dal cleanup mentre è ancora in corso.
+- **`TaskStoreBase.touch(task_id)`** — non-abstract, default no-op for
+  backward compatibility with external implementations. Called on every
+  SSE heartbeat tick: refreshes `updatedAt` (in-memory) or just the TTL via
+  `EXPIRE` (Redis — deliberately **not** a get-modify-save, so as not to
+  overwrite concurrent updates applied via Lua script). Prevents a job that
+  runs longer than the TTL from being removed by cleanup while still in
+  progress.
 
-- **`ERR_SESSION_EXPIRED` (`-32004`)** e **`SessionExpiredError`** —
-  codice/eccezione dedicati a una sessione STLS sconosciuta o scaduta e
-  **non rigenerabile**. Per il provider PQC è l'unico caso possibile: la
-  `session_key` nasce da un KEM effimero al momento dell'handshake, non è
-  derivabile dal solo `session_id` come invece accade (lazy) per
-  `base`/`arqit_py`. Propagato con shape JSON-RPC standard e HTTP 401 su
-  tutti gli handler (sync `/secure-a2a`, SSE, plain) al posto del blob
-  generico `{'error': str(e)}` precedente — permette a un client
-  STLS-aware di distinguere "ri-fai l'handshake e ritenta" da un errore
-  applicativo permanente.
+- **`ERR_SESSION_EXPIRED` (`-32004`)** and **`SessionExpiredError`** —
+  dedicated code/exception for an unknown or expired STLS session that is
+  **not regenerable**. For the PQC provider this is the only possible case:
+  the `session_key` is born from an ephemeral KEM at handshake time, it
+  can't be derived from the `session_id` alone the way it is (lazily) for
+  `base`/`arqit_py`. Propagated with the standard JSON-RPC shape and HTTP
+  401 on all handlers (sync `/secure-a2a`, SSE, plain) instead of the
+  previous generic `{'error': str(e)}` blob — lets an STLS-aware client
+  distinguish "redo the handshake and retry" from a permanent application
+  error.
 
-- **`stls_a2a_secure_remote.py`** — nuovo modulo per la delega **intra-agent
-  cifrata**, analogo di `ContextualRemoteA2aAgent` ma con traffico su
-  `/secure-a2a` invece che sul plain `/a2a`:
-  - **`SecureSessionManager`** — cache di sessioni PQC per `base_url`, con
-    handshake lazy e `asyncio.Lock` anti-doppio-handshake concorrente.
-    L'handshake viene sempre eseguito alla **radice** dell'host
-    (`/stls/pqc/handshake` è un endpoint globale per app, non prefissato
-    per-agente); gli endpoint dati (`_secure_url`/`_stream_url`) vengono
-    ricostruiti sul `base_url` effettivamente richiesto — che può includere
-    un prefisso multi-agente (es. `/agents/agent-b`) — senza rifare la
-    negoziazione crittografica già completata.
-  - **`STLSHttpxTransport`** (`httpx.AsyncBaseTransport`) — intercetta in
-    trasparenza le richieste JSON-RPC dirette al plain endpoint di un
-    agente STLS, le cifra e le rigira su `/secure-a2a` (o
-    `/secure-a2a/stream`), decifra la risposta. Passthrough per discovery e
-    body non-JSON-RPC. Path SSE ricostruito byte-per-byte compatibile con
-    l'endpoint plain (stesso envelope JSON-RPC 2.0, `artifactId`,
-    `timestamp`). Retry-once su `ERR_SESSION_EXPIRED` sul path sincrono
-    (sempre sicuro, nessun byte ancora emesso) e sul path SSE **solo** se
-    l'errore è il primissimo evento del generatore ("priming" pre-Response:
-    consumato prima di costruire la `httpx.Response`, quindi ancora zero
-    byte verso il chiamante) — mai a metà stream, dove potrebbero già
-    essere stati inoltrati eventi reali a valle.
-  - **`ContextualSecureRemoteA2aAgent`** — drop-in replacement di
-    `RemoteA2aAgent` che compone propagazione del contesto (identica a
-    `ContextualRemoteA2aAgent`) e trasporto cifrato via
-    `STLSHttpxTransport`. Rifiuta esplicitamente `httpx_client=` passato a
-    mano (verrebbe sovrascritto silenziosamente).
+- **`stls_a2a_secure_remote.py`** — new module for **encrypted intra-agent**
+  delegation, analogous to `ContextualRemoteA2aAgent` but with traffic over
+  `/secure-a2a` instead of plain `/a2a`:
+  - **`SecureSessionManager`** — per-`base_url` cache of PQC sessions, with
+    lazy handshake and an `asyncio.Lock` guarding against a concurrent
+    double handshake. The handshake is always performed at the host's
+    **root** (`/stls/pqc/handshake` is a global, app-wide endpoint, not
+    per-agent-prefixed); the data endpoints (`_secure_url`/`_stream_url`)
+    are rebuilt on the actually requested `base_url` — which may include a
+    multi-agent prefix (e.g. `/agents/agent-b`) — without redoing the
+    crypto negotiation that's already been completed.
+  - **`STLSHttpxTransport`** (`httpx.AsyncBaseTransport`) — transparently
+    intercepts JSON-RPC requests aimed at an STLS agent's plain endpoint,
+    encrypts them and redirects them to `/secure-a2a` (or
+    `/secure-a2a/stream`), decrypts the response. Passthrough for discovery
+    and non-JSON-RPC bodies. SSE path rebuilt byte-for-byte compatible with
+    the plain endpoint (same JSON-RPC 2.0 envelope, `artifactId`,
+    `timestamp`). Retry-once on `ERR_SESSION_EXPIRED` on the synchronous
+    path (always safe, no bytes emitted yet) and on the SSE path **only**
+    if the error is the very first event from the generator ("priming"
+    before the Response: consumed before building the `httpx.Response`, so
+    still zero bytes sent to the caller) — never mid-stream, where real
+    downstream events might already have been forwarded.
+  - **`ContextualSecureRemoteA2aAgent`** — drop-in replacement for
+    `RemoteA2aAgent` that composes context propagation (identical to
+    `ContextualRemoteA2aAgent`) with encrypted transport via
+    `STLSHttpxTransport`. Explicitly rejects a manually passed
+    `httpx_client=` (it would be silently overwritten).
 
-- **`server_context_test.py`**: flag `--secure` per switchare la delega di
-  test A→B tra `ContextualRemoteA2aAgent` (plain, default) e
-  `ContextualSecureRemoteA2aAgent` (cifrata, handshake PQC lazy verso B).
-  **`agent_context_test_a_secure.py`** — gemello cifrato di
-  `agent_context_test_a.py`, stesso scenario di propagazione contesto, per
-  confronto diretto del traffico osservato.
+- **`server_context_test.py`**: `--secure` flag to switch the A→B test
+  delegation between `ContextualRemoteA2aAgent` (plain, default) and
+  `ContextualSecureRemoteA2aAgent` (encrypted, lazy PQC handshake towards
+  B). **`agent_context_test_a_secure.py`** — encrypted twin of
+  `agent_context_test_a.py`, same context-propagation scenario, for direct
+  comparison of the observed traffic.
 
 ### Changed
 
-- **`stream_secure_message()`** (client SSE cifrato) e **`A2AClient.stream()`**
-  (client SSE plain) — timeout di default `120.0s → 300.0s`, con
-  `httpx.Timeout` strutturato (`connect=10, write=30, pool=10`, solo il
-  `read` esteso). Con il server ≥0.1.4 che emette keep-alive periodico, il
-  read timeout scatta ormai solo se il server è realmente morto, non più
-  durante un job lungo ma vivo.
+- **`stream_secure_message()`** (encrypted SSE client) and
+  **`A2AClient.stream()`** (plain SSE client) — default timeout
+  `120.0s → 300.0s`, with a structured `httpx.Timeout`
+  (`connect=10, write=30, pool=10`, only `read` extended). With the
+  server ≥0.1.4 emitting periodic keep-alives, the read timeout now only
+  triggers if the server is actually dead, not during a long but live job.
 
 - **`TASK_STORE_TTL_SECONDS`** — default `180s → 900s` (in-memory, Redis,
-  factory) — margine più realistico per job long-running, specie ora che il
-  `touch()` da heartbeat lo rinnova comunque durante l'esecuzione.
+  factory) — a more realistic margin for long-running jobs, especially now
+  that heartbeat `touch()` refreshes it during execution anyway.
 
-- **Timeout esplicito** (`connect=10, read=120`) sul fetch di `FileReference`
-  URI in `stls_a2a_google_adapter.py` — era il default httpx di 5s,
-  insufficiente per il download di file remoti anche solo moderatamente
-  grandi.
+- **Explicit timeout** (`connect=10, read=120`) on the `FileReference` URI
+  fetch in `stls_a2a_google_adapter.py` — it used to be httpx's 5s default,
+  insufficient for downloading even moderately large remote files.
 
 ### Fixed
 
@@ -162,70 +162,68 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`.../secure-a2a` invece di `.../agents/agent-b/secure-a2a`) → 404
   silenzioso lato ADK, senza un'eccezione riconoscibile.
 
-- **`SecureSessionManager`: stesso base_url (con prefisso) riusato anche per
-  l'handshake PQC** — che invece vive sempre alla radice dell'app
-  (endpoint globale, registrato una sola volta per processo, mai
-  prefissato per-agente). Causava 404 sull'handshake stesso in ogni
-  deployment multi-agente, anche dopo il fix del punto precedente.
+- **`SecureSessionManager`: same base_url (with prefix) also reused for
+  the PQC handshake** — which actually always lives at the app's root
+  (global endpoint, registered once per process, never per-agent
+  prefixed). This caused a 404 on the handshake itself in every
+  multi-agent deployment, even after the fix to the previous point.
 
-- **`_card_from_adk()`: tool con nome `<function foo at 0x7f...>` invece
-  del nome reale** — `getattr(tool, "name", str(tool))` presuppone che
-  `agent.tools` contenga sempre oggetti già wrappati (`FunctionTool`).
-  Con `Agent(tools=[my_function])`, ADK a seconda della versione non
-  ri-avvolge la funzione grezza prima di esporla su `agent.tools`:
-  `getattr` non trova `.name`, cade su `str(tool)` — un repr che cambia
-  ad ogni processo (contiene l'indirizzo di memoria) e non serve a
-  nulla nella card pubblica. Nuovo helper `_tool_identity()`: fallback
-  `.name` → `.__name__` (funzione grezza) → `str(tool)`; per la
-  description, `.description` → prima riga del `.__doc__` → stringa
-  vuota.
+- **`_card_from_adk()`: tool shown with the name `<function foo at
+  0x7f...>` instead of the real name** — `getattr(tool, "name",
+  str(tool))` assumes `agent.tools` always contains already-wrapped
+  objects (`FunctionTool`). With `Agent(tools=[my_function])`, depending
+  on the ADK version, the raw function isn't re-wrapped before being
+  exposed on `agent.tools`: `getattr` doesn't find `.name`, falls back to
+  `str(tool)` — a repr that changes on every process (it contains the
+  memory address) and is useless in the public card. New helper
+  `_tool_identity()`: fallback `.name` → `.__name__` (raw function) →
+  `str(tool)`; for the description, `.description` → first line of
+  `.__doc__` → empty string.
 
 ### Security
 
-- **Card pubbliche non menzionano più il branding "Sparkle SKA"** —
-  `_build_stls_extension()`/`_get_security_scheme()` includevano la
-  stringa `"Sparkle SKA"` nelle description e nel nome della classe
-  `SparkleSKASecurityScheme`. Il provider attivo (`keyProvider` /
-  `key_provider`) **resta visibile** in chiaro nella card, invariato —
-  è informazione legittima per l'interoperabilità (un client può volersi
-  accordare su quale meccanismo di scambio chiave supportare); il
-  problema era solo il nome prodotto Arqit, non il fatto di indicare
-  quale provider è in uso.
+- **Public cards no longer mention the "Sparkle SKA" branding** —
+  `_build_stls_extension()`/`_get_security_scheme()` included the string
+  `"Sparkle SKA"` in descriptions and in the `SparkleSKASecurityScheme`
+  class name. The active provider (`keyProvider` / `key_provider`)
+  **remains visible** in plaintext in the card, unchanged — that is
+  legitimate information for interoperability (a client may want to agree
+  on which key-exchange mechanism to support); the problem was only the
+  Arqit product name, not the fact of indicating which provider is in use.
 
 - **`SparkleSKASecurityScheme` → `StlsKeyExchangeSecurityScheme`,
-  `type: "sparkle_ska"` → `"stls_key_exchange"`** — non solo un problema
-  di branding: il nome "Sparkle SKA" (prodotto Arqit) era semanticamente
-  sbagliato anche per il caso `pqc`, che con Arqit non ha alcuna
-  relazione (X25519 + ML-KEM-768 è un meccanismo indipendente).
-  **Breaking change deliberato**: chi già parsava
-  `securityScheme.type == "sparkle_ska"` deve aggiornarsi al nuovo
-  valore.
+  `type: "sparkle_ska"` → `"stls_key_exchange"`** — not just a branding
+  issue: the name "Sparkle SKA" (an Arqit product) was also semantically
+  wrong for the `pqc` case, which has no relationship with Arqit at all
+  (X25519 + ML-KEM-768 is an independent mechanism). **Deliberate breaking
+  change**: anyone already parsing `securityScheme.type == "sparkle_ska"`
+  must update to the new value.
 
-- **URI dell'estensione STLS**: `https://stls-ai.tisparkle.com/...` →
-  `https://stls-ai.com/...` — rimosso il sottodominio aziendale
-  dall'identificatore pubblico dell'estensione. Stesso cambiamento
-  applicato anche a `stls-mcp` (`STLS_EXTENSION_URI`), per coerenza tra
-  i due protocolli.
+- **STLS extension URI**: `https://stls-ai.tisparkle.com/...` →
+  `https://stls-ai.com/...` — removed the company subdomain from the
+  extension's public identifier. The same change was also applied to
+  `stls-mcp` (`STLS_EXTENSION_URI`), for consistency between the two
+  protocols.
 
-### Note operative
+### Operational notes
 
-- **`SessionCache` persistente (Redis) + provider deterministico** (`base`:
-  `session_id` sempre fisso `"base-session-key-identifier"`) può mascherare
-  un mismatch di `KEY_PROVIDER_NAME` tra due lanci diversi dello stesso
-  agente: una sessione `base` cachata prima del cambio provider resta
-  valida per cache-hit anche dopo un riavvio con `KEY_PROVIDER_NAME=pqc`,
-  perché il cache-hit bypassa `key_session_provider` interamente. Non un
-  bug applicativo — ma da tenere presente: **flushare la `SessionCache`
-  quando si cambia provider tra un giro di test e l'altro**
+- **Persistent `SessionCache` (Redis) + deterministic provider** (`base`:
+  `session_id` always fixed to `"base-session-key-identifier"`) can mask a
+  `KEY_PROVIDER_NAME` mismatch between two different runs of the same
+  agent: a `base` session cached before the provider change stays valid
+  for a cache hit even after a restart with `KEY_PROVIDER_NAME=pqc`,
+  because the cache hit bypasses `key_session_provider` entirely. Not an
+  application bug — but worth keeping in mind: **flush the
+  `SessionCache` when switching provider between test runs**
   (`redis-cli --scan --pattern 'stls:sc:*' | xargs redis-cli DEL`).
 
-- **Handshake PQC condiviso in scenari multi-agent-per-app** (fixme, non
-  ancora risolto): `/stls/pqc/handshake` è registrato una sola volta per
-  app (guard su `app.routes`), e il closure cattura `middleware.sessions`
-  del **primo** agente registrato. Se più agenti PQC condividono lo stesso
-  processo FastAPI, solo il primo vede le sessioni popolate
-  dall'handshake. Non impatta i deployment a un agente per processo (es.
-  `server_context_test.py`).
+- **Shared PQC handshake in multi-agent-per-app scenarios** (known issue,
+  not yet fixed): `/stls/pqc/handshake` is registered only once per app
+  (guarded on `app.routes`), and the closure captures the
+  `middleware.sessions` of the **first** agent registered. If multiple PQC
+  agents share the same FastAPI process, only the first one sees the
+  sessions populated by the handshake. Does not affect one-agent-per-process
+  deployments (e.g. `server_context_test.py`).
 
 ---
 
@@ -234,60 +232,60 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **`create_pqc_a2a_transport(base_url, *, client_id, handshake_path, httpx_client)`**
-  (`stls_a2a_integration.py`) — helper client-side per il provider PQC.
-  Sostituisce la sequenza manuale (provider → kid → key →
-  `SecureA2ATransportAdapter`) con una chiamata singola che esegue
-  internamente il KEM handshake X25519 + ML-KEM-768: genera i keypair
-  client-side, invia `PQCHandshakeRequest` all'endpoint
-  `/stls/pqc/handshake`, deriva la `session_key` via HKDF-SHA256,
-  verifica il proof di possesso e azzera le chiavi private. Restituisce
-  un `SecureA2ATransportAdapter` pronto per `send_secure_message()` /
-  `stream_secure_message()`. Non richiede una chiave pre-condivisa.
-  Re-esportato dal package pubblico (`from stls_a2a import
-  create_pqc_a2a_transport`). Richiede `liboqs-python` (`[pqc]` extra).
+  (`stls_a2a_integration.py`) — client-side helper for the PQC provider.
+  Replaces the manual sequence (provider → kid → key →
+  `SecureA2ATransportAdapter`) with a single call that internally performs
+  the X25519 + ML-KEM-768 KEM handshake: generates the keypair client-side,
+  sends a `PQCHandshakeRequest` to the `/stls/pqc/handshake` endpoint,
+  derives the `session_key` via HKDF-SHA256, verifies the proof of
+  possession and zeroes out the private keys. Returns a
+  `SecureA2ATransportAdapter` ready for `send_secure_message()` /
+  `stream_secure_message()`. Doesn't require a pre-shared key. Re-exported
+  from the public package (`from stls_a2a import
+  create_pqc_a2a_transport`). Requires `liboqs-python` (the `[pqc]` extra).
 
-- **Endpoint `/stls/pqc/handshake`** in `create_secure_a2a_endpoint()` —
-  quando `KEY_PROVIDER_NAME=pqc`, la funzione registra automaticamente il
-  route `POST /stls/pqc/handshake` che chiama
-  `stls_core.perform_pqc_handshake()`. L'endpoint usa la `SessionCache`
-  interna del middleware (`middleware.sessions`) così le sessioni PQC sono
-  immediatamente riconoscibili da `get_transport()` senza passare per la
-  risoluzione lazy del provider. Il route è registrato **una sola volta**
-  per app (guard su `app.routes`): più agenti che chiamano
-  `create_secure_a2a_endpoint()` sullo stesso server non duplicano il
-  handler. **Nota multi-agent con memory backend**: con
-  `SESSION_CACHE_BACKEND=memory`, l'endpoint è tied alla `SessionCache`
-  del primo agente registrato. Per multi-agent PQC (client che chiamano
-  agenti diversi con la stessa sessione) usare
-  `SESSION_CACHE_BACKEND=redis` — che è già il requisito standard per
-  qualunque deployment Cloud Run multi-replica.
+- **`/stls/pqc/handshake` endpoint** in `create_secure_a2a_endpoint()` —
+  when `KEY_PROVIDER_NAME=pqc`, the function automatically registers the
+  `POST /stls/pqc/handshake` route, which calls
+  `stls_core.perform_pqc_handshake()`. The endpoint uses the middleware's
+  internal `SessionCache` (`middleware.sessions`) so PQC sessions are
+  immediately recognized by `get_transport()` without going through the
+  provider's lazy resolution. The route is registered **only once** per
+  app (guarded on `app.routes`): multiple agents calling
+  `create_secure_a2a_endpoint()` on the same server don't duplicate the
+  handler. **Multi-agent note with the memory backend**: with
+  `SESSION_CACHE_BACKEND=memory`, the endpoint is tied to the
+  `SessionCache` of the first agent registered. For multi-agent PQC
+  (clients calling different agents with the same session) use
+  `SESSION_CACHE_BACKEND=redis` — which is already the standard
+  requirement for any multi-replica Cloud Run deployment.
 
-- **Supporto PQC in `stls_a2a_utils.py`**:
-  - `_get_security_scheme()` — aggiunto case `"pqc"`: restituisce
+- **PQC support in `stls_a2a_utils.py`**:
+  - `_get_security_scheme()` — added a `"pqc"` case: returns
     `SparkleSKASecurityScheme(key_provider="pqc", description="Quantum-safe
     key exchange via X25519 + ML-KEM-768 (NIST FIPS 203)")`.
-  - `_build_stls_extension()` — per `KEY_PROVIDER_NAME=pqc` aggiunge
-    `keyDerivation: "HKDF-SHA256+X25519+ML-KEM-768"` e
-    `handshakeEndpoint: "/stls/pqc/handshake"` nei parametri
-    dell'estensione STLS nell'`AgentCard`.
+  - `_build_stls_extension()` — for `KEY_PROVIDER_NAME=pqc`, adds
+    `keyDerivation: "HKDF-SHA256+X25519+ML-KEM-768"` and
+    `handshakeEndpoint: "/stls/pqc/handshake"` to the STLS extension
+    parameters in the `AgentCard`.
 
-- **Extra `[pqc]`** in `pyproject.toml` — pass-through verso
-  `stls_core[pqc]` (`liboqs-python`). Installazione:
+- **`[pqc]` extra** in `pyproject.toml` — pass-through to
+  `stls_core[pqc]` (`liboqs-python`). Install with:
   `uv pip install -e ".[pqc]"`.
 
-- **Supporto PQC nei test**:
-  - `task_test.py` — rilevamento `KEY_PROVIDER_NAME=pqc` a module level:
-    per `base`/`arqit_py` la session key è risolta al lancio come prima;
-    per `pqc` viene impostato un placeholder e il KEM handshake avviene
-    all'inizio di `task_test()` via `create_pqc_a2a_transport()`, poi
-    `session_key_identifier` e `session_key_data` vengono popolati per
-    riutilizzo in tutti i `call_agent()` successivi (invariati).
+- **PQC support in tests**:
+  - `task_test.py` — module-level `KEY_PROVIDER_NAME=pqc` detection: for
+    `base`/`arqit_py` the session key is resolved at launch as before; for
+    `pqc` a placeholder is set and the KEM handshake happens at the start
+    of `task_test()` via `create_pqc_a2a_transport()`, then
+    `session_key_identifier` and `session_key_data` are populated for
+    reuse in all subsequent `call_agent()` calls (unchanged).
   - `key_providers_test.py` / `key_providers_test_en.py` — `open_session()`
-    ora è PQC-aware: se `KEY_PROVIDER_NAME=pqc` chiama
-    `create_pqc_a2a_transport()` ed estrae `(session_id, transport.session_key)`
-    invece di usare `KeySessionProviderFactory`. Signature di ritorno
-    `(kid, kdata)` invariata — `stream_call()` e tutto il resto del test
-    rimangono immutati.
+    is now PQC-aware: if `KEY_PROVIDER_NAME=pqc` it calls
+    `create_pqc_a2a_transport()` and extracts
+    `(session_id, transport.session_key)` instead of using
+    `KeySessionProviderFactory`. The return signature `(kid, kdata)` is
+    unchanged — `stream_call()` and the rest of the test remain untouched.
 
 ### Changed
 
@@ -367,16 +365,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
-- **Handshake con proof-of-key-possession ora disponibile per il provider
-  PQC** — `create_secure_a2a_endpoint()` registra `/stls/pqc/handshake`
-  quando `KEY_PROVIDER_NAME=pqc`. Il flusso usa lo stesso HMAC
-  challenge/response di `stls-core` / `stls-mcp`: session_id generato
-  server-side (UUID, non enumerabile), proof = HMAC-SHA256(session_key,
-  nonce), nessun key material in transito. Per `base` e `arqit_py`, il
-  flusso lazy esistente (session_id embedded nel primo envelope cifrato,
-  risoluzione del provider su cache miss) rimane invariato — nessun
-  breaking change per i deployment esistenti. La convergenza sull'handshake
-  esplicito anche per `base`/`arqit_py` è tracciata come lavoro futuro.
+- **Handshake with proof-of-key-possession now available for the PQC
+  provider** — `create_secure_a2a_endpoint()` registers
+  `/stls/pqc/handshake` when `KEY_PROVIDER_NAME=pqc`. The flow uses the
+  same HMAC challenge/response as `stls-core` / `stls-mcp`: server-side
+  generated session_id (UUID, non-enumerable), proof =
+  HMAC-SHA256(session_key, nonce), no key material in transit. For `base`
+  and `arqit_py`, the existing lazy flow (session_id embedded in the
+  first encrypted envelope, provider resolution on cache miss) remains
+  unchanged — no breaking change for existing deployments. Converging on
+  an explicit handshake for `base`/`arqit_py` too is tracked as future
+  work.
 
 ---
 
@@ -384,16 +383,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **`FileInline.name`** — nuovo campo opzionale per propagare il nome file
-  originale attraverso il protocollo A2A.
+- **`FileInline.name`** — new optional field to propagate the original
+  file name through the A2A protocol.
 
-- **Propagazione `display_name` nel `Blob`** (`stls_a2a_google_adapter.py`,
-  `_to_genai_parts`) — legge `FileInline.name` e lo imposta come
-  `display_name` del `Blob` genai.
+- **`display_name` propagation in `Blob`** (`stls_a2a_google_adapter.py`,
+  `_to_genai_parts`) — reads `FileInline.name` and sets it as the genai
+  `Blob`'s `display_name`.
 
 - **`SecureA2ATransportAdapter._maybe_process_csv_key()`** — post-processing
-  dei chunk di risposta in `process_secure_stream` per il tool
-  `export_sim_csv`.
+  of response chunks in `process_secure_stream` for the `export_sim_csv`
+  tool.
 
 ---
 
@@ -401,52 +400,53 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **`stls_a2a_remote.ContextualRemoteA2aAgent`** — drop-in replacement di
-  `RemoteA2aAgent` con propagazione automatica di `user_id` e `profile` da
-  `session.state` tramite `a2a_request_meta_provider`.
+- **`stls_a2a_remote.ContextualRemoteA2aAgent`** — drop-in replacement for
+  `RemoteA2aAgent` with automatic propagation of `user_id` and `profile`
+  from `session.state` via `a2a_request_meta_provider`.
 
-- **`SecureA2ATransportAdapter.stream_secure_message()`** — vero streaming
-  incrementale, chunk per chunk.
+- **`SecureA2ATransportAdapter.stream_secure_message()`** — true
+  incremental, chunk-by-chunk streaming.
 
-- **Header HTTP `X-STLS-User-Id` / `X-STLS-Profile`** — canale di
-  propagazione del contesto utente a priorità 3.
+- **`X-STLS-User-Id` / `X-STLS-Profile` HTTP headers** — priority-3 user
+  context propagation channel.
 
-- **`pyproject.toml` extra `[examples]`** — `yfinance` spostata a extra
-  opzionale.
+- **`pyproject.toml` `[examples]` extra** — `yfinance` moved to an
+  optional extra.
 
-- **`KeyProviderArqitPy`** — provider quantum-safe via SDK Python nativo
-  Arqit SKA-Platform™, senza JVM/JPype.
+- **`KeyProviderArqitPy`** — quantum-safe provider via the Arqit
+  SKA-Platform™ native Python SDK, no JVM/JPype.
 
-- **`pyproject.toml` extra `[arqit_py]`** — 7 wheel proprietari Arqit.
+- **`pyproject.toml` `[arqit_py]` extra** — 7 proprietary Arqit wheels.
 
 ### Fixed
 
-- **`pyproject.toml` TOML malformato** — mancava `[build-system]`.
-- **Conflitto `langgraph-prebuilt`** — stack LangChain allineato.
-- **`_build_parts()` mutazione dict in-place** — sostituita con lettura
-  non-distruttiva.
-- **`_run_in_background()` crash su `result["parts"]`** — aggiunto
-  `_normalize_result()` con fallback.
-- **`_card_from_llm()` campi errati nell'AgentCard** — `default_input_modes`
-  / `default_output_modes` al posto di `input_modes` / `output_modes`.
-- **`_fetch_cards()` sincrono in contesto async** — tutti i metodi discovery
-  di `A2AClient` resi async.
-- **`self.sessions` memory leak su Cloud Run** — sostituito con LRU+TTL.
-- **`session.state` non visibile a `tool_context.state`** — aggiornamento
-  diretto prima di `run_async()`.
-- **`is_final_response()` break prematuro con `FunctionTool`** — break solo
-  quando le parts contengono testo effettivo.
-- **Propagazione `user_id`/`profile` da `params.metadata`** — aggiunta come
-  sorgente a priorità 2.
-- **Conflitto `jwt` / `PyJWT`** — pin espliciti nel `pyproject.toml`.
-- **Incompatibilità `google-adk>=2.0` con `opentelemetry>=1.39`** — vincoli
-  `google-adk>=1.25.0,<2.0.0` e `opentelemetry<1.39.0`.
-- **`KeySessionProviderArqitPy.getSessionKeyData()` lookup errato** —
-  lookup primario su `_session_key_identifier` (key_id Arqit).
+- **Malformed TOML in `pyproject.toml`** — missing `[build-system]`.
+- **`langgraph-prebuilt` conflict** — LangChain stack aligned.
+- **`_build_parts()` in-place dict mutation** — replaced with a
+  non-destructive read.
+- **`_run_in_background()` crash on `result["parts"]`** — added
+  `_normalize_result()` with a fallback.
+- **`_card_from_llm()` wrong fields in the AgentCard** —
+  `default_input_modes` / `default_output_modes` instead of
+  `input_modes` / `output_modes`.
+- **`_fetch_cards()` synchronous in an async context** — all of
+  `A2AClient`'s discovery methods made async.
+- **`self.sessions` memory leak on Cloud Run** — replaced with LRU+TTL.
+- **`session.state` not visible to `tool_context.state`** — direct update
+  before `run_async()`.
+- **`is_final_response()` premature break with `FunctionTool`** — break
+  only when the parts contain actual text.
+- **`user_id`/`profile` propagation from `params.metadata`** — added as a
+  priority-2 source.
+- **`jwt` / `PyJWT` conflict** — explicit pins in `pyproject.toml`.
+- **`google-adk>=2.0` incompatible with `opentelemetry>=1.39`** —
+  constrained to `google-adk>=1.25.0,<2.0.0` and `opentelemetry<1.39.0`.
+- **`KeySessionProviderArqitPy.getSessionKeyData()` wrong lookup** —
+  primary lookup on `_session_key_identifier` (Arqit key_id).
 
 ### Changed
 
-- **Priorità catena context propagation** — documentata: message.metadata
+- **Context propagation priority chain** — documented: message.metadata
   (1) → params.metadata (2) → HTTP headers (3) → fallback (4).
 
 ---

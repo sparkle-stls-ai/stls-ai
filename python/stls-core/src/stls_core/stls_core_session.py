@@ -297,8 +297,8 @@ class RedisSessionCache(SessionCacheBase):
             import redis as redis_lib
         except ImportError as exc:
             raise ImportError(
-                "redis>=7.4.0 è necessario per SESSION_CACHE_BACKEND=redis. "
-                "Installare con: pip install 'redis>=7.4.0'"
+                "redis>=7.4.0 is required for SESSION_CACHE_BACKEND=redis. "
+                "Install it with: pip install 'redis>=7.4.0'"
             ) from exc
 
         self._r = redis_lib.Redis.from_url(redis_url, decode_responses=True)

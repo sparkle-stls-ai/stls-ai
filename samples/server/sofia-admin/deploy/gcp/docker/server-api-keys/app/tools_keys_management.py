@@ -1,13 +1,13 @@
 """
 tools_api_keys.py
 -----------------
-Tools per sofia_api_keys_agent.
-Gestisce le API key nella tabella sf_api_keys su PostgreSQL.
-Sincronizza revoche nella cache Redis (stls:revoked, stls:key:{sha256}).
+Tools for sofia_api_keys_agent.
+Manages API keys in the sf_api_keys table on PostgreSQL.
+Syncs revocations to the Redis cache (stls:revoked, stls:key:{sha256}).
 
-Env vars attese:
+Expected env vars:
   AUTH_PG_DSN   postgresql://user:pass@host:5432/dbname
-  REDIS_URL     redis://localhost:6379   (per invalidazione cache)
+  REDIS_URL     redis://localhost:6379   (for cache invalidation)
   REDIS_DB      0
 """
 
@@ -26,18 +26,18 @@ import redis as _redis
 
 logger = logging.getLogger(__name__)
 
-# ── Costanti ───────────────────────────────────────────────────────────────────
+# ── Constants ───────────────────────────────────────────────────────────────────
 
-_KEY_PREFIX = "stls_"       # prefisso leggibile per il raw key
-_KEY_BYTES  = 32            # 32 bytes → 64 hex chars → raw key ~69 chars con prefisso
+_KEY_PREFIX = "stls_"       # readable prefix for the raw key
+_KEY_BYTES  = 32            # 32 bytes → 64 hex chars → raw key ~69 chars with prefix
 
 
-# ── Connessioni ────────────────────────────────────────────────────────────────
+# ── Connections ────────────────────────────────────────────────────────────────
 
 def _pg():
     dsn = os.environ.get("AUTH_PG_DSN")
     if not dsn:
-        raise RuntimeError("AUTH_PG_DSN non configurata")
+        raise RuntimeError("AUTH_PG_DSN not configured")
     return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
@@ -53,9 +53,9 @@ def _redis_client() -> _redis.Redis:
 
 def _generate_api_key() -> tuple[str, str]:
     """
-    Genera (raw_key, key_id).
-    raw_key = stls_<64 hex chars>   → da consegnare al client UNA SOLA VOLTA
-    key_id  = SHA-256(raw_key)      → stored su DB e Redis
+    Generates (raw_key, key_id).
+    raw_key = stls_<64 hex chars>   → to be handed to the client ONLY ONCE
+    key_id  = SHA-256(raw_key)      → stored in DB and Redis
     """
     raw = _KEY_PREFIX + secrets.token_hex(_KEY_BYTES)
     kid = hashlib.sha256(raw.encode()).hexdigest()
@@ -84,16 +84,16 @@ def list_api_keys(
     limit: int = 50,
 ) -> dict:
     """
-    Elenca le API key registrate nel database PostgreSQL.
+    Lists the API keys registered in the PostgreSQL database.
 
     Args:
-        client_id:       Filtra per client_id. None = tutte.
-        include_revoked: Se True, include anche le chiavi revocate (default False).
-        limit:           Numero massimo di righe (default 50).
+        client_id:       Filter by client_id. None = all.
+        include_revoked: If True, also include revoked keys (default False).
+        limit:           Maximum number of rows (default 50).
 
     Returns:
-        dict con 'keys' (lista) e 'count'. Il campo 'key_id' è il SHA-256 (sicuro da mostrare).
-        Il raw_key NON viene mai restituito da questa funzione.
+        dict with 'keys' (list) and 'count'. The 'key_id' field is the SHA-256 (safe to show).
+        The raw_key is NEVER returned by this function.
     """
     try:
         con = _pg()
@@ -131,13 +131,13 @@ def list_api_keys(
 
 def get_api_key_details(key_id: str) -> dict:
     """
-    Recupera i dettagli completi di una API key tramite il suo key_id (SHA-256).
+    Retrieves the full details of an API key by its key_id (SHA-256).
 
     Args:
-        key_id: SHA-256 hex della chiave.
+        key_id: SHA-256 hex of the key.
 
     Returns:
-        dict con tutti i campi della chiave (mai il raw_key).
+        dict with all the key's fields (never the raw_key).
     """
     try:
         con = _pg()
@@ -153,7 +153,7 @@ def get_api_key_details(key_id: str) -> dict:
         )
         row = cur.fetchone()
         if row is None:
-            return {"error": f"Key '{key_id}' non trovata"}
+            return {"error": f"Key '{key_id}' not found"}
         data = dict(row)
         for field in ("expires_at", "created_at"):
             if data.get(field):
@@ -175,21 +175,21 @@ def create_api_key(
     metadata: Optional[dict] = None,
 ) -> dict:
     """
-    Crea una nuova API key per il client specificato e la persiste su PostgreSQL.
-    ATTENZIONE: il raw_key viene restituito UNA SOLA VOLTA. Non viene salvato.
+    Creates a new API key for the given client and persists it to PostgreSQL.
+    WARNING: the raw_key is returned ONLY ONCE. It is not saved.
 
     Args:
-        client_id:    Identificatore del client/agent (es. 'agent-calculator').
-        scopes:       Lista di scope autorizzati (es. ['read', 'write']).
-        description:  Descrizione leggibile della chiave.
-        endpoints:    Lista di endpoint autorizzati. Lista vuota = wildcard (tutti).
-        expires_days: Giorni prima della scadenza. None = nessuna scadenza.
-        metadata:     Dict JSON con informazioni aggiuntive opzionali.
+        client_id:    Client/agent identifier (e.g. 'agent-calculator').
+        scopes:       List of authorized scopes (e.g. ['read', 'write']).
+        description:  Human-readable description of the key.
+        endpoints:    List of authorized endpoints. Empty list = wildcard (all).
+        expires_days: Days before expiry. None = no expiry.
+        metadata:     Optional JSON dict with additional information.
 
     Returns:
-        dict con 'key_id' (SHA-256), 'raw_key' (da consegnare al client),
+        dict with 'key_id' (SHA-256), 'raw_key' (to hand to the client),
         'client_id', 'scopes', 'expires_at'.
-        Il raw_key è mostrato SOLO in questa risposta.
+        The raw_key is shown ONLY in this response.
     """
     try:
         raw_key, key_id = _generate_api_key()
@@ -219,16 +219,16 @@ def create_api_key(
         cur.close()
         con.close()
 
-        logger.info("API key creata: key_id=%s client_id=%s", key_id, client_id)
+        logger.info("API key created: key_id=%s client_id=%s", key_id, client_id)
         return {
             "key_id": key_id,
-            "raw_key": raw_key,          # ← consegnare al client, poi non è recuperabile
+            "raw_key": raw_key,          # ← hand to the client, cannot be retrieved afterwards
             "client_id": client_id,
             "scopes": scopes,
             "endpoints": endpoints or [],
             "expires_at": expires_at.isoformat() if expires_at else None,
             "description": description,
-            "warning": "Salva il raw_key ora: non sarà più recuperabile.",
+            "warning": "Save the raw_key now: it won't be retrievable again.",
         }
     except Exception as e:
         logger.error("create_api_key error: %s", e)
@@ -237,18 +237,19 @@ def create_api_key(
 
 def revoke_api_key(key_id: str, reason: str = "") -> dict:
     """
-    Revoca una API key: la marca come revocata su PostgreSQL e la aggiunge
-    al SET stls:revoked su Redis per blocco immediato (senza attendere TTL cache).
+    Revokes an API key: marks it as revoked in PostgreSQL and adds it to
+    the stls:revoked SET on Redis for immediate blocking (without waiting
+    for the cache TTL).
 
     Args:
-        key_id: SHA-256 hex della chiave da revocare.
-        reason: Motivo della revoca (opzionale, salvato in metadata).
+        key_id: SHA-256 hex of the key to revoke.
+        reason: Reason for revocation (optional, saved in metadata).
 
     Returns:
-        dict con 'key_id', 'revoked' (bool), 'redis_updated' (bool).
+        dict with 'key_id', 'revoked' (bool), 'redis_updated' (bool).
     """
     try:
-        # 1. Aggiorna PostgreSQL
+        # 1. Update PostgreSQL
         con = _pg()
         cur = con.cursor()
         cur.execute(
@@ -268,17 +269,17 @@ def revoke_api_key(key_id: str, reason: str = "") -> dict:
         if row is None:
             cur.close()
             con.close()
-            return {"error": f"Key '{key_id}' non trovata"}
+            return {"error": f"Key '{key_id}' not found"}
         con.commit()
         cur.close()
         con.close()
 
-        # 2. Aggiungi a stls:revoked su Redis (blocco immediato)
+        # 2. Add to stls:revoked on Redis (immediate blocking)
         redis_updated = False
         try:
             r = _redis_client()
             r.sadd("stls:revoked", key_id)
-            # Invalida la cache per tutti i loader
+            # Invalidate the cache for all loaders
             for prefix in ("stls:file:key:", "stls:pg:key:", "stls:static:key:"):
                 r.delete(f"{prefix}{key_id}")
             r.close()
@@ -286,7 +287,7 @@ def revoke_api_key(key_id: str, reason: str = "") -> dict:
         except Exception as re:
             logger.warning("Redis update failed during revocation: %s", re)
 
-        logger.info("API key revocata: key_id=%s reason=%s", key_id, reason)
+        logger.info("API key revoked: key_id=%s reason=%s", key_id, reason)
         return {
             "key_id": key_id,
             "client_id": dict(row).get("client_id"),
@@ -304,16 +305,16 @@ def update_api_key_scopes(
     endpoints: Optional[list[str]] = None,
 ) -> dict:
     """
-    Aggiorna gli scope (e opzionalmente gli endpoint) di una API key esistente.
-    La cache Redis viene invalidata automaticamente.
+    Updates the scopes (and optionally the endpoints) of an existing API key.
+    The Redis cache is invalidated automatically.
 
     Args:
-        key_id:    SHA-256 hex della chiave.
-        scopes:    Nuova lista di scope.
-        endpoints: Nuova lista di endpoint (None = non modificare).
+        key_id:    SHA-256 hex of the key.
+        scopes:    New list of scopes.
+        endpoints: New list of endpoints (None = don't change).
 
     Returns:
-        dict con i campi aggiornati.
+        dict with the updated fields.
     """
     try:
         con = _pg()
@@ -342,12 +343,12 @@ def update_api_key_scopes(
         if row is None:
             cur.close()
             con.close()
-            return {"error": f"Key '{key_id}' non trovata o già revocata"}
+            return {"error": f"Key '{key_id}' not found or already revoked"}
         con.commit()
         cur.close()
         con.close()
 
-        # Invalida cache Redis per tutti i loader
+        # Invalidate the Redis cache for all loaders
         try:
             r = _redis_client()
             for prefix in ("stls:file:key:", "stls:pg:key:", "stls:static:key:"):
@@ -364,11 +365,11 @@ def update_api_key_scopes(
 
 def get_api_keys_stats() -> dict:
     """
-    Restituisce statistiche aggregate sulle API key:
-    totale, attive, revocate, scadute, per client.
+    Returns aggregate statistics on API keys:
+    total, active, revoked, expired, by client.
 
     Returns:
-        dict con 'total', 'active', 'revoked', 'expired', 'by_client'.
+        dict with 'total', 'active', 'revoked', 'expired', 'by_client'.
     """
     try:
         con = _pg()

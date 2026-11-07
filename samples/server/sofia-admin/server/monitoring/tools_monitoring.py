@@ -1,11 +1,11 @@
 """
 tools_monitoring.py
 -------------------
-Tools per sofia_monitoring_agent.
-Legge la tabella sf_agents e la vista sf_agents_live per monitorare
-lo stato e le capability degli agent attivi sulla piattaforma Sofia.
+Tools for sofia_monitoring_agent.
+Reads the sf_agents table and the sf_agents_live view to monitor the
+status and capabilities of the agents active on the Sofia platform.
 
-Env vars attese:
+Expected env vars:
   AUTH_PG_DSN   postgresql://user:pass@host:5432/dbname
 """
 
@@ -22,12 +22,12 @@ import psycopg2.extras
 logger = logging.getLogger(__name__)
 
 
-# ── Connessione ────────────────────────────────────────────────────────────────
+# ── Connection ────────────────────────────────────────────────────────────────
 
 def _conn():
     dsn = os.environ.get("AUTH_PG_DSN")
     if not dsn:
-        raise RuntimeError("AUTH_PG_DSN non configurata")
+        raise RuntimeError("AUTH_PG_DSN not configured")
     return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
@@ -46,17 +46,17 @@ def list_agents(
     limit: int = 100,
 ) -> dict:
     """
-    Elenca gli agent registrati sulla piattaforma Sofia con il loro stato di liveness.
+    Lists the agents registered on the Sofia platform with their liveness status.
 
     Args:
-        status_filter:   Filtra per colonna 'status': 'active', 'draining', 'offline'.
-                         None = tutti.
-        liveness_filter: Filtra per liveness calcolata dalla vista: 'live', 'offline', 'draining'.
-                         None = tutti.
-        limit:           Numero massimo di righe (default 100).
+        status_filter:   Filter by the 'status' column: 'active', 'draining', 'offline'.
+                         None = all.
+        liveness_filter: Filter by liveness as computed by the view: 'live', 'offline', 'draining'.
+                         None = all.
+        limit:           Maximum number of rows (default 100).
 
     Returns:
-        dict con 'agents' (lista) e 'count'.
+        dict with 'agents' (list) and 'count'.
     """
     try:
         con = _conn()
@@ -87,7 +87,7 @@ def list_agents(
             params + [limit],
         )
         agents = _rows_to_list(cur)
-        # Converti datetime in ISO string per serializzazione
+        # Convert datetime to ISO string for serialization
         for a in agents:
             for field in ("registered_at", "last_heartbeat"):
                 if a.get(field):
@@ -102,13 +102,13 @@ def list_agents(
 
 def get_agent_details(agent_id: str) -> dict:
     """
-    Recupera i dettagli completi di un singolo agent, incluse le capabilities.
+    Retrieves the full details of a single agent, including its capabilities.
 
     Args:
-        agent_id: ID dell'agent (es. 'calculator@host1:8001').
+        agent_id: the agent's ID (e.g. 'calculator@host1:8001').
 
     Returns:
-        dict con tutti i campi di sf_agents_live + 'capabilities' (JSON espanso).
+        dict with all of sf_agents_live's fields + 'capabilities' (expanded JSON).
     """
     try:
         con = _conn()
@@ -124,7 +124,7 @@ def get_agent_details(agent_id: str) -> dict:
         )
         row = cur.fetchone()
         if row is None:
-            return {"error": f"Agent '{agent_id}' non trovato"}
+            return {"error": f"Agent '{agent_id}' not found"}
         data = dict(row)
         for field in ("registered_at", "last_heartbeat"):
             if data.get(field):
@@ -139,13 +139,13 @@ def get_agent_details(agent_id: str) -> dict:
 
 def get_agent_capabilities(agent_id: str) -> dict:
     """
-    Mostra le capabilities dichiarate da un agent nel formato A2A AgentCard.
+    Shows the capabilities an agent declares in A2A AgentCard format.
 
     Args:
-        agent_id: ID dell'agent (es. 'calculator@host1:8001').
+        agent_id: the agent's ID (e.g. 'calculator@host1:8001').
 
     Returns:
-        dict con 'agent_id', 'agent_name', 'capabilities' (dict espanso).
+        dict with 'agent_id', 'agent_name', 'capabilities' (expanded dict).
     """
     try:
         con = _conn()
@@ -156,9 +156,9 @@ def get_agent_capabilities(agent_id: str) -> dict:
         )
         row = cur.fetchone()
         if row is None:
-            return {"error": f"Agent '{agent_id}' non trovato"}
+            return {"error": f"Agent '{agent_id}' not found"}
         data = dict(row)
-        # capabilities è già un dict grazie a RealDictCursor + psycopg2 JSONB
+        # capabilities is already a dict thanks to RealDictCursor + psycopg2 JSONB
         cur.close()
         con.close()
         return data
@@ -169,11 +169,11 @@ def get_agent_capabilities(agent_id: str) -> dict:
 
 def list_capabilities_summary() -> dict:
     """
-    Mostra un riepilogo delle capabilities per tutti gli agent live.
-    Utile per capire quali skills sono disponibili sulla piattaforma.
+    Shows a summary of capabilities for all live agents.
+    Useful to understand which skills are available on the platform.
 
     Returns:
-        dict con 'summary': lista di {agent_id, agent_name, capabilities_keys}.
+        dict with 'summary': list of {agent_id, agent_name, capabilities_keys}.
     """
     try:
         con = _conn()
@@ -210,18 +210,18 @@ def list_capabilities_summary() -> dict:
 
 def get_platform_health() -> dict:
     """
-    Restituisce un quadro sintetico della salute della piattaforma:
-    conteggi per stato, agenti offline, agenti live.
+    Returns a concise picture of the platform's health:
+    counts by status, offline agents, live agents.
 
     Returns:
-        dict con 'total', 'live', 'offline', 'draining',
-        'offline_agents' (lista di agent_id + seconds_ago).
+        dict with 'total', 'live', 'offline', 'draining',
+        'offline_agents' (list of agent_id + seconds_ago).
     """
     try:
         con = _conn()
         cur = con.cursor()
 
-        # Conteggi aggregati
+        # Aggregate counts
         cur.execute(
             """
             SELECT
@@ -234,7 +234,7 @@ def get_platform_health() -> dict:
         )
         stats = dict(cur.fetchone())
 
-        # Agenti offline con info utile
+        # Offline agents with useful info
         cur.execute(
             """
             SELECT agent_id, agent_name, host, port, seconds_ago, last_heartbeat
@@ -258,13 +258,13 @@ def get_platform_health() -> dict:
 
 def search_agents_by_name(name_pattern: str) -> dict:
     """
-    Cerca agent il cui nome contiene la stringa fornita (case-insensitive).
+    Searches for agents whose name contains the given string (case-insensitive).
 
     Args:
-        name_pattern: Parte del nome da cercare (es. 'calculator', 'redis').
+        name_pattern: part of the name to search for (e.g. 'calculator', 'redis').
 
     Returns:
-        dict con 'agents' (lista con liveness) e 'count'.
+        dict with 'agents' (list with liveness) and 'count'.
     """
     try:
         con = _conn()
@@ -290,13 +290,13 @@ def search_agents_by_name(name_pattern: str) -> dict:
 
 def get_agents_by_framework(framework: str) -> dict:
     """
-    Elenca gli agent per framework (es. 'google-adk', 'langchain', 'custom').
+    Lists agents by framework (e.g. 'google-adk', 'langchain', 'custom').
 
     Args:
-        framework: Nome del framework (es. 'google-adk', 'langchain', 'semantic-kernel', 'custom').
+        framework: framework name (e.g. 'google-adk', 'langchain', 'semantic-kernel', 'custom').
 
     Returns:
-        dict con 'agents' e 'count'.
+        dict with 'agents' and 'count'.
     """
     try:
         con = _conn()

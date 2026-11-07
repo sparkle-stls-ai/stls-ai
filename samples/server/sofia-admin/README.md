@@ -36,37 +36,24 @@ them other than the Postgres/Redis backends they each read from.
 
 ## Architecture
 
-```
-                         Operator / sofia-client-secure
-                                     │
-                                     │ encrypted A2A (secure-a2a)
-                                     ▼
-                    ┌─────────────────────────────────┐
-                    │   sofia_admin_agent (coordinator)│
-                    │   Google ADK root Agent           │
-                    │   :8010  /agents/sofia-admin-     │
-                    │          coordinator/secure-a2a   │
-                    └───────────────┬───────────────────┘
-                                     │  delegates to sub_agents[]
-          ┌──────────────────────────┼──────────────────────────┐
-          ▼                          ▼                          ▼
-┌─────────────────────┐   ┌─────────────────────┐   ┌─────────────────────┐
-│ sofia_monitoring_    │   │ sofia_api_keys_      │   │ sofia_redis_agent   │
-│ agent                │   │ agent                │   │                     │
-│ RemoteA2aAgent       │   │ ContextualSecure-    │   │ RemoteA2aAgent      │
-│ + X-API-Key header   │   │ RemoteA2aAgent       │   │ + X-API-Key header  │
-│                      │   │ + X-API-Key header   │   │                     │
-│ :8011                │   │ + STLS encrypted     │   │ :8013               │
-│ /agents/sofia-       │   │   session (PQC)      │   │ /agents/sofia-      │
-│ monitoring/secure-a2a│   │ :8012                │   │ redis/secure-a2a    │
-│                      │   │ /agents/sofia-api-   │   │                     │
-│ tools_monitoring.py  │   │ keys/secure-a2a      │   │ tools_redis.py      │
-│  → AgentRegistry (PG)│   │ tools_keys_mgmt.py   │   │  → TaskStore (Redis)│
-└─────────────────────┘   │  → API keys (PG+Redis)│   │  → STLS session     │
-                           └─────────────────────┘   │    cache (Redis)    │
-                                                       │  → key cache/revoc. │
-                                                       │    SET (Redis)      │
-                                                       └─────────────────────┘
+```mermaid
+flowchart TB
+    OP["Operator / sofia-client-secure"]
+
+    subgraph Coordinator["sofia_admin_agent (coordinator)"]
+        CO["Google ADK root Agent\n:8010\n/agents/sofia-admin-coordinator/secure-a2a"]
+    end
+
+    subgraph SubAgents["Sub-agents (sub_agents[])"]
+        MON["sofia_monitoring_agent\nRemoteA2aAgent + X-API-Key header\n:8011  /agents/sofia-monitoring/secure-a2a\ntools_monitoring.py → AgentRegistry (PG)"]
+        KEYS["sofia_api_keys_agent\nContextualSecureRemoteA2aAgent\n+ X-API-Key header + STLS encrypted session (PQC)\n:8012  /agents/sofia-api-keys/secure-a2a\ntools_keys_mgmt.py → API keys (PG+Redis)"]
+        RED["sofia_redis_agent\nRemoteA2aAgent + X-API-Key header\n:8013  /agents/sofia-redis/secure-a2a\ntools_redis.py → TaskStore (Redis)\n→ STLS session cache (Redis)\n→ key cache / revocation SET (Redis)"]
+    end
+
+    OP -->|"encrypted A2A (secure-a2a)"| CO
+    CO -->|"delegates to"| MON
+    CO -->|"delegates to"| KEYS
+    CO -->|"delegates to"| RED
 ```
 
 ---

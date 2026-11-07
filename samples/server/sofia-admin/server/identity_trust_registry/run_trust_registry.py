@@ -1,33 +1,33 @@
 """
 run_trust_registry.py
 ------------------------
-Espone il Trust Anchor Registry via HTTP — Sparkle come anchor
-operator della federazione (Opzione A: centralizzato). Altre
-piattaforme (Operatore B, C, ...) leggono da qui quali Governing
-Authority sono riconosciute e le loro chiavi correnti.
+Exposes the Trust Anchor Registry via HTTP — Sparkle as the
+federation's anchor operator (Option A: centralized). Other platforms
+(Operator B, C, ...) read from here which Governing Authorities are
+recognized and their current keys.
 
-Indipendente da agent_identity.py e da run_identity_bridge.py: propria
-configurazione (.env.trust_registry), proprio processo. Stesso
-principio degli altri due file: esterno al package stls-identity,
-importa solo la sua API pubblica.
+Independent of agent_identity.py and run_identity_bridge.py: its own
+configuration (.env.trust_registry), its own process. Same principle
+as the other two files: external to the stls-identity package,
+importing only its public API.
 
-Più semplice del bridge dell'identità — nessun task periodico di
-pubblicazione: qui non c'è una bitstring da comprimere e cachare, il
-router legge Postgres direttamente a ogni richiesta.
+Simpler than the identity bridge — no periodic publishing task: there
+is no bitstring to compress and cache here, the router reads Postgres
+directly on every request.
 
-Nota: create_trust_registry_router(store=...) è confermato funzionante
-per davvero — il router si costruisce ed espone endpoint (verificato
-via /docs). L'unica cosa che avevo sbagliato inizialmente erano i path
-assunti (/trust-anchors invece dei reali /trust-registry/anchors,
-sotto) — corretti qui sotto dopo verifica diretta.
+Note: create_trust_registry_router(store=...) is confirmed to
+genuinely work — the router builds and exposes endpoints (verified
+via /docs). The only thing initially wrong was the assumed paths
+(/trust-anchors instead of the real /trust-registry/anchors, below)
+— corrected below after direct verification.
 
-Endpoint reali (confermati via /docs, non più ipotizzati):
-    GET /trust-registry/anchors               — elenco Authority riconosciute
-    GET /trust-registry/anchors/{authority_id} — una specifica Authority
+Real endpoints (confirmed via /docs, no longer guessed):
+    GET /trust-registry/anchors               — list of recognized Authorities
+    GET /trust-registry/anchors/{authority_id} — a specific Authority
 
-Uso:
+Usage:
     uv run python run_trust_registry.py
-    # oppure, con reload per sviluppo:
+    # or, with reload for development:
     uv run uvicorn run_trust_registry:app --reload --port 8100
 """
 
@@ -67,18 +67,18 @@ app.include_router(router)
 
 @app.on_event("startup")
 async def _ensure_schema() -> None:
-    """Crea la tabella se non esiste — stesso self-bootstrap degli
-    altri due processi, nessuna migrazione manuale richiesta. Stessa
-    tabella che onboard_trust_anchor/list_trust_anchors/
-    revoke_trust_anchor in tools_identity.py scrivono — questo processo
-    legge solo, non scrive mai."""
+    """Creates the table if it doesn't exist — same self-bootstrap as
+    the other two processes, no manual migration required. Same table
+    that onboard_trust_anchor/list_trust_anchors/revoke_trust_anchor in
+    tools_identity.py write to — this process only reads, it never
+    writes."""
     pool = await trust_registry_store._get_pool()
     async with pool.acquire() as conn:
         await conn.execute(trust_registry_store.get_ddl())
-    logger.info("Trust Anchor Registry pronto — sola lettura, scrittura via agent_identity.py")
+    logger.info("Trust Anchor Registry ready — read-only, writes go through agent_identity.py")
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("TRUST_REGISTRY_PORT", "8100"))
-    logger.info("Avvio Trust Anchor Registry su http://localhost:%s", port)
+    logger.info("Starting Trust Anchor Registry on http://localhost:%s", port)
     uvicorn.run(app, host="0.0.0.0", port=port)

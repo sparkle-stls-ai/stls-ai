@@ -74,12 +74,6 @@ RUN npm ci --omit=dev
 COPY --from=node-build /app/dist ./dist
 COPY --from=node-build /app/server/dist ./server/dist
 
-# ── Java runtime (needed only when KEY_PROVIDER_NAME=arqit or simple) ─────
-# Uncomment the two lines below and supply the JAR if required:
-# RUN apk add --no-cache openjdk17-jre
-# COPY path/to/stls-ai-0.0.1.jar /app/stls-ai.jar
-# ENV CLASSPATH=/app/stls-ai.jar
-
 # ── Startup script ─────────────────────────────────────────────────────────
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh

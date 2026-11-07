@@ -10,16 +10,13 @@ All outbound agent calls are routed through a Python microservice (`secure_trans
 
 ## Architecture
 
-```
-Browser
-  └── React SPA (port 5173 dev / served by Express in prod)
-        └── POST /api/proxy/send|stream
-              └── Express backend (Node.js, port 3000/8080)
-                    ├── resolves agent URL from DB + agent card (prefers secureUrl)
-                    └── POST /secure/send|stream
-                          └── Python secure transport service (port 8090)
-                                └── SecureA2ATransportAdapter
-                                      └── encrypted A2A call → Agent
+```mermaid
+flowchart LR
+    B["Browser"] --> SPA["React SPA\n(:5173 dev / served by Express in prod)"]
+    SPA -->|"POST /api/proxy/send|stream"| EX["Express backend (Node.js)\n:3000 / :8080"]
+    EX -->|"resolves agent URL from DB + agent card\n(prefers secureUrl)\nPOST /secure/send|stream"| PY["Python secure transport service\n:8090"]
+    PY --> AD["SecureA2ATransportAdapter"]
+    AD -->|"encrypted A2A call"| AG["Agent"]
 ```
 
 ### Key differences from sofia-client
@@ -40,8 +37,9 @@ Browser
 - **stls_a2a** package installed (see below)
 - **PostgreSQL 14+** (production mode only)
 - **Redis** — optional (`SESSION_CACHE_BACKEND=memory` is the default and needs none). Required when `SESSION_CACHE_BACKEND=redis`, so key sessions survive across container instances/restarts (Cloud Run) instead of living in process memory; also used by stls_a2a agent servers for task store / auth cache.
-- The **key-exchange sidecar** running on `KEY_SESSION_HOST:KEY_SESSION_PORT`  
-  (base/simple provider: pure Python; arqit: requires the JVM + JAR)
+- The **key-exchange sidecar** running on `KEY_SESSION_HOST:KEY_SESSION_PORT`
+  for the `base`/`arqit_py` providers (pure Python, no JVM needed) — not
+  required for `pqc`, which performs its own lazy KEM handshake instead
 
 ---
 
@@ -76,34 +74,9 @@ Follow the instructions in the `stls-a2a` project to start the key provider on `
 ### 6. Start the Python secure transport service
 
 ```bash
-# necessario almeno il 21
-set JAVA_HOME="C:\Java\jdks\jdk-24"
-set PATH=%JAVA_HOME%\bin;%PATH%
-java -version
-set JPYPE_JVM=C:\Java\jdks\jdk-24\bin\server\jvm.dll
-# non funziona perche' legge direttamente dal registro
-python -c "import jpype; print(jpype.getDefaultJVMPath())"
-# sembra funzionare invece questa
-notepad .venv\Lib\site-packages\sitecustomize.py
-# contenuto
-import jpype
-
-_original_start = jpype.startJVM
-
-def _patched_startJVM(*args, **kwargs):
-    if not args or not str(args[0]).endswith(".dll"):
-        kwargs.setdefault("jvmpath", r"C:\Java\jdks\jdk-24\bin\server\jvm.dll")
-        return _original_start(**kwargs)
-    return _original_start(*args, **kwargs)
-
-jpype.startJVM = _patched_startJVM
-# verifica
-python -c "import os; print(os.environ.get('JPYPE_JVM'))"
-
-
 python python/secure_transport.py
 # → listening on http://localhost:8090
-# → GET http://localhost:8090/health  → {"ok":true,"session_ready":true}
+# → GET http://localhost:8090/health  → {"ok":true,"active_sessions":0}
 ```
 
 ### 7. Start the Express backend
@@ -159,10 +132,9 @@ npm run dev
 | `SECURE_TRANSPORT_HOST` | `0.0.0.0` | Bind address |
 | `KEY_SESSION_PORT` | `8081` | Key-exchange sidecar port |
 | `KEY_SESSION_HOST` | `localhost` | Key-exchange sidecar host |
-| `KEY_PROVIDER_NAME` | `base` | `base`, `simple`, `arqit`, or `pqc` |
-| `CLASSPATH` | *(unset)* | Path to `stls-ai-*.jar` (arqit only) |
-| `ARQIT_CLIENT_CONFIG` | *(unset)* | Path to Arqit client config JSON |
-| `ARQIT_SERVER_CONFIG` | *(unset)* | Path to Arqit server config JSON |
+| `KEY_PROVIDER_NAME` | `base` | `base`, `arqit_py`, or `pqc` |
+| `ARQIT_PY_CLIENT_CONFIG` | *(unset)* | Path to Arqit SKA-Platform client config JSON (`arqit_py` only) |
+| `ARQIT_PY_SERVER_CONFIG` | *(unset)* | Path to Arqit SKA-Platform server config JSON (`arqit_py` only) |
 | `SESSION_CACHE_BACKEND` | `memory` | `memory` or `redis` — same switch as the server-side `stls_core.SessionCacheFactory` |
 | `SESSION_CACHE_REDIS_URL` | `redis://localhost:6379` | Only used when `SESSION_CACHE_BACKEND=redis` |
 | `SESSION_CACHE_REDIS_NAMESPACE` | `stls:sc` | Redis key prefix, distinct from the keystore's `stls:ks:*` |
@@ -172,7 +144,7 @@ npm run dev
 > `stls_core.SessionCacheFactory`, so there's one naming convention across the whole stls stack. `memory` (default)
 > lives in process and does not survive restarts or multi-instance deployments; switch to `redis` on Cloud Run, which
 > does not guarantee that consecutive requests for the same `session_id` land on the same instance. This applies to
-> `base`/`arqit` too, not just `pqc`. (Not a direct import of `stls_core`'s cache — see the note at the top of
+> `base`/`arqit_py` too, not just `pqc`. (Not a direct import of `stls_core`'s cache — see the note at the top of
 > `secure_transport.py` for why.)
 
 ### Post-quantum key exchange (`KEY_PROVIDER_NAME=pqc`)
@@ -246,20 +218,15 @@ The `app` container runs `docker-entrypoint.sh` which:
 The `stls_a2a`/`stls_core` wheels under `python/wheels/` are already in the repo, and the `Dockerfile` installs them
 automatically via `--find-links` (`stls_a2a[pqc]==0.1.3` in `python/requirements.txt`). No manual steps required.
 
-### Arqit / JVM key provider
+### Arqit SKA-Platform key provider
 
-If `KEY_PROVIDER_NAME=arqit`, uncomment the JVM section in the Dockerfile:
+`KEY_PROVIDER_NAME=arqit_py` uses the Arqit SKA-Platform native Python
+SDK — no JVM, no JAR, nothing to uncomment in the Dockerfile. Just point
+it at your device config in `docker-compose.yml`:
 
-```dockerfile
-RUN apk add --no-cache openjdk17-jre
-COPY path/to/stls-ai-0.0.1.jar /app/stls-ai.jar
-ENV CLASSPATH=/app/stls-ai.jar
-```
-
-And set in `docker-compose.yml`:
 ```yaml
-CLASSPATH: /app/stls-ai.jar
-ARQIT_CLIENT_CONFIG: /path/to/a2a-client-config.json
+ARQIT_PY_CLIENT_CONFIG: /path/to/client-config.json
+ARQIT_PY_SERVER_CONFIG: /path/to/server-config.json
 ```
 
 ### Deploy to Cloud Run
@@ -311,7 +278,7 @@ gcloud run deploy sofia-client-secure \
   --platform managed \
   --allow-unauthenticated \
   --vpc-connector <redis-vpc-connector> \
-  --set-env-vars "SESSION_SECRET=<secret>,DB_HOST=<host>,DB_NAME=<db>,DB_USER=<user>,DB_PASSWORD=<pw>,KEY_PROVIDER_NAME=<base|arqit|pqc>,SESSION_CACHE_BACKEND=redis,SESSION_CACHE_REDIS_URL=redis://<memorystore-ip>:6379"
+  --set-env-vars "SESSION_SECRET=<secret>,DB_HOST=<host>,DB_NAME=<db>,DB_USER=<user>,DB_PASSWORD=<pw>,KEY_PROVIDER_NAME=<base|arqit_py|pqc>,SESSION_CACHE_BACKEND=redis,SESSION_CACHE_REDIS_URL=redis://<memorystore-ip>:6379"
 
 # Deploy — sofia-client-secure-a (served at /a behind the internal LB)
 gcloud run deploy sofia-client-secure-a \
@@ -320,7 +287,7 @@ gcloud run deploy sofia-client-secure-a \
   --platform managed \
   --allow-unauthenticated \
   --vpc-connector <redis-vpc-connector> \
-  --set-env-vars "SESSION_SECRET=<secret>,DB_HOST=<host>,DB_NAME=<db>,DB_USER=<user>,DB_PASSWORD=<pw>,KEY_PROVIDER_NAME=<base|arqit|pqc>,SESSION_CACHE_BACKEND=redis,SESSION_CACHE_REDIS_URL=redis://<memorystore-ip>:6379,BASE_PATH=/a"
+  --set-env-vars "SESSION_SECRET=<secret>,DB_HOST=<host>,DB_NAME=<db>,DB_USER=<user>,DB_PASSWORD=<pw>,KEY_PROVIDER_NAME=<base|arqit_py|pqc>,SESSION_CACHE_BACKEND=redis,SESSION_CACHE_REDIS_URL=redis://<memorystore-ip>:6379,BASE_PATH=/a"
 ```
 
 > **Redis / Memorystore**: `SESSION_CACHE_BACKEND` defaults to `memory`, which does **not** survive Cloud Run's
@@ -378,29 +345,55 @@ It starts a tiny local server on `http://127.0.0.1:5555/` (change with `--harnes
 
 ## Python service API
 
-The service exposes three endpoints consumed exclusively by the Express proxy:
+The service exposes seven endpoints, consumed by the Express proxy. All
+of them except `/health` and the `/direct` pair key off a `session_id`
+that the proxy creates via `/secure/connect` and keeps alive with
+`/secure/heartbeat`.
 
 ### `GET /health`
-Returns `{"ok": true, "session_ready": true}` once the key session is initialised.
+Returns `{"ok": true, "active_sessions": <int>}` — the current number
+of cached key sessions.
+
+### `POST /secure/connect`
+Initializes a new key session. Request: `{ "session_id": "<uuid>", "agent_name": "<optional>" }`.
+Response: `{ "ok": true, "session_id": "...", "key_identifier": "..." }`.
+Replaces any existing session with the same `session_id`.
+
+### `POST /secure/disconnect`
+Removes a key session immediately. Request: `{ "session_id": "<uuid>" }`.
+
+### `POST /secure/heartbeat`
+Refreshes a session's idle TTL. Request: `{ "session_id": "<uuid>" }` —
+404 if the session is missing or already expired.
 
 ### `POST /secure/send`
-Non-streaming call.
+Non-streaming call. **`session_id` is required** — a request without
+it fails Pydantic validation before it ever reaches the agent.
 
 ```json
 // Request
-{ "url": "<secureUrl>", "payload": { "jsonrpc": "2.0", "method": "message/send", "params": {...}, "id": "1" } }
+{ "session_id": "<uuid>", "url": "<secureUrl>", "payload": { "jsonrpc": "2.0", "method": "message/send", "params": {...}, "id": "1" } }
 
 // Response — full jsonrpc envelope
 { "jsonrpc": "2.0", "id": "1", "result": { ... } }
 ```
 
 ### `POST /secure/stream`
-Streaming call — returns `text/event-stream`.
+True incremental streaming call — returns `text/event-stream`. Same
+request shape as `/secure/send`. Internally relays each real SSE event
+from `SecureA2ATransportAdapter.stream_secure_message()` as it arrives
+(not a two-event simulation): `TaskArtifactUpdateEvent`s become
+`{"jsonrpc":"2.0","id":...,"result":{"kind":"artifact-update",...}}`,
+`TaskStatusUpdateEvent`s become
+`{"jsonrpc":"2.0","id":...,"result":{"kind":"status-update","status":{"state":...},"final":...}}`,
+and an upstream error becomes `{"error": {"message": ..., "code": ...}}`.
 
-Internally calls `message/send` via `SecureA2ATransportAdapter` (request/response semantics) and re-emits the result as two A2A SSE events:
-
-1. `data: {"result": {"kind": "message", "parts": [...], "final": false}}`
-2. `data: {"result": {"kind": "status-update", "status": {"state": "completed"}, "final": true}}`
+### `POST /secure/send/direct`
+Debug-mode variant of `/secure/send` with **no `session_id`** — used
+only by the Vite debug UI (`VITE_MODE=debug`), which bypasses agent-name
+resolution and passes the target URL directly. Backed by a single
+implicit session (`"__debug__"`), kept for backward compatibility during
+the transition away from the old global-state debug flow.
 
 ---
 

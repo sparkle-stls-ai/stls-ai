@@ -116,7 +116,7 @@ Responsibilities:
 - delegating encryption/decryption of the application payload to `stls_core.StlsTransport` (AES-256-GCM + HMAC-SHA256 + HKDF-Expand, shared with `stls-mcp`)
 - binding a transport instance to a session identified by `session_id`
 
-`SecureA2ATransport` is now a thin A2A-specific wrapper: it converts `A2AMessage` to/from JSON and calls into `stls_core.StlsTransport` for the actual cryptography. The wire format on the network is unchanged from earlier versions. This is the component closest to the STLS-AI wire protocol. For the broader protocol and framing context, see also [docs/STLS-AI-Wire-Protocol.md](../../docs/STLS-AI-Wire-Protocol.md).
+`SecureA2ATransport` is now a thin A2A-specific wrapper: it converts `A2AMessage` to/from JSON and calls into `stls_core.StlsTransport` for the actual cryptography. The wire format on the network is unchanged from earlier versions. This is the component closest to the STLS-AI wire protocol.
 
 ### 2. HTTP/A2A Integration Layer
 
@@ -184,7 +184,7 @@ This layer was introduced to align the module with the core A2A protocol concept
 Task store backend selection is controlled with environment variables:
 
 - `TASK_STORE_BACKEND`: `memory` (default) or `redis`
-- `TASK_STORE_TTL_SECONDS`: task TTL in seconds (default `180`)
+- `TASK_STORE_TTL_SECONDS`: task TTL in seconds (default `900`)
 - `REDIS_URL`: Redis connection URL (default `redis://localhost:6379/0`)
 - `REDIS_KEY_PREFIX`: key namespace prefix (default `stls`)
 
@@ -297,6 +297,7 @@ Inside [src/stls_a2a](./src/stls_a2a) you will find:
 - `stls_a2a_utils.py`: A2A utilities, card builder, and client-side helpers
 - `stls_a2a_client.py`: plain A2A utility client (card discovery, call, stream)
 - `stls_a2a_remote.py`: `ContextualRemoteA2aAgent`, context propagation for `RemoteA2aAgent`
+- `stls_a2a_secure_remote.py`: `SecureSessionManager`, `STLSHttpxTransport`, `ContextualSecureRemoteA2aAgent` — encrypted intra-agent delegation over `/secure-a2a`
 
 Crypto, session management, key providers (`base`, `arqit_py`, `pqc`), and the API key
 auth system (`ApiKeyManager`, loaders, `RedisKeyCache`, ...) now live in the
@@ -318,6 +319,10 @@ Main dependencies declared in [pyproject.toml](./pyproject.toml):
 
 - `stls_core` (local monorepo dependency)
 - `fastapi`, `uvicorn`, `httpx`
+- `redis` (base dependency — `import stls_a2a` always fails without it on a clean venv)
+- `psycopg2-binary` (for `PostgresLoader`/`AgentRegistry`)
+- `jwt`/`PyJWT`
+- `opentelemetry-api`, `opentelemetry-sdk`
 - `google-adk[a2a]`, `google-genai`
 - `langchain`, `langchain-community`, `langchain-openai`, `langgraph`
 - `semantic-kernel`
@@ -405,12 +410,12 @@ For PQC (X25519 + ML-KEM-768):
 
 ```bash
 export KEY_PROVIDER_NAME=pqc
-# Nessuna configurazione aggiuntiva: i keypair sono generati on-the-fly.
-# Il server registra automaticamente /stls/pqc/handshake.
-# Il client usa create_pqc_a2a_transport() — vedi sezione Session Key Management.
+# No extra configuration needed: the keypairs are generated on-the-fly.
+# The server automatically registers /stls/pqc/handshake.
+# The client uses create_pqc_a2a_transport() — see the Session Key Management section.
 ```
 
-Example configuration files are available in this directory and in [test](./test).
+Example configuration files are available in this directory and in [tests](./tests).
 
 ## TaskStore Backend Configuration
 
@@ -420,14 +425,14 @@ By default the SDK uses an in-memory store. To switch to Redis:
 export TASK_STORE_BACKEND=redis
 export REDIS_URL=redis://localhost:6379/0
 export REDIS_KEY_PREFIX=stls
-export TASK_STORE_TTL_SECONDS=180
+export TASK_STORE_TTL_SECONDS=900
 ```
 
 To keep the default in-memory mode explicitly:
 
 ```bash
 export TASK_STORE_BACKEND=memory
-export TASK_STORE_TTL_SECONDS=180
+export TASK_STORE_TTL_SECONDS=900
 ```
 
 Optional cleanup scheduling (used by memory backend):
@@ -443,8 +448,10 @@ For simple bearer-token or fixed API-key checks, `AuthConfig` is still sufficien
 ```python
 import os
 
-from stls_a2a import ApiKeyManager, FileLoader, PostgresLoader
-from stls_a2a.stls_a2a_auth_manager import ApiKeyManagerGroup, default_audit_hook
+from stls_a2a import (
+    ApiKeyManager, FileLoader, PostgresLoader,
+    ApiKeyManagerGroup, default_audit_hook,
+)
 
 file_manager = ApiKeyManager.from_loader(
     FileLoader(path=os.getenv("AUTH_KEYS_FILE", "api_keys.yaml")),
@@ -468,118 +475,32 @@ Useful environment variables:
 - `REDIS_URL`: Redis cache URL when shared cache is enabled
 - `BASE_URL`: preferred public URL used for absolute cards and registry metadata
 
-Ready-to-copy examples are included in [`env_basic_sample`](./env_basic_sample) and [`env_reg_keys_sample`](./env_reg_keys_sample).
+Ready-to-copy examples are included in [`.env_basic.example`](./.env_basic.example) and [`.env_auth_redis.example`](./.env_auth_redis.example).
 
 ## Practical Quick Start
 
-Today, the most useful entry points are not top-level package scripts but the examples in [test](./test) and the shell scripts included in the module root.
+There are no top-level package scripts or shell-script launchers for
+this — the real, runnable entry points are the integration scripts in
+[`tests/`](./tests), each started directly with `python` (see
+[`tests/README.md`](./tests/README.md) for full prerequisites,
+expected output, and known limitations of each):
 
-### 1. Single-Agent A2A Server
+1. **Context Propagation Test** (`server_context_test.py` + `client_context_test.py`) —
+   user context (`user_id`/`profile`) survives client → agent A → agent B,
+   across plain/encrypted transport, sync/SSE, and both propagation channels.
+2. **Key Provider Stress Test** (`key_providers_test.py` vs `multi_agent_server.py`) —
+   concurrent session/key isolation under load for `arqit_py`/`pqc`.
+3. **Task Lifecycle Test** (`task_test.py` vs `multi_agent_server.py`) —
+   the full A2A task lifecycle, server-side authorization, and true
+   incremental streaming across `adk-agent`, `lc-agent`, and `sk-agent`.
+4. **Key Management Test** (`test_km_client.py` vs `multi_agent_km_server.py`) —
+   `ApiKeyManager` with three independent auth backends (Static/File/Postgres)
+   plus legacy `AuthConfig`, discovery, auth, SSE, and multi-turn `contextId`.
 
-```bash
-./start_server_test.sh
-```
-
-This starts [test/adk_agent_server.py](./test/adk_agent_server.py), which exposes:
-
-- agent card: `http://localhost:8001/.well-known/agent-card.json`
-- secure endpoint: `http://localhost:8001/secure-a2a`
-
-### 2. Single-Agent A2A Client
-
-In a second terminal:
-
-```bash
-./start_client_test.sh
-```
-
-This runs [test/adk_client.py](./test/adk_client.py) and shows an encrypted call to the ADK agent.
-
-### 3. Multi-Agent Demo
-
-Server:
-
-```bash
-./start_server_multi.sh
-```
-
-Client:
-
-```bash
-./start_client_multi.sh
-```
-
-The multi-agent demo uses [test/multi_agent_server.py](./test/multi_agent_server.py) and [test/multi_agent_client.py](./test/multi_agent_client.py).
-
-Agents exposed in the demo:
-
-- `calculator`
-- `adk-agent`
-- `lc-agent`
-- `sk-agent`
-- `invoices-classifier`
-
-### 4. Simple Multi-Agent Demo
-
-A lightweight variant that requires only standard dependencies (no LangChain/Semantic Kernel):
-
-Server:
-
-```bash
-./start_server_multi_simple.sh
-```
-
-Client:
-
-```bash
-./start_client_multi_simple.sh
-```
-
-The simple demo uses [test/multi_agent_server_simple.py](./test/multi_agent_server_simple.py) and [test/multi_agent_client_simple.py](./test/multi_agent_client_simple.py).
-
-Agents exposed:
-
-- `calculator`
-- `gemini`
-- `gpt4`
-
-### 5. Task-Based A2A Demo
-
-Server (same multi-agent server):
-
-```bash
-./start_server_multi.sh
-```
-
-Client using standard A2A methods:
-
-```bash
-./start_task_test.sh
-```
-
-This runs [test/task_test.py](./test/task_test.py), which uses `messages/send` and retrieves the agent response via the task history. The client includes helper utilities (`extract_a2a_text`, `extract_a2a_artifacts`, `extract_a2a_result`) to navigate the `Task` response structure.
-
-### 6. Multi-Backend Auth and Registry Demo
-
-Server:
-
-```bash
-./start_server_km_multi.sh
-```
-
-Client:
-
-```bash
-./start_km_test.sh
-```
-
-This demo starts [test/multi_agent_km_server.py](./test/multi_agent_km_server.py) and showcases:
-
-- `StaticLoader` for `calculator`
-- `FileLoader` for `adk-agent`
-- `PostgresLoader` for `lc-agent` when `AUTH_PG_DSN` is set
-- aggregated `/auth/health` and `/auth/refresh` endpoints via `ApiKeyManagerGroup`
-- automatic PostgreSQL registry/heartbeat updates when `BASE_URL` and registry settings are configured
+`multi_agent_server.py` (used by tests 2 and 3) and
+`multi_agent_km_server.py` (used by test 4) both mount the same five
+agents: `calculator`, `adk-agent`, `lc-agent`, `sk-agent`, and
+`invoices-classifier`.
 
 ## Endpoint Structure
 
@@ -824,19 +745,19 @@ With `KEY_PROVIDER_NAME=pqc`, the key is derived via KEM exchange — no pre-sha
 ```python
 from stls_a2a import create_pqc_a2a_transport, SecureA2ATransportAdapter
 
-# Un'unica chiamata: genera keypair, esegue handshake KEM, verifica proof
+# A single call: generates the keypair, runs the KEM handshake, verifies the proof
 adapter = await create_pqc_a2a_transport(
     "http://localhost:8001",
     client_id="my-agent",
 )
 
-# adapter è già un SecureA2ATransportAdapter pronto all'uso
+# adapter is already a ready-to-use SecureA2ATransportAdapter
 response = await adapter.send_secure_message({...})
 ```
 
-`create_pqc_a2a_transport()` richiede che il server abbia registrato l'endpoint
-`/stls/pqc/handshake` — questo avviene automaticamente in `create_secure_a2a_endpoint()`
-quando `KEY_PROVIDER_NAME=pqc`. Richiede `liboqs-python` (`[pqc]` extra).
+`create_pqc_a2a_transport()` requires the server to have registered the
+`/stls/pqc/handshake` endpoint — this happens automatically in `create_secure_a2a_endpoint()`
+when `KEY_PROVIDER_NAME=pqc`. Requires `liboqs-python` (the `[pqc]` extra).
 
 ## File Support in Agent Adapters
 
@@ -860,7 +781,7 @@ params = {
 }
 ```
 
-A real example is available in [test/task_test.py](./test/task_test.py) and [test/multi_agent_client.py](./test/multi_agent_client.py), where the client sends a PDF to the `invoices-classifier` agent.
+A real example is available in [tests/task_test.py](./tests/task_test.py), where the client sends a PDF to the `invoices-classifier` agent.
 
 ## Agent Cards and Discovery
 
@@ -893,8 +814,8 @@ to any client reading the card.
 
 Practical examples:
 
-- [test/cards_test.py](./test/cards_test.py)
-- [test/multi_agent_server.py](./test/multi_agent_server.py)
+- [tests/multi_agent_server.py](./tests/multi_agent_server.py)
+- [tests/task_test.py](./tests/task_test.py)
 
 ## Logging and Troubleshooting
 
@@ -918,8 +839,8 @@ Operational suggestions:
 
 ## Current Limitations and Notes
 
-- the script documentation is centered on the examples in [test](./test), which currently also act as the best demo/manual validation suite
-- stopping flows with `Ctrl+C` when using Arqit is still listed as an open point in the working notes
+- the script documentation is centered on the examples in [tests](./tests), which currently also act as the best demo/manual validation suite
+- stopping flows with `Ctrl+C` when using Arqit is still a known rough edge (no signal handling around the sidecar process)
 - session establishment for `base` and `arqit_py` is currently lazy (`session_id` embedded in the client's first encrypted request, resolved against the provider on cache miss); for `pqc`, the explicit HMAC challenge/response handshake from `stls-core` is wired via `/stls/pqc/handshake` — session_id is server-generated and the key never transits on the wire. Extending the explicit handshake to `base` and `arqit_py` is tracked as follow-up work
 - multi-agent PQC with `SESSION_CACHE_BACKEND=memory`: the `/stls/pqc/handshake` endpoint is tied to the first agent's `SessionCache`; clients calling other agents with the same session need `SESSION_CACHE_BACKEND=redis` (standard requirement for any multi-replica deployment)
 - `ContextualSecureRemoteA2aAgent`/`SecureSessionManager` (`stls_a2a_secure_remote.py`) — the drop-in encrypted replacement for ADK's `RemoteA2aAgent` — now supports all three key providers via an opt-in `provider_name=` argument (`SecureSessionManager(provider_name="base" | "arqit_py" | "pqc")`, or `ContextualSecureRemoteA2aAgent(..., provider_name=...)` when not sharing a manager). The default stays `pqc`, exactly as before adding this — no behavior change for existing callers that don't pass it.
@@ -937,9 +858,8 @@ Operational suggestions:
 ## Useful Files in This Folder
 
 - [pyproject.toml](./pyproject.toml): package metadata and dependencies
-- [notes.md](./notes.md): quick build/install notes
-- [todo.md](./todo.md): feature progress notes
-- [test](./test): runnable demos and examples
+- [notes.txt](./notes.txt): quick build/install notes
+- [tests](./tests): runnable demos and examples
 
 ## Functional Summary
 
@@ -961,7 +881,6 @@ At the moment, the module covers:
 - client-side helpers: `extract_a2a_text`, `extract_a2a_artifacts`, `extract_a2a_result`
 - single-agent, multi-agent, simple multi-agent, and task-based demos
 - adapter layer split into per-framework modules (`google`, `langchain`, `sk`, `custom`)
-- crypto, session, provider, and auth internals shared with `stls-mcp` through the `stls-core` package
 - crypto, session, provider, and auth internals shared with `stls-mcp` through the `stls-core` package
 
 ## License

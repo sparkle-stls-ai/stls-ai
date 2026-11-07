@@ -26,6 +26,7 @@ check that they match byte-for-byte.
 | `providers/..._pqc.py`                       | `src/providers/pqc.ts`             | ✅ | real liboqs-python + pyca/cryptography |
 | `providers/..._arqit_py.py`                  | `src/providers/arqit-sidecar.ts`   | ✅ | RPC mechanics verified with the `base` provider; real Arqit SKA-Platform™ peering verified through two separate sidecar processes (one per role — see [below](#6-the-arqit-provider-via-the-sidecar)), including the role guard and 3 sequential clients against one long-running SERVER |
 | `providers/..._factory.py`                   | `src/providers/factory.ts`         | ✅ | real handshake through a factory-built provider — `base`, `pqc`, and `arqit_py` against the real Arqit cloud (key agreement + handshake + AES-256-GCM round trip) |
+| `providers/stls_core_providers_session_resolver.py` | `src/providers/session-resolver.ts` | ✅ | real Arqit cloud — one process resolving two different, already-provisioned `arqit_py` device identities via per-`targetKey` `configPath` |
 | `auth/stls_core_auth_models.py`              | `src/auth/models.ts`               | ✅ | — |
 | `auth/stls_core_auth_loaders.py` (static, file) | `src/auth/loaders.ts`           | ✅ | JSON and YAML |
 | `auth/stls_core_auth_loaders.py` (postgres)  | `src/auth/loaders-postgres.ts`      | ✅ | real PostgreSQL instance — `loadAll()`/`loadOne()`, `TEXT[]`/`JSONB`/`TIMESTAMPTZ` conversion, and the full `ApiKeyManager` stack through it |

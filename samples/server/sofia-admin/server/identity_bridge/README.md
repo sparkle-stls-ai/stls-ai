@@ -1,173 +1,159 @@
 # Identity Bridge — README
 
-Server HTTP che pubblica pubblicamente due cose per la Governing
-Authority di questa piattaforma: i **DID Document** dei suoi agenti e
-la **status list** di revoca. È il pezzo che permette a un
-verificatore esterno (un'altra piattaforma federata) di controllare
-un'identità **senza mai ricontattare direttamente** l'agente o
-l'Authority in tempo reale — legge solo questi due endpoint pubblici.
+HTTP server that publicly exposes two things on behalf of this
+platform's Governing Authority: the **DID Documents** of its agents
+and the revocation **status list**. It's the piece that lets an
+external verifier (another federated platform) check an identity
+**without ever having to contact the agent or the Authority directly**
+in real time — it only reads these two public endpoints.
 
-File: `run_identity_bridge.py` — indipendente da `agent_identity.py`
-(propria configurazione, proprio processo). Entrambi importano
-`stls_identity` come dipendenza esterna, nessuno dei due vive dentro
-il package.
+File: `run_identity_bridge.py` — independent of `agent_identity.py`
+(its own configuration, its own process). Both import `stls_identity`
+as an external dependency; neither lives inside the package.
 
-## ⚠️ Stato di verifica
+## ✅ Verification status
 
-La firma di `create_identity_bridge_router()`, `StatusListManager.publish()`
-e `StatusListCredential` in questo file sono ricostruite dalla
-documentazione di progetto — il sorgente reale (`stls_id_bridge.py`)
-non è stato riverificato in questa sessione (perso in un reset del
-sandbox). Il codice compila ed è internamente coerente, ma **non è
-stato eseguito con successo contro il package reale**. Da confermare
-riga per riga la prima volta che gira per davvero.
+The signatures of `create_identity_bridge_router()`,
+`StatusListManager.publish()` and `StatusListCredential` assumed by
+this file have since been confirmed against the real
+`stls_identity` source (`stls_id_bridge.py`, `stls_id_status.py`,
+`stls_id_models.py`) — all three exist with matching names.
 
-## Perché due processi separati (bridge + agente)
+## Why two separate processes (bridge + agent)
 
-`agent_identity.py` è conversazionale, pensato per un operatore umano
-che chiede "crea un'identità per l'agente X". `run_identity_bridge.py`
-è un server HTTP che deve stare sempre acceso, servire richieste
-esterne, e tenersi aggiornato da solo — due cicli di vita diversi,
-due processi diversi, ognuno col proprio `.env`.
+`agent_identity.py` is conversational, meant for a human operator
+asking "create an identity for agent X". `run_identity_bridge.py` is
+an HTTP server that needs to stay up at all times, serve external
+requests, and keep itself refreshed — two different lifecycles, two
+different processes, each with its own `.env`.
 
-## Architettura in breve
+## Architecture at a glance
 
-```
-                    ┌─────────────────────────┐
-   scrive           │   agent_identity.py      │
-   DID + revoche ──▶│   (tools_identity.py)    │
-                    └──────────┬───────────────┘
-                               │
-                    ┌──────────▼───────────────┐
-                    │  Postgres (DID store)     │
-                    │  Redis (bitstring revoca) │
-                    └──────────┬───────────────┘
-                               │  legge + ripubblica
-                               │  ogni N secondi
-                    ┌──────────▼───────────────┐
-                    │ run_identity_bridge.py    │
-                    │  - GET /agents/{id}/did.json
-                    │  - GET /identity/status-list
-                    └──────────┬───────────────┘
-                               │
-                        verificatore esterno
-                     (altra piattaforma federata)
+```mermaid
+flowchart TB
+    AI["agent_identity.py\n(tools_identity.py)"]
+    PG["Postgres (DID store)\nRedis (revocation bitstring)"]
+    BR["run_identity_bridge.py\nGET /agents/{id}/did.json\nGET /identity/status-list"]
+    EXT["External verifier\n(another federated platform)"]
+
+    AI -->|"writes\nDID + revocations"| PG
+    PG -->|"reads + republishes\nevery N seconds"| BR
+    BR --> EXT
 ```
 
-Il bridge non scrive mai nulla — legge quello che l'agente ha già
-scritto (DID Document via Postgres, stato di revoca via Redis) e lo
-ripubblica in formato pubblico/cacheabile.
+The bridge never writes anything — it reads what the agent has
+already written (DID Document via Postgres, revocation state via
+Redis) and republishes it in a public/cacheable format.
 
-## Il task periodico — perché esiste
+## The periodic task — why it exists
 
-`IdentityManager.revoke()` aggiorna **solo il bit su Redis**. Non
-pubblica nulla verso l'esterno da solo — sono due passi
-deliberatamente separati (revocare è istantaneo e locale, pubblicare
-è un'operazione di rete verso una cache condivisa). Se nessuno chiama
-mai `StatusListManager.publish()` + scrive il risultato nella cache
-Postgres, `/identity/status-list` risponde:
+`IdentityManager.revoke()` only updates **the bit on Redis**. It
+doesn't publish anything externally on its own — these are two
+deliberately separate steps (revoking is instant and local,
+publishing is a network operation towards a shared cache). If nobody
+ever calls `StatusListManager.publish()` and writes the result into
+the Postgres cache, `/identity/status-list` responds with:
 
 ```json
 {"detail":"status list not published yet — refresher task has not run"}
 ```
 
-`run_identity_bridge.py` risolve questo con un task in background,
-avviato a `startup`:
+`run_identity_bridge.py` solves this with a background task, started
+at `startup`:
 
-1. **Pubblica una volta subito** — altrimenti l'errore sopra resta
-   finché non scatta il primo giro del timer
-2. Poi ogni `STATUS_LIST_REFRESH_INTERVAL_SECONDS` (default 60s)
+1. **Publishes once immediately** — otherwise the error above
+   persists until the timer's first tick
+2. Then every `STATUS_LIST_REFRESH_INTERVAL_SECONDS` (default 60s)
 
-L'intervallo **deve restare sotto l'MRI** (Maximum Revocation
-Interval, 5 minuti / 300s nel codice di `verifier.py`) — un
-verificatore esterno rifiuta una credenziale se lo snapshot della
-status list che ha in cache è più vecchio dell'MRI. Pubblicare ogni
-60s lascia ampio margine.
+The interval **must stay below the MRI** (Maximum Revocation
+Interval, 5 minutes / 300s in `verifier.py`'s code) — an external
+verifier rejects a credential if the status-list snapshot it has
+cached is older than the MRI. Publishing every 60s leaves ample
+margin.
 
-## Configurazione — `.env.identity_bridge`
+## Configuration — `.env.identity_bridge`
 
-Copiare `.env.identity_bridge.example` in `.env.identity_bridge` e
-compilare. Variabili critiche da tenere **coerenti con il `.env`
-dell'agente**:
+Copy `.env.identity_bridge.example` to `.env.identity_bridge` and fill
+it in. Critical variables to keep **consistent with the agent's
+`.env`**:
 
-| Variabile | Deve combaciare con | Perché |
+| Variable | Must match | Why |
 |---|---|---|
-| `IDENTITY_AUTHORITY_ID` | stessa var nel `.env` dell'agente | è la bitstring che `IdentityManager.revoke()` aggiorna — se diversa, il bridge pubblica lo stato di revoca di un'Authority sbagliata |
-| `STATUS_LIST_PUBLISH_URL` | stessa var nel `.env` dell'agente | va dentro ogni `CredentialStatus.statusListCredential` emesso — se diverso, punta a un URL che questo bridge non serve |
-| `IDENTITY_PG_DSN` / `IDENTITY_PG_DID_TABLE` | stesse var nel `.env` dell'agente | il bridge legge i DID Document che l'agente ha scritto — tabelle diverse = bridge vuoto |
-| `STATUS_LIST_REDIS_URL` | stessa var nel `.env` dell'agente | stessa bitstring, stesso Redis |
-| `IDENTITY_KEYSTORE_BACKEND` / `IDENTITY_KEYSTORE_REDIS_URL` / `IDENTITY_KEYSTORE_REDIS_NAMESPACE` | stesse var nel `.env` dell'agente | il bridge risolve (mai rigenera) la chiave dell'Authority per pubblicare il suo DID Document — valori diversi = chiave diversa da quella con cui l'Authority firma davvero |
+| `IDENTITY_AUTHORITY_ID` | same var in the agent's `.env` | it's the bitstring that `IdentityManager.revoke()` updates — if different, the bridge publishes the revocation state of the wrong Authority |
+| `STATUS_LIST_PUBLISH_URL` | same var in the agent's `.env` | goes into every issued `CredentialStatus.statusListCredential` — if different, it points to a URL this bridge doesn't serve |
+| `IDENTITY_PG_DSN` / `IDENTITY_PG_DID_TABLE` | same vars in the agent's `.env` | the bridge reads the DID Documents the agent has written — different tables = empty bridge |
+| `STATUS_LIST_REDIS_URL` | same var in the agent's `.env` | same bitstring, same Redis |
+| `IDENTITY_KEYSTORE_BACKEND` / `IDENTITY_KEYSTORE_REDIS_URL` / `IDENTITY_KEYSTORE_REDIS_NAMESPACE` | same vars in the agent's `.env` | the bridge resolves (never regenerates) the Authority's key to publish its DID Document — different values = a different key than the one the Authority actually signs with |
 
-Tutte le altre variabili sono documentate inline in
+All other variables are documented inline in
 `.env.identity_bridge.example`.
 
-## Avvio
+## Startup
 
 ```bash
 pip install fastapi uvicorn python-dotenv redis stls-identity
 python3 run_identity_bridge.py
-# oppure, con reload per sviluppo:
+# or, with reload for development:
 uvicorn run_identity_bridge:app --reload --port 8000
 ```
 
-All'avvio, in ordine:
-1. Crea le tabelle Postgres se non esistono (`CREATE TABLE IF NOT EXISTS`, nessuna migrazione manuale)
-2. Pubblica la status list una prima volta
-3. Avvia il task periodico
+On startup, in order:
+1. Creates the Postgres tables if they don't exist (`CREATE TABLE IF NOT EXISTS`, no manual migration)
+2. Publishes the status list once
+3. Starts the periodic task
 
-## Endpoint esposti
+## Exposed endpoints
 
-| Endpoint | Cosa restituisce |
+| Endpoint | What it returns |
 |---|---|
-| `GET /agents/{agent_id}/did.json` | Il DID Document dell'agente, se pubblicato (`bootstrap_agent_identity` lo scrive) |
-| `GET /identity/status-list` | Lo `StatusListCredential` corrente — bitstring compressa, chi è revocato |
+| `GET /agents/{agent_id}/did.json` | The agent's DID Document, if published (written by `bootstrap_agent_identity`) |
+| `GET /identity/status-list` | The current `StatusListCredential` — compressed bitstring, who is revoked |
 
-## Testare il componente
+## Testing the component
 
-Vedi `test_identity_bridge_live.py` — script standalone, non pytest,
-pensato per essere lanciato manualmente contro un bridge già in
-esecuzione (`python3 run_identity_bridge.py` in un altro terminale).
+See `test_identity_bridge_live.py` — a standalone script, not pytest,
+meant to be run manually against an already-running bridge
+(`python3 run_identity_bridge.py` in another terminal).
 
 ```bash
 python3 test_identity_bridge_live.py
 ```
 
-Copre, in sequenza, contro HTTP reale:
-1. Bootstrap + issue di un'identità (via `tools_identity.py`, non via HTTP — è l'agente che scrive, il bridge solo legge)
-2. `GET /agents/{id}/did.json` — deve rispondere con il documento appena creato
-3. `GET /identity/status-list` — deve rispondere (non più l'errore "not published yet", grazie alla pubblicazione immediata a startup)
-4. Revoca della credenziale
-5. Attesa di un ciclo di refresh (`STATUS_LIST_REFRESH_INTERVAL_SECONDS` + margine)
-6. Ri-lettura di `/identity/status-list` — la bitstring deve riflettere la revoca
+Covers, in sequence, against real HTTP:
+1. Bootstrap + issue an identity (via `tools_identity.py`, not via HTTP — the agent writes, the bridge only reads)
+2. `GET /agents/{id}/did.json` — must respond with the document just created
+3. `GET /identity/status-list` — must respond (no longer the "not published yet" error, thanks to the immediate publish at startup)
+4. Revoke the credential
+5. Wait for a refresh cycle (`STATUS_LIST_REFRESH_INTERVAL_SECONDS` + margin)
+6. Re-read `/identity/status-list` — the bitstring must reflect the revocation
 
 ## Troubleshooting
 
 **`{"detail":"authority DID Document not bootstrapped yet"}`**
-`GET /.well-known/did.json` — risolto: fino a poco fa questo processo
-non pubblicava mai il DID Document dell'Authority stessa (solo quello
-degli agenti, via `agent_id`). Ora lo fa da solo allo `startup`
-(`agent_path_segments=[]`, `controller` auto-referenziale — diverso
-dal DID Document di un agente qualunque). Se lo vedi ancora dopo aver
-aggiornato il file, controlla che `IDENTITY_KEYSTORE_BACKEND` e le
-altre variabili keystore in `.env.identity_bridge` combacino
-esattamente con `.env.identity_agent` (vedi tabella sopra) — altrimenti
-`bootstrap_signing_key()` qui genera/risolve una chiave diversa, e la
-`put()` verso Postgres può fallire silenziosamente per altri motivi di
-connessione.
+`GET /.well-known/did.json` — fixed: until recently this process never
+published the Authority's own DID Document (only agents', via
+`agent_id`). Now it does so on its own at `startup`
+(`agent_path_segments=[]`, self-referential `controller` — different
+from any regular agent's DID Document). If you still see this after
+updating the file, check that `IDENTITY_KEYSTORE_BACKEND` and the
+other keystore variables in `.env.identity_bridge` match exactly with
+`.env.identity_agent` (see table above) — otherwise
+`bootstrap_signing_key()` here generates/resolves a different key,
+and the `put()` to Postgres can fail silently for other connection
+reasons.
 
 **`{"detail":"status list not published yet — refresher task has not run"}`**
-Il bridge non è mai riuscito a pubblicare. Controllare i log
-all'avvio: se Redis o Postgres non sono raggiungibili, `_publish_once()`
-fallisce silenziosamente nel task periodico (loggato come eccezione,
-non fa crashare il processo) — controllare `IDENTITY_PG_DSN` e
-`STATUS_LIST_REDIS_URL`.
+The bridge never managed to publish. Check the startup logs: if
+Redis or Postgres are unreachable, `_publish_once()` fails silently
+in the periodic task (logged as an exception, doesn't crash the
+process) — check `IDENTITY_PG_DSN` and `STATUS_LIST_REDIS_URL`.
 
-**`GET /agents/{id}/did.json` risponde 404 anche dopo il bootstrap**
-Verificare che `IDENTITY_PG_DSN`/`IDENTITY_PG_DID_TABLE` nel `.env`
-del bridge puntino allo **stesso** database/tabella dell'agente — è
-l'errore di configurazione più probabile con due `.env` separati.
+**`GET /agents/{id}/did.json` returns 404 even after bootstrapping**
+Verify that `IDENTITY_PG_DSN`/`IDENTITY_PG_DID_TABLE` in the bridge's
+`.env` point to the **same** database/table as the agent's — this is
+the most likely configuration mistake with two separate `.env` files.
 
-**La revoca non si riflette in `/identity/status-list` per un po'**
-Atteso, non un bug: il bridge la pubblica al **prossimo giro** del
-refresher, non istantaneamente. Il ritardo massimo è
+**The revocation isn't reflected in `/identity/status-list` for a while**
+Expected, not a bug: the bridge publishes it on the refresher's
+**next** cycle, not instantly. The maximum delay is
 `STATUS_LIST_REFRESH_INTERVAL_SECONDS`.

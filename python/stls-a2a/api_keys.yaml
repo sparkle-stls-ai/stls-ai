@@ -1,31 +1,31 @@
 # api_keys.yaml
 # -------------
-# File di configurazione per il FileLoader di STLS-A2A.
+# Configuration file for STLS-A2A's FileLoader.
 #
-# Usato da /agents/adk-agent/ nel multi_agent_km_server.py.
+# Used by /agents/adk-agent/ in multi_agent_km_server.py.
 #
-# Campi per ogni chiave:
-#   key_id      SHA-256 hex del valore grezzo (usare `stls-keygen` o lo script sotto)
-#   raw_key     alternativa a key_id: il loader fa l'hash e scarta il plaintext
-#   client_id   identificativo del client/agente
-#   scopes      lista di scope autorizzati (* = wildcard)
-#   endpoints   lista di path autorizzati (vuota = tutti)
-#   expires_at  ISO-8601 UTC, opzionale
-#   description nota leggibile
+# Fields for each key:
+#   key_id      SHA-256 hex of the raw value (use `stls-keygen` or the script below)
+#   raw_key     alternative to key_id: the loader hashes it and discards the plaintext
+#   client_id   client/agent identifier
+#   scopes      list of authorized scopes (* = wildcard)
+#   endpoints   list of authorized paths (empty = all)
+#   expires_at  ISO-8601 UTC, optional
+#   description human-readable note
 #
-# Per generare una nuova chiave e il suo hash:
+# To generate a new key and its hash:
 #   python3 -c "from stls_a2a.stls_a2a_auth_models import generate_api_key; \
 #               raw, kid = generate_api_key(); print('raw_key:', raw); print('key_id: ', kid)"
 #
-# Ricarica automatica: il server rileva i cambiamenti al file (mtime)
-# e li applica al prossimo ciclo del BackgroundRefresher (default 300s).
-# Per forzare il reload immediato: POST /auth/refresh
+# Auto-reload: the server detects changes to the file (mtime)
+# and applies them on the next BackgroundRefresher cycle (default 300s).
+# To force an immediate reload: POST /auth/refresh
 #
 # ---------------------------------------------------------------------------
 
 keys:
 
-  # ── Chiave per test rapido (usa raw_key → hash automatico al caricamento) ─
+  # ── Key for quick testing (uses raw_key → auto-hashed on load) ──
 
   - raw_key:    "stls_adk_test_key_change_me_in_production"
     client_id:  "adk-test-client"
@@ -36,11 +36,11 @@ keys:
       - /agents/adk-agent/a2a
       - /agents/adk-agent/a2a/stream
       - /agents/adk-agent/secure-a2a/stream
-    description: "Chiave di test per adk-agent — sostituire in produzione"
+    description: "Test key for adk-agent — replace in production"
 
-  # ── Chiave con key_id pre-hashato (più sicura: il plaintext non è nel file) ─
-  # Generata con: generate_api_key("stls-adk")
-  # Esempio — sostituire con la propria:
+  # ── Key with pre-hashed key_id (more secure: plaintext not in the file) ─
+  # Generated with: generate_api_key("stls-adk")
+  # Example — replace with your own:
 
   - key_id:     "0000000000000000000000000000000000000000000000000000000000000000"
     client_id:  "adk-production-client"
@@ -50,23 +50,23 @@ keys:
       - /agents/adk-agent/secure-a2a
       - /agents/adk-agent/a2a
     expires_at:  "2027-12-31T23:59:59Z"
-    description: "Chiave production adk-agent (key_id pre-hashato)"
+    description: "Production key for adk-agent (pre-hashed key_id)"
     metadata:
       tenant:    "acme-corp"
       env:       "production"
 
-  # ── Chiave admin con accesso a tutti gli endpoint ──────────────────────────
+  # ── Admin key with access to all endpoints ──────────────────────────
 
   - raw_key:    "stls_admin_key_change_me_in_production"
     client_id:  "admin-file-loader"
     scopes:
       - "*"
-    endpoints:  []              # lista vuota = wildcard (tutti gli endpoint)
-    description: "Chiave admin — accesso completo a tutti gli agenti"
+    endpoints:  []              # empty list = wildcard (all endpoints)
+    description: "Admin key — full access to all agents"
     metadata:
       role: admin
 
-  # ── Chiave scaduta (per testare il rifiuto di chiavi expired) ─────────────
+  # ── Expired key (to test rejection of expired keys) ─────────────
 
   - raw_key:    "stls_expired_key_for_testing_only"
     client_id:  "expired-test-client"
@@ -74,5 +74,5 @@ keys:
       - secure-a2a
     endpoints:
       - /agents/adk-agent/secure-a2a
-    expires_at:  "2020-01-01T00:00:00Z"   # già scaduta
-    description: "Test: deve restituire 401 con error=token_expired"
+    expires_at:  "2020-01-01T00:00:00Z"   # already expired
+    description: "Test: should return 401 with error=token_expired"

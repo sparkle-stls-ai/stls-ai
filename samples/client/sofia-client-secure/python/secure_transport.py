@@ -114,20 +114,20 @@ class KeySession:
     @property
     def is_ready(self) -> bool:
         """
-        True se la sessione ha una chiave disponibile.
-        False per le sessioni PQC placeholder create da /secure/connect
-        prima che il KEM handshake avvenga al primo /secure/send.
+        True if the session has a key available.
+        False for PQC placeholder sessions created by /secure/connect
+        before the KEM handshake happens at the first /secure/send.
         """
         return bool(self.key_data)
 
 
 class _MemoryKeySessionCache:
     """
-    Cache in-process con TTL a finestra scorrevole. Backend di default —
-    adatta a sviluppo locale e deployment single-instance, ma non sopravvive
-    a restart del processo né a scale-out multi-istanza (usare redis su
-    Cloud Run). Il lock PQC è locale: sufficiente perché non c'è concorrenza
-    fra processi diversi in questo backend.
+    In-process cache with a sliding-window TTL. Default backend —
+    suitable for local development and single-instance deployments, but
+    does not survive a process restart nor multi-instance scale-out (use
+    redis on Cloud Run). The PQC lock is local: sufficient since there's
+    no cross-process concurrency in this backend.
     """
 
     def __init__(self, ttl: int) -> None:
@@ -172,17 +172,17 @@ class _MemoryKeySessionCache:
 
 class _RedisKeySessionCache:
     """
-    Redis-backed — per Cloud Run (multi-istanza / scale-to-zero): una sessione
-    creata su un'istanza resta valida sulla richiesta successiva anche se
-    finisce su un'istanza diversa.
+    Redis-backed — for Cloud Run (multi-instance / scale-to-zero): a session
+    created on one instance stays valid on the next request even if it
+    lands on a different instance.
 
-    Formato wire compatibile con stls_core.RedisSessionCache (server-side),
-    stesso prefisso {namespace}:{session_id} e stesso envelope JSON, per
-    coerenza operativa — ma è un'implementazione separata: SessionCacheBase
-    server-side restituisce uno StlsTransport pronto con la session_key
-    grezza già scartata, mentre qui serve la chiave grezza ad ogni chiamata
-    per ricostruire SecureA2ATransportAdapter (il base_url cambia per ogni
-    richiesta, quindi l'adapter non è mai riusato fra chiamate).
+    Wire format compatible with stls_core.RedisSessionCache (server-side),
+    same {namespace}:{session_id} prefix and same JSON envelope, for
+    operational consistency — but it's a separate implementation:
+    server-side SessionCacheBase returns a ready-to-use StlsTransport with
+    the raw session_key already discarded, whereas here we need the raw
+    key on every call to rebuild SecureA2ATransportAdapter (base_url
+    changes per request, so the adapter is never reused across calls).
     """
 
     def __init__(self, url: str, namespace: str, ttl: int) -> None:
@@ -209,7 +209,7 @@ class _RedisKeySessionCache:
         await self._redis.set(self._key(session_id), payload, ex=self._ttl)
 
     async def load(self, session_id: str) -> KeySession | None:
-        # GETEX rinnova il TTL idle ad ogni lettura (sliding window)
+        # GETEX renews the idle TTL on every read (sliding window)
         raw = await self._redis.getex(self._key(session_id), ex=self._ttl)
         if raw is None:
             return None
@@ -245,8 +245,8 @@ def _build_session_cache() -> "_MemoryKeySessionCache | _RedisKeySessionCache":
     if backend == "memory":
         return _MemoryKeySessionCache(SESSION_CACHE_TTL)
     raise ValueError(
-        f"SESSION_CACHE_BACKEND='{backend}' non riconosciuto. "
-        "Valori supportati: 'memory' (default), 'redis'."
+        f"SESSION_CACHE_BACKEND='{backend}' not recognized. "
+        "Supported values: 'memory' (default), 'redis'."
     )
 
 
@@ -257,12 +257,12 @@ _cache = _build_session_cache()
 
 async def _init_key_session(session_id: str, agent_name: str | None) -> KeySession:
     """
-    Crea una KeySession per session_id.
+    Creates a KeySession for session_id.
 
-    base / arqit_py: risolve kid e key_data subito via KeySessionProviderFactory.
-    pqc:             crea un placeholder vuoto — il KEM handshake avviene
-                     lazily al primo /secure/send o /secure/stream (che
-                     fornisce la URL del server necessaria all'handshake).
+    base / arqit_py: resolves kid and key_data right away via KeySessionProviderFactory.
+    pqc:             creates an empty placeholder — the KEM handshake happens
+                     lazily at the first /secure/send or /secure/stream (which
+                     provides the server URL needed for the handshake).
     """
     if _KEY_PROVIDER == "pqc":
         session = KeySession(
@@ -277,7 +277,7 @@ async def _init_key_session(session_id: str, agent_name: str | None) -> KeySessi
         )
         return session
 
-    # ── base / arqit_py: flusso invariato ────────────────────────────────────
+    # ── base / arqit_py: unchanged flow ────────────────────────────────────
     host = os.getenv("KEY_SESSION_HOST", "localhost")
     port = int(os.getenv("KEY_SESSION_PORT", "8081"))
 
@@ -307,30 +307,31 @@ async def _init_key_session(session_id: str, agent_name: str | None) -> KeySessi
 
 async def _ensure_pqc_session(session_id: str, target_url: str, session: KeySession) -> KeySession:
     """
-    Esegue il KEM handshake PQC al primo /secure/send o /secure/stream.
+    Performs the PQC KEM handshake at the first /secure/send or /secure/stream.
 
-    Estrae il base_url da target_url (es. "http://host:8001/agents/x/secure-a2a"
-    → "http://host:8001") e chiama create_pqc_a2a_transport() per ottenere
-    kid e session_key. Il lock coordina handshake concorrenti sullo stesso
-    session_id: distribuito su Redis (anche fra istanze diverse — Cloud Run
-    non garantisce sticky routing) col backend redis, locale al processo col
-    backend memory (sufficiente perché lì non c'è concorrenza fra processi).
+    Extracts base_url from target_url (e.g. "http://host:8001/agents/x/secure-a2a"
+    → "http://host:8001") and calls create_pqc_a2a_transport() to obtain
+    kid and session_key. The lock coordinates concurrent handshakes on the
+    same session_id: distributed via Redis (even across different instances —
+    Cloud Run doesn't guarantee sticky routing) with the redis backend, local
+    to the process with the memory backend (sufficient there since there's
+    no cross-process concurrency).
 
-    Usata SOLO con _KEY_PROVIDER == "pqc".
+    Used ONLY with _KEY_PROVIDER == "pqc".
     """
     if session.is_ready:
         return session
 
     async with _cache.lock(session_id):
-        # Double-check: un'altra richiesta (anche su un'altra istanza, col
-        # backend redis) può aver già completato l'handshake nel frattempo.
+        # Double-check: another request (even on a different instance, with
+        # the redis backend) may have already completed the handshake meanwhile.
         session = await _cache.load(session_id)
         if session is None:
             raise RuntimeError(f"Key session {session_id} disappeared during PQC handshake")
         if session.is_ready:
             return session
 
-        # Estrai solo schema + host:port dalla URL dell'agente
+        # Extract only scheme + host:port from the agent's URL
         parsed   = urlparse(target_url)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
@@ -457,7 +458,7 @@ async def secure_send(req: SecureCallRequest) -> dict[str, Any]:
     logger.info("secure_send  session_id=%s  url=%s  method=%s", req.session_id, req.url, req.payload.get("method"))
     session = await _get_session(req.session_id)
 
-    # PQC: esegui il KEM handshake alla prima chiamata (lazy)
+    # PQC: perform the KEM handshake on the first call (lazy)
     if _KEY_PROVIDER == "pqc" and not session.is_ready:
         try:
             session = await _ensure_pqc_session(req.session_id, req.url, session)
@@ -493,7 +494,7 @@ async def secure_stream(req: SecureCallRequest) -> StreamingResponse:
     logger.info("secure_stream  session_id=%s  url=%s  method=%s", req.session_id, req.url, req.payload.get("method"))
     session = await _get_session(req.session_id)
 
-    # PQC: esegui il KEM handshake alla prima chiamata (lazy)
+    # PQC: perform the KEM handshake on the first call (lazy)
     if _KEY_PROVIDER == "pqc" and not session.is_ready:
         try:
             session = await _ensure_pqc_session(req.session_id, req.url, session)
@@ -584,7 +585,7 @@ async def secure_send_direct(req: DirectCallRequest) -> dict[str, Any]:
 
     session = await _get_session(_tmp_id)
 
-    # PQC: lazy handshake usando la URL della richiesta
+    # PQC: lazy handshake using the request's URL
     if _KEY_PROVIDER == "pqc" and not session.is_ready:
         try:
             session = await _ensure_pqc_session(_tmp_id, req.url, session)

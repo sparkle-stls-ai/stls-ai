@@ -70,27 +70,30 @@ is pure Web Standard — no ASGI scope to synthesize).
 
 ## Architecture
 
-```
-                     ┌──────────────────────────────┐
-                     │  getServer(): McpServer        │
-                     │  tool / resource / prompt       │
-                     │  registered by the developer    │
-                     └───────────────┬─────────────────┘
-                                     │
-                    fresh McpServer + fresh
-               WebStandardStreamableHTTPServerTransport
-                          per request ("innerHandle")
-                                     │
-        ┌────────────────────────────┼──────────────────────────────────┐
-        │                            │                          │        │
-  plainPath ("/mcp")      HANDSHAKE_PATH              HANDSHAKE_PQC_PATH   stlsPath ("/mcp-stls")
-  calls innerHandle()      HMAC challenge/response      KEM X25519+ML-KEM   encryptedHandler():
-  directly, wrapped          (base / arqit_py)           (KEY_PROVIDER_NAME=pqc)  decrypt → innerHandle() → encrypt
-  in wrapWithAuth()                                                              wrapped in wrapWithAuth()
-        │                                                                               │
-  standard MCP client                                                         STLS-aware client
-  (any spec-compliant                                                         (createStlsFetch +
-   client)                                                                     StreamableHTTPClientTransport)
+```mermaid
+flowchart TB
+    subgraph App["Application Layer"]
+        GS["getServer(): McpServer\ntool / resource / prompt\nregistered by the developer"]
+    end
+
+    subgraph Server["stls-mcp Server (no router — one shared function)"]
+        IH["innerHandle()\nfresh McpServer + fresh\nWebStandardStreamableHTTPServerTransport\nper request"]
+        PLAIN["plainPath (\"/mcp\")\nwrapWithAuth()"]
+        HS["HANDSHAKE_PATH\nHMAC challenge/response\n(base / arqit_py)"]
+        PQC["HANDSHAKE_PQC_PATH\nKEM X25519 + ML-KEM-768\n(KEY_PROVIDER_NAME=pqc)"]
+        STLS["stlsPath (\"/mcp-stls\")\nencryptedHandler()\nwrapWithAuth()"]
+    end
+
+    STD["Standard MCP client\n(any spec-compliant client)"]
+    SEC["STLS-aware client\n(createStlsFetch +\nStreamableHTTPClientTransport)"]
+
+    GS --> IH
+    PLAIN -->|"calls directly"| IH
+    STD --> PLAIN
+    SEC --> HS
+    SEC --> PQC
+    SEC -->|"encrypted"| STLS
+    STLS -->|"decrypt → innerHandle()\n→ encrypt"| IH
 ```
 
 ## Package structure

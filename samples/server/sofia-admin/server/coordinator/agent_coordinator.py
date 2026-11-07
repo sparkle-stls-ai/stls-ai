@@ -1,8 +1,8 @@
 """
 agent.py
 --------
-Sofia Platform — Admin Agent con sub-agent specializzati.
-Ogni sub-agent è equipaggiato con i tool specifici al suo dominio.
+Sofia Platform — Admin Agent with specialized sub-agents.
+Each sub-agent is equipped with the tools specific to its domain.
 """
 
 
@@ -27,8 +27,8 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Modello LLM passato dall'esterno (variabile d'ambiente AGENT_MODEL).
-# Il default mantiene il modello usato finora se la variabile non e' impostata.
+# LLM model passed in from outside (AGENT_MODEL environment variable).
+# The default keeps the model used so far if the variable isn't set.
 DEFAULT_AGENT_MODEL = "gemini-3.5-flash"
 AGENT_MODEL = (os.getenv("AGENT_MODEL") or DEFAULT_AGENT_MODEL).strip()
 logger.info(f"--- Agent model: {AGENT_MODEL} ---")

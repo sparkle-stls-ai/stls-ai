@@ -4,7 +4,7 @@ All notable changes to **stls-core (Node.js)** are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html),
-and tracks the version of [`python/stls-core`](../../python/stls-core/CHAGELOG.md),
+and tracks the version of [`python/stls-core`](../../python/stls-core/CHANGELOG.md),
 of which this package is the TypeScript port.
 
 ---
@@ -28,7 +28,7 @@ of which this package is the TypeScript port.
   (`providers/arqit-sidecar.ts`, `providers/factory.ts`), sent as
   `config_path` in the `"start"` RPC payload and read by
   `arqit_sidecar.py`'s `_start()` on the Python side (see
-  `python/stls-core/CHAGELOG.md`). Previously neither side of this RPC
+  `python/stls-core/CHANGELOG.md`). Previously neither side of this RPC
   carried any config override at all — every connection to a given
   sidecar process was limited to whatever `ARQIT_PY_CLIENT_CONFIG`/
   `ARQIT_PY_SERVER_CONFIG` that process's own environment pointed at.
@@ -36,7 +36,7 @@ of which this package is the TypeScript port.
 ### Fixed (follow-up, 2026-10-23, continued — concurrent `arqit_py` sessions)
 
 Confirmed the Python-side `DeviceMetadata` singleton race (see
-`python/stls-core/CHAGELOG.md`) was real, and reproducible through the
+`python/stls-core/CHANGELOG.md`) was real, and reproducible through the
 Node sidecar path specifically — the Python fix (process-wide
 `_ARQIT_PY_START_LOCK`) required no Node-side change, since the
 sidecar is a Python process under the hood. Once that fix stopped
