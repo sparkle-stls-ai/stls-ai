@@ -196,3 +196,14 @@ inquiries about the Arqit SKA-Platform™, reach out to the same
 contact, **ettore.pulieri@tisparkle.com**.
 
 Copyright (C) 2026 Sparkle SpA.
+
+Open-source dependencies used by the packages above are listed, with
+their licenses, in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+## Contributing
+
+External contributions to the six dual-licensed packages require
+signing the [Contributor License Agreement](CLA.md) — this lets Sparkle
+offer the commercial license without needing to re-clear rights on
+every pull request. See `CLA.md` for why, and how to sign it (first
+pull request only).
