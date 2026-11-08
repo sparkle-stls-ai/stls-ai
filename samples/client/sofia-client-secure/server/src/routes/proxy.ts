@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db';
 import { requireAuth } from '../middleware/requireAuth';
+import { requireDebugMode, assertSafeDebugUrl } from '../middleware/requireDebugMode';
 import { config } from '../config';
 import type { SfAgentConfig, SfAgentAccess } from '../types';
 
@@ -141,10 +142,16 @@ async function resolveAgent(agentName: string, req: Request): Promise<{
 // Used by AppDebug when VITE_MODE=debug; bypasses agent-name resolution so the
 // user can connect to any agent URL without it being registered in the DB.
 // ---------------------------------------------------------------------------
-router.post('/direct/send', requireAuth, async (req: Request, res: Response): Promise<void> => {
+router.post('/direct/send', requireDebugMode, requireAuth, async (req: Request, res: Response): Promise<void> => {
   const { url, sessionId, payload, apiKey } = req.body as { url?: string; sessionId?: string; payload?: Record<string, unknown>; apiKey?: string };
   if (!url || !sessionId || !payload) {
     res.status(400).json({ error: 'url, sessionId and payload are required' });
+    return;
+  }
+  try {
+    await assertSafeDebugUrl(url);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid target URL' });
     return;
   }
   try {
@@ -166,10 +173,16 @@ router.post('/direct/send', requireAuth, async (req: Request, res: Response): Pr
   }
 });
 
-router.post('/direct/stream', requireAuth, async (req: Request, res: Response): Promise<void> => {
+router.post('/direct/stream', requireDebugMode, requireAuth, async (req: Request, res: Response): Promise<void> => {
   const { url, sessionId, payload, apiKey } = req.body as { url?: string; sessionId?: string; payload?: Record<string, unknown>; apiKey?: string };
   if (!url || !sessionId || !payload) {
     res.status(400).json({ error: 'url, sessionId and payload are required' });
+    return;
+  }
+  try {
+    await assertSafeDebugUrl(url);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid target URL' });
     return;
   }
   try {

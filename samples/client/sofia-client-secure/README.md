@@ -388,13 +388,6 @@ from `SecureA2ATransportAdapter.stream_secure_message()` as it arrives
 `{"jsonrpc":"2.0","id":...,"result":{"kind":"status-update","status":{"state":...},"final":...}}`,
 and an upstream error becomes `{"error": {"message": ..., "code": ...}}`.
 
-### `POST /secure/send/direct`
-Debug-mode variant of `/secure/send` with **no `session_id`** — used
-only by the Vite debug UI (`VITE_MODE=debug`), which bypasses agent-name
-resolution and passes the target URL directly. Backed by a single
-implicit session (`"__debug__"`), kept for backward compatibility during
-the transition away from the old global-state debug flow.
-
 ---
 
 ## Timeout reference

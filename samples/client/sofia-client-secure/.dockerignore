@@ -11,3 +11,9 @@ server/dist
 .claude
 .venv
 README.md
+
+# Arqit device credentials (REALM_PASSWORD, Q_KEY) — must never land in a
+# build layer, same pattern as .gitignore. A bare COPY . . in the Dockerfile
+# would otherwise freeze these into an intermediate image layer even though
+# the runtime stage never reads them from there.
+**/aq-*.json
