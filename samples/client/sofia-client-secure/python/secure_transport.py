@@ -563,55 +563,6 @@ async def secure_stream(req: SecureCallRequest) -> StreamingResponse:
     )
 
 
-# ── Direct endpoints (debug mode) ─────────────────────────────────────────────
-# These endpoints are used by AppDebug (VITE_MODE=debug) which bypasses agent-
-# name resolution and passes the URL directly.  They do NOT require a session_id
-# because debug mode has a single implicit session managed by the old global
-# state.  We keep them here for backward compatibility during the transition.
-
-class DirectCallRequest(BaseModel):
-    url:     str
-    payload: dict[str, Any]
-    api_key: str | None = None
-
-
-@app.post("/secure/send/direct")
-async def secure_send_direct(req: DirectCallRequest) -> dict[str, Any]:
-    """Debug-mode non-streaming call — uses a transient key session."""
-    logger.info("secure_send_direct  url=%s", req.url)
-    _tmp_id = "__debug__"
-    if await _cache.load(_tmp_id) is None:
-        await _init_key_session(_tmp_id, agent_name="debug")
-
-    session = await _get_session(_tmp_id)
-
-    # PQC: lazy handshake using the request's URL
-    if _KEY_PROVIDER == "pqc" and not session.is_ready:
-        try:
-            session = await _ensure_pqc_session(_tmp_id, req.url, session)
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    extra_headers = {"X-API-Key": req.api_key} if req.api_key else None
-
-    try:
-        adapter = SecureA2ATransportAdapter(
-            session_key=session.key_data,
-            session_id=session.key_identifier,
-            base_url=req.url,
-        )
-        safe_payload = {**req.payload, "id": 1}
-        response: dict[str, Any] = await adapter.send_secure_message(safe_payload, extra_headers=extra_headers)
-        if response.get("error"):
-            raise HTTPException(status_code=502, detail=str(response["error"]))
-        return response
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("secure_send_direct failed")
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
 if __name__ == "__main__":
     port = int(os.getenv("SECURE_TRANSPORT_PORT", "8090"))
     host = os.getenv("SECURE_TRANSPORT_HOST", "0.0.0.0")
