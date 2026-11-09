@@ -105,7 +105,7 @@ export async function* streamChat(
   proxyUrl?: string,
   noProxy?: string,
   history?: A2AMessage[],
-): AsyncGenerator<{ parts: Part[]; context_id: string; done: boolean; rawEvent?: Record<string, unknown>; append?: boolean }> {
+): AsyncGenerator<{ parts: Part[]; context_id: string; done: boolean; append?: boolean; rawEvent?: Record<string, unknown> }> {
   const payload = jsonRpcPayload('message/stream', buildMessage(parts, contextId, history));
   const res = await agentFetch(agentRpcUrl, {
     method: 'POST',
@@ -132,7 +132,7 @@ export async function* streamChat(
     const topError = event['error'] as Record<string, unknown> | undefined;
     if (topError) {
       const msg = (topError['message'] as string | undefined) ?? 'Stream error';
-      return { parts: [{ kind: 'text', text: `⚠ ${msg}` }], context_id: currentContextId, done: true, rawEvent: event };
+      return { parts: [{ kind: 'text', text: `⚠ ${msg}` }] as Part[], context_id: currentContextId, done: true, rawEvent: event };
     }
 
     const result = (event['result'] ?? {}) as Record<string, unknown>;
@@ -147,17 +147,11 @@ export async function* streamChat(
 
     const status = (result['status'] as Record<string, unknown> | undefined);
     let outParts: Part[] = [];
-    // True only for TaskArtifactUpdateEvent chunks explicitly marked as a
-    // continuation (A2A "append" semantics) — text chunks streamed this way
-    // must be concatenated onto the previous text, not rendered as a new
-    // paragraph (see useChat's merge logic).
-    let append = false;
 
     if (kind === 'artifact-update') {
       // TaskArtifactUpdateEvent — content in result.artifact.parts
       const artifact = (result['artifact'] ?? {}) as Record<string, unknown>;
       outParts = ((artifact['parts'] as Record<string, unknown>[] | undefined) ?? []).map(normalizePart);
-      append = (artifact['append'] as boolean | undefined) ?? true;
     } else if (kind === 'status-update') {
       // TaskStatusUpdateEvent — content optionally in result.status.message.parts
       const msg = (status?.['message'] ?? {}) as Record<string, unknown>;
@@ -179,7 +173,7 @@ export async function* streamChat(
       }
     }
 
-    if (outParts.length > 0 || isFinal) return { parts: outParts, context_id: currentContextId, done: isFinal, rawEvent: event, append };
+    if (outParts.length > 0 || isFinal) return { parts: outParts, context_id: currentContextId, done: isFinal, append: kind === 'artifact-update' && result['append'] === true, rawEvent: event };
     return null;
   };
 
@@ -307,7 +301,7 @@ export async function* streamSecureChat(
   parts: Part[],
   contextId?: string,
   apiKey?: string,
-): AsyncGenerator<{ parts: Part[]; context_id: string; done: boolean; rawEvent?: Record<string, unknown>; append?: boolean }> {
+): AsyncGenerator<{ parts: Part[]; context_id: string; done: boolean; append?: boolean; rawEvent?: Record<string, unknown> }> {
   const payload = jsonRpcPayload('message/stream', buildMessage(parts, contextId));
   const res = await apiFetch(`${apiBase}/api/proxy/direct/stream`, {
     method: 'POST',
@@ -345,12 +339,10 @@ export async function* streamSecureChat(
 
     const kind = result['kind'] as string | undefined;
     let outParts: Part[] = [];
-    let append = false;
 
     if (kind === 'artifact-update') {
       const artifact = (result['artifact'] ?? {}) as Record<string, unknown>;
       outParts = ((artifact['parts'] as Record<string, unknown>[] | undefined) ?? []).map(normalizePart);
-      append = (artifact['append'] as boolean | undefined) ?? true;
     } else if (kind === 'status-update') {
       const status = result['status'] as Record<string, unknown> | undefined;
       const msg = (status?.['message'] ?? {}) as Record<string, unknown>;
@@ -368,7 +360,7 @@ export async function* streamSecureChat(
     }
 
     if (outParts.length > 0 || isFinal)
-      return { parts: outParts, context_id: currentContextId, done: isFinal, rawEvent: event, append };
+      return { parts: outParts, context_id: currentContextId, done: isFinal, append: kind === 'artifact-update' && result['append'] === true, rawEvent: event };
     return null;
   };
 

@@ -1,74 +1,56 @@
 import { Request, Response, NextFunction } from 'express';
-import dns from 'dns/promises';
-import { isIP } from 'net';
+import dns from 'node:dns/promises';
+import net from 'node:net';
 import { config } from '../config';
 
 /**
- * Gates the /api/proxy/direct/* routes, which let the caller pass an
- * arbitrary target URL instead of an agent name resolved from sf_agents_config.
- * requireAuth alone is not enough here: AUTH_MODE=none (the shipped default)
- * disables it entirely, which would leave these routes open to anyone who can
- * reach the Express port. VITE_MODE=debug is a separate, explicit opt-in that
- * must be set regardless of AUTH_MODE.
+ * Blocks a route unless the server runs with VITE_MODE=debug, independently
+ * of AUTH_MODE (requireAuth is a no-op under AUTH_MODE=none).
  */
-export function requireDebugMode(req: Request, res: Response, next: NextFunction): void {
+export function requireDebugMode(_req: Request, res: Response, next: NextFunction): void {
   if (config.MODE !== 'debug') {
-    res.status(403).json({ error: 'Direct agent calls are only available in debug mode' });
+    res.status(403).json({ error: 'Not available outside debug mode' });
     return;
   }
   next();
 }
 
-// Cloud metadata services (AWS/GCP/Azure/Alibaba/Oracle all use link-local
-// 169.254.0.0/16, most commonly 169.254.169.254) have no legitimate reason
-// to ever be a debug target — unlike loopback/private addresses, which are
-// exactly what local agent development points at. Block only this range.
-function isBlockedMetadataAddress(ip: string): boolean {
-  if (isIP(ip) === 4) {
-    const [a, b] = ip.split('.').map(Number);
-    return a === 169 && b === 254;
-  }
-  if (isIP(ip) === 6) {
-    const normalized = ip.toLowerCase();
-    return normalized === '::ffff:169.254.0.0' || normalized.startsWith('fe80:');
+function isLinkLocal(ip: string): boolean {
+  if (net.isIPv4(ip)) return ip.startsWith('169.254.');
+  if (net.isIPv6(ip)) {
+    const lower = ip.toLowerCase();
+    if (lower.startsWith('::ffff:')) {
+      // IPv4-mapped: URL() normalizes dotted form to hex (::ffff:a9fe:a9fe)
+      const rest = lower.slice(7);
+      if (rest.includes('.')) return isLinkLocal(rest);
+      return parseInt(rest.split(':')[0], 16) === 0xa9fe; // 169.254.x.x
+    }
+    return /^fe[89ab]/.test(lower); // fe80::/10
   }
   return false;
 }
 
 /**
- * Validates a user-supplied debug target URL before it is forwarded to the
- * secure transport service. Rejects non-http(s) schemes and cloud metadata
- * addresses (directly, or via DNS — a hostname resolving to 169.254.x.x).
- * Throws with a message safe to return to the caller.
+ * Validates a debug "direct" target URL: http/https only, and the hostname must
+ * not resolve to the link-local range (cloud metadata, 169.254.0.0/16).
+ * Loopback/private addresses stay allowed: debug mode targets local agents.
+ * Throws an Error with a user-facing message when rejected.
  */
 export async function assertSafeDebugUrl(rawUrl: string): Promise<void> {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
   } catch {
-    throw new Error('Invalid target URL');
+    throw new Error('Invalid URL');
   }
-
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('Only http/https target URLs are allowed');
+    throw new Error('Only http/https URLs are allowed');
   }
-
-  const host = parsed.hostname;
-  if (isIP(host)) {
-    if (isBlockedMetadataAddress(host)) {
-      throw new Error('Target address is not allowed');
-    }
-    return;
-  }
-
-  try {
-    const { address } = await dns.lookup(host);
-    if (isBlockedMetadataAddress(address)) {
-      throw new Error('Target address is not allowed');
-    }
-  } catch (err) {
-    if (err instanceof Error && err.message === 'Target address is not allowed') throw err;
-    // DNS lookup failure: let the downstream fetch fail with its own error
-    // rather than masking it here.
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  const addrs = net.isIP(host)
+    ? [host]
+    : (await dns.lookup(host, { all: true })).map((a) => a.address);
+  if (addrs.some(isLinkLocal)) {
+    throw new Error('Target address is not allowed');
   }
 }
