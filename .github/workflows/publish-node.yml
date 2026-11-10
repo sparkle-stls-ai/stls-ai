@@ -112,21 +112,21 @@ jobs:
           fi
           echo "Pinning stls-core to ^$core_version"
           npm pkg set "dependencies.stls-core=^$core_version"
+          # package-lock.json still has the old "file:../stls-core" entry
+          # resolved to "../stls-core" — and that path genuinely exists in
+          # this monorepo checkout (just unbuilt, since this job never runs
+          # node/stls-core's own build). Left in place, npm keeps trusting
+          # that stale local resolution instead of fetching the version we
+          # just pinned above. Deleting it here (this checkout's copy only,
+          # never committed back) forces a full re-resolve from the
+          # package.json we just rewrote.
+          rm -f package-lock.json
 
       - name: Install and build
         if: steps.version.outputs.changed == 'true'
         working-directory: node/stls-mcp
         run: |
           npm install
-          # Guards against registry replication lag right after stls-core's
-          # own publish: npm install can report success while silently
-          # leaving a just-published dependency unresolved. One retry after
-          # clearing its node_modules entry is enough to recover from that.
-          if [ ! -f node_modules/stls-core/dist/index.js ]; then
-            echo "stls-core did not install correctly, retrying..."
-            rm -rf node_modules/stls-core
-            npm install
-          fi
           ls node_modules/stls-core/dist/index.js
           npm run build
 
