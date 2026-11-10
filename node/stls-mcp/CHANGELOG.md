@@ -7,6 +7,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.3] — 2026-11-10
+
+Packaging-only release: no functional changes. Version bump to align
+with [`python/stls-mcp`](../../python/stls-mcp/CHANGELOG.md) 0.1.3 and
+to enable the first publish to npm.
+
+---
+
 ## [0.1.2] — 2026-10-19
 
 ### Fixed (follow-up, 2026-10-23 — concurrent `arqit_py` sessions)

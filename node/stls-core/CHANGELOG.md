@@ -9,6 +9,14 @@ of which this package is the TypeScript port.
 
 ---
 
+## [0.1.3] — 2026-11-10
+
+Packaging-only release: no functional changes. Version bump to align
+with [`python/stls-core`](../../python/stls-core/CHANGELOG.md) 0.1.3 and
+to enable the first publish to npm.
+
+---
+
 ## [0.1.2] — 2026-10-18
 
 ### Added (follow-up, 2026-10-23)
