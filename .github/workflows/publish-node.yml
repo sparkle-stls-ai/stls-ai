@@ -41,9 +41,11 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       # npm Trusted Publishing (OIDC) needs npm >=11.5.1; the version
-      # bundled with actions/setup-node's Node 20 is older.
+      # bundled with actions/setup-node's Node 20 is older. Pinned to the
+      # 11.x line, not "latest" — npm 12 requires Node >=22, which this
+      # Node 20 runner doesn't satisfy.
       - name: Update npm for OIDC Trusted Publishing support
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       - name: Check whether this package's version changed
         id: version
@@ -94,9 +96,11 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       # npm Trusted Publishing (OIDC) needs npm >=11.5.1; the version
-      # bundled with actions/setup-node's Node 20 is older.
+      # bundled with actions/setup-node's Node 20 is older. Pinned to the
+      # 11.x line, not "latest" — npm 12 requires Node >=22, which this
+      # Node 20 runner doesn't satisfy.
       - name: Update npm for OIDC Trusted Publishing support
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       - name: Check whether this package's version changed
         id: version
