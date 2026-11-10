@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "stls-identity"
 version = "0.1.0"
 description = "DID + Verifiable Credential identity layer for the STLS AI ecosystem"
+readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "AGPL-3.0-or-later OR LicenseRef-Commercial" }
 classifiers = [

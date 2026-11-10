@@ -7,6 +7,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.6] — 2026-11-10
+
+Packaging-only release: no functional changes. Version bump to enable
+the first publish to PyPI via Trusted Publishing.
+
+---
+
 ## [0.1.5] — 2026-10-23
 
 ### Added

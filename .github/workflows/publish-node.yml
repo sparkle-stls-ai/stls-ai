@@ -1,0 +1,122 @@
+name: Publish Node packages
+
+# Same trigger convention as publish-python.yml: a package is only built
+# and published when its package.json version differs from the version
+# currently live on npm. Bumping the version is the release trigger; an
+# unchanged version is a silent no-op.
+#
+# stls-mcp depends on stls-core via "file:../stls-core" in the committed
+# package.json, so that local dev and the interop CI always exercise the
+# sibling package's current working-tree state rather than whatever is
+# already on npm. That path has no meaning on a consumer's machine, so
+# the stls-mcp job rewrites it to a real semver range on its checked-out
+# copy only, right before publishing — never committed back. This is why
+# stls-mcp's job runs after (needs:) stls-core's: so it picks up a
+# same-push stls-core version bump instead of racing it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "node/stls-core/**"
+      - "node/stls-mcp/**"
+      - ".github/workflows/publish-node.yml"
+
+permissions:
+  contents: write # to push the release tag
+  id-token: write # npm provenance attestation
+
+jobs:
+  publish-stls-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Check whether this package's version changed
+        id: version
+        working-directory: node/stls-core
+        run: |
+          local_version=$(node -p "require('./package.json').version")
+          published_version=$(npm view stls-core version 2>/dev/null || echo "")
+          echo "local=$local_version" >> "$GITHUB_OUTPUT"
+          if [ "$local_version" != "$published_version" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install and build
+        if: steps.version.outputs.changed == 'true'
+        working-directory: node/stls-core
+        run: |
+          npm install
+          npm run build
+
+      - name: Publish to npm
+        if: steps.version.outputs.changed == 'true'
+        working-directory: node/stls-core
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Tag the release
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          tag="stls-core-node-v${{ steps.version.outputs.local }}"
+          git tag "$tag"
+          git push origin "$tag"
+
+  publish-stls-mcp:
+    needs: publish-stls-core
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Check whether this package's version changed
+        id: version
+        working-directory: node/stls-mcp
+        run: |
+          local_version=$(node -p "require('./package.json').version")
+          published_version=$(npm view stls-mcp version 2>/dev/null || echo "")
+          echo "local=$local_version" >> "$GITHUB_OUTPUT"
+          if [ "$local_version" != "$published_version" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Point at the published stls-core before building
+        if: steps.version.outputs.changed == 'true'
+        working-directory: node/stls-mcp
+        run: npm pkg set "dependencies.stls-core=^$(npm view stls-core version)"
+
+      - name: Install and build
+        if: steps.version.outputs.changed == 'true'
+        working-directory: node/stls-mcp
+        run: |
+          npm install
+          npm run build
+
+      - name: Publish to npm
+        if: steps.version.outputs.changed == 'true'
+        working-directory: node/stls-mcp
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Tag the release
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          tag="stls-mcp-node-v${{ steps.version.outputs.local }}"
+          git tag "$tag"
+          git push origin "$tag"

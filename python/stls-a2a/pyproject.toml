@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stls_a2a"
-version = "0.1.5"
+version = "0.1.6"
 description = "SDK for building Agentic A2A comunication using quantum-safe encrypted channels"
 readme = "README.md"
 requires-python = ">=3.12"

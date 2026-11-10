@@ -1,0 +1,104 @@
+name: Publish Python packages
+
+# Builds and publishes a package to PyPI only when its pyproject.toml
+# version differs from the version currently live on PyPI — bumping the
+# version *is* the release trigger. Forget to bump and this workflow is a
+# silent no-op; PyPI itself refuses a re-upload of an existing version, so
+# this check only avoids an always-failing publish attempt instead of
+# changing what actually gets shipped.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "python/stls-core/**"
+      - "python/stls-a2a/**"
+      - "python/stls-identity/**"
+      - "python/stls-mcp/**"
+      - ".github/workflows/publish-python.yml"
+
+permissions:
+  contents: write # to push the release tag
+  id-token: write # PyPI trusted publishing (OIDC) — see repo setup notes
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: python/stls-core
+            dist_name: stls_core
+            pypi_environment: pypi-stls-core
+          - dir: python/stls-a2a
+            dist_name: stls_a2a
+            pypi_environment: pypi-stls-a2a
+          - dir: python/stls-identity
+            dist_name: stls-identity
+            pypi_environment: pypi-stls-identity
+          - dir: python/stls-mcp
+            dist_name: stls_mcp
+            pypi_environment: pypi-stls-mcp
+    # Must match the PyPI project's configured Trusted Publisher
+    # environment name (one-time setup per project on pypi.org). PyPI
+    # requires the (owner, repo, workflow file, environment) tuple to be
+    # unique per project — since all four packages share this same
+    # workflow file, each needs its own environment name here, or the
+    # second project's pending-publisher registration collides with the
+    # first's.
+    environment:
+      name: ${{ matrix.pypi_environment }}
+      url: https://pypi.org/project/${{ matrix.dist_name }}/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check whether this package's version changed
+        id: version
+        working-directory: ${{ matrix.dir }}
+        run: |
+          python - "${{ matrix.dist_name }}" <<'EOF' >> "$GITHUB_OUTPUT"
+          import json
+          import sys
+          import tomllib
+          import urllib.error
+          import urllib.request
+
+          dist_name = sys.argv[1]
+          local_version = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+
+          try:
+              with urllib.request.urlopen(f"https://pypi.org/pypi/{dist_name}/json") as r:
+                  published_version = json.load(r)["info"]["version"]
+          except urllib.error.HTTPError as e:
+              if e.code != 404:
+                  raise
+              published_version = ""  # package never published
+
+          print(f"local={local_version}")
+          print(f"changed={'true' if local_version != published_version else 'false'}")
+          EOF
+
+      - name: Build sdist and wheel
+        if: steps.version.outputs.changed == 'true'
+        working-directory: ${{ matrix.dir }}
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Publish to PyPI
+        if: steps.version.outputs.changed == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ${{ matrix.dir }}/dist
+
+      - name: Tag the release
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          tag="${{ matrix.dist_name }}-py-v${{ steps.version.outputs.local }}"
+          git tag "$tag"
+          git push origin "$tag"
