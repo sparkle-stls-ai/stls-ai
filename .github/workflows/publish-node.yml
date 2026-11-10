@@ -28,6 +28,10 @@ permissions:
 jobs:
   publish-stls-core:
     runs-on: ubuntu-latest
+    # Must match the npm Trusted Publisher's configured environment name
+    # (one-time setup per package on npmjs.com).
+    environment:
+      name: npm-stls-core
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +39,11 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
+
+      # npm Trusted Publishing (OIDC) needs npm >=11.5.1; the version
+      # bundled with actions/setup-node's Node 20 is older.
+      - name: Update npm for OIDC Trusted Publishing support
+        run: npm install -g npm@latest
 
       - name: Check whether this package's version changed
         id: version
@@ -60,8 +69,6 @@ jobs:
         if: steps.version.outputs.changed == 'true'
         working-directory: node/stls-core
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Tag the release
         if: steps.version.outputs.changed == 'true'
@@ -74,6 +81,10 @@ jobs:
     needs: publish-stls-core
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    # Must match the npm Trusted Publisher's configured environment name
+    # (one-time setup per package on npmjs.com).
+    environment:
+      name: npm-stls-mcp
     steps:
       - uses: actions/checkout@v4
 
@@ -81,6 +92,11 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
+
+      # npm Trusted Publishing (OIDC) needs npm >=11.5.1; the version
+      # bundled with actions/setup-node's Node 20 is older.
+      - name: Update npm for OIDC Trusted Publishing support
+        run: npm install -g npm@latest
 
       - name: Check whether this package's version changed
         id: version
@@ -134,8 +150,6 @@ jobs:
         if: steps.version.outputs.changed == 'true'
         working-directory: node/stls-mcp
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Tag the release
         if: steps.version.outputs.changed == 'true'
