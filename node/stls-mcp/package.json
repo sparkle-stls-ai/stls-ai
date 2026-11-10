@@ -3,6 +3,11 @@
   "version": "0.1.3",
   "description": "STLS extension of the Model Context Protocol — transparent application-layer symmetric encryption over Streamable HTTP, sharing the stls-core crypto/session/handshake/provider/auth layer with stls-a2a (Node.js port of python/stls-mcp)",
   "license": "(AGPL-3.0-or-later OR LicenseRef-Commercial)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sparkle-stls-ai/stls-ai.git",
+    "directory": "node/stls-mcp"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
