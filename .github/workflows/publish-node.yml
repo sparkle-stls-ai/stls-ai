@@ -98,13 +98,36 @@ jobs:
       - name: Point at the published stls-core before building
         if: steps.version.outputs.changed == 'true'
         working-directory: node/stls-mcp
-        run: npm pkg set "dependencies.stls-core=^$(npm view stls-core version)"
+        run: |
+          core_version=""
+          for i in 1 2 3 4 5; do
+            core_version=$(npm view stls-core version 2>/dev/null || echo "")
+            [ -n "$core_version" ] && break
+            echo "stls-core not visible on the registry yet, retrying in 10s..."
+            sleep 10
+          done
+          if [ -z "$core_version" ]; then
+            echo "::error::Could not resolve a published stls-core version from the registry"
+            exit 1
+          fi
+          echo "Pinning stls-core to ^$core_version"
+          npm pkg set "dependencies.stls-core=^$core_version"
 
       - name: Install and build
         if: steps.version.outputs.changed == 'true'
         working-directory: node/stls-mcp
         run: |
           npm install
+          # Guards against registry replication lag right after stls-core's
+          # own publish: npm install can report success while silently
+          # leaving a just-published dependency unresolved. One retry after
+          # clearing its node_modules entry is enough to recover from that.
+          if [ ! -f node_modules/stls-core/dist/index.js ]; then
+            echo "stls-core did not install correctly, retrying..."
+            rm -rf node_modules/stls-core
+            npm install
+          fi
+          ls node_modules/stls-core/dist/index.js
           npm run build
 
       - name: Publish to npm
