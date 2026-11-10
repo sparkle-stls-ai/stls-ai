@@ -210,4 +210,3 @@ signing the [Contributor License Agreement](CLA.md) — this lets Sparkle
 offer the commercial license without needing to re-clear rights on
 every pull request. See `CLA.md` for why, and how to sign it (first
 pull request only).
-

@@ -596,3 +596,4 @@ from a neutral spec instead of duplicating them by hand in
 Dual-licensed under the [GNU AGPLv3](LICENSE) and a
 [commercial license](LICENSE-COMMERCIAL.md), consistent with
 `python/stls-core`, `stls-a2a` and `stls-mcp`.
+
