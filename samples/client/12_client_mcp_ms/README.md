@@ -50,13 +50,19 @@ device configs' metadata live here):
 
 ```bash
 cd samples/client/12_client_mcp_ms
-python /path/to/python/stls-core/sidecar/arqit_sidecar.py --socket /tmp/stls-node-mcp-client-ms.sock
+ARQIT_SIDECAR_TOKEN=some-shared-secret \
+  python /path/to/python/stls-core/sidecar/arqit_sidecar.py --socket /tmp/stls-node-mcp-client-ms.sock
 ```
+
+The token must match `ARQIT_SIDECAR_TOKEN_CLIENT` in this sample's own
+`.env.example` (required — #17/#18 local socket authentication; the
+sidecar refuses to start without one).
 
 `client_multi_session.ts` instead uses ONE fixed device for the whole
 run — give the sidecar an `ARQIT_PY_CLIENT_CONFIG` at launch time:
 
 ```bash
+ARQIT_SIDECAR_TOKEN=some-shared-secret \
 ARQIT_PY_CLIENT_CONFIG=./aq-sf-node-mcp-client-ms-1.json \
   python /path/to/python/stls-core/sidecar/arqit_sidecar.py --socket /tmp/stls-node-mcp-client-ms.sock
 ```

@@ -7,6 +7,44 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.4] — 2026-11-11
+
+Security hardening of the Arqit sidecar's local IPC boundary (issues
+#17/#18): the Unix domain socket previously accepted any local
+connection with no verification at all.
+
+### Added
+
+- **Local socket authentication (#17)** — `arqit_sidecar.py` now
+  requires a shared token (`--token`/`ARQIT_SIDECAR_TOKEN`, no default:
+  the process refuses to start without one) presented via a new
+  `authenticate` RPC call before any other method is accepted. On
+  Linux, also verifies the connecting process's uid via `SO_PEERCRED`
+  (falls back to token-only auth with a warning where unavailable).
+  The socket file itself is `chmod 0600` after bind, defense-in-depth
+  alongside the containing directory's permissions (a deployment
+  concern).
+- **Proof scope (#18)** — a connection may call `start` only once;
+  role/provider/config are frozen for that connection's whole
+  lifetime.
+- **Pseudonymous connection identity (#18)** — a random per-connection
+  id is used in all sidecar logging instead of raw OS-level
+  identifiers.
+- **`KeySessionProvider.releaseSessionKeyData()` (#18)** — new method
+  (default no-op) called by the sidecar on `stop`/disconnect to evict
+  a session's raw key from the provider's store. Implemented for
+  `pqc` (wires up the previously-unused `PQCKeyStore.remove()`) and
+  `arqit_py` (`ArqitKeyStoreBase.remove()`, new). Scoped per store:
+  safe and immediate for in-memory stores and `RedisArqitKeyStore`'s
+  client role; a documented no-op for the server role, whose Redis
+  namespace is deliberately shared across horizontally-scaled
+  replicas — eviction there would break that stateless-scaling
+  design, not fix anything. The `base` provider's fixed key (a
+  module-level constant shared by every connection) is unaffected,
+  by design.
+
+---
+
 ## [0.1.3] — 2026-11-10
 
 Packaging-only release: no functional changes. Version bump to enable

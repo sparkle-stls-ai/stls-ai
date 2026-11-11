@@ -157,6 +157,11 @@ export interface ArqitSidecarOptions {
   /** Python provider to instantiate on the sidecar: "arqit_py" (production) | "base" (test). */
   providerName?: string;
   /**
+   * Shared secret the sidecar requires before any RPC method other than
+   * "authenticate" (see issues #17/#18). Default: env ARQIT_SIDECAR_TOKEN.
+   */
+  token?: string;
+  /**
    * arqit_py only: overrides ARQIT_PY_CLIENT_CONFIG/ARQIT_PY_SERVER_CONFIG
    * on the Python sidecar side for THIS connection only — lets several
    * connections to the same sidecar process use different device
@@ -190,6 +195,16 @@ function resolveSocketPath(options: ArqitSidecarOptions): string {
   return path;
 }
 
+function resolveToken(options: ArqitSidecarOptions): string {
+  const token = options.token ?? process.env.ARQIT_SIDECAR_TOKEN;
+  if (!token) {
+    throw new Error(
+      "ArqitSidecar: token not set. Pass { token } or set ARQIT_SIDECAR_TOKEN.",
+    );
+  }
+  return token;
+}
+
 export class KeyProviderClientArqitSidecar implements KeyProviderClient {
   private rpc: SidecarRpcConnection | null = null;
   private session: ArqitSidecarKeySessionProvider | null = null;
@@ -198,6 +213,7 @@ export class KeyProviderClientArqitSidecar implements KeyProviderClient {
 
   async start(): Promise<void> {
     this.rpc = new SidecarRpcConnection(resolveSocketPath(this.options));
+    await this.rpc.call("authenticate", { token: resolveToken(this.options) });
     await this.rpc.call("start", {
       session_type: "CLIENT",
       provider_name: this.options.providerName ?? process.env.KEY_PROVIDER_NAME ?? "base",
@@ -213,8 +229,14 @@ export class KeyProviderClientArqitSidecar implements KeyProviderClient {
 
   async stop(): Promise<void> {
     if (this.rpc !== null) {
-      await this.rpc.call("stop");
-      this.rpc.close();
+      // The socket must close even if the "stop" RPC itself rejects
+      // (e.g. start() failed before authenticating) — otherwise the
+      // open connection keeps the Node process alive indefinitely.
+      try {
+        await this.rpc.call("stop");
+      } finally {
+        this.rpc.close();
+      }
     }
   }
 }
@@ -227,6 +249,7 @@ export class KeyProviderServerArqitSidecar implements KeyProviderServer {
 
   async start(): Promise<void> {
     this.rpc = new SidecarRpcConnection(resolveSocketPath(this.options));
+    await this.rpc.call("authenticate", { token: resolveToken(this.options) });
     await this.rpc.call("start", {
       session_type: "SERVER",
       provider_name: this.options.providerName ?? process.env.KEY_PROVIDER_NAME ?? "base",
@@ -242,8 +265,14 @@ export class KeyProviderServerArqitSidecar implements KeyProviderServer {
 
   async stop(): Promise<void> {
     if (this.rpc !== null) {
-      await this.rpc.call("stop");
-      this.rpc.close();
+      // See KeyProviderClientArqitSidecar.stop() for why this is a
+      // try/finally: the socket must close even if the "stop" RPC
+      // itself rejects.
+      try {
+        await this.rpc.call("stop");
+      } finally {
+        this.rpc.close();
+      }
     }
   }
 }

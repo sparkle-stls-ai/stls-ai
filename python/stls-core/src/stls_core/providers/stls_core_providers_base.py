@@ -95,6 +95,19 @@ class KeySessionProvider(ABC):
         """Returns the peer's identity (IP, device_id, etc.) or None."""
         pass
 
+    def releaseSessionKeyData(self, session_key_identifier: str) -> None:
+        """
+        Evicts the given kid's raw key material from this provider's
+        store, if it holds one.
+
+        Called when a session using this kid ends (e.g. the Arqit
+        sidecar's "stop" RPC / connection close), so the key doesn't
+        linger with no eviction path. Default no-op: providers with
+        nothing to evict (Base's fixed, shared key) don't need to
+        override this.
+        """
+        pass
+
 
 class KeyProviderClient(ABC):
     """Interface for the client side of the key provider."""

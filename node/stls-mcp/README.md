@@ -284,21 +284,29 @@ KEY_PROVIDER_NAME=pqc npx tsx tests/vault-client.ts
 
 Requires two separate, already-running sidecar processes (one per role —
 see `node/stls-core`'s README, [section 6](../stls-core/README.md#6-the-arqit-provider-via-the-sidecar),
-for why) and a real, already-provisioned Arqit device pair:
+for why) and a real, already-provisioned Arqit device pair. Each sidecar
+also requires a shared token (#17/#18 — local socket authentication):
+same value exported in its own pair of terminals (1+3 for SERVER, 2+4
+for CLIENT; the two roles' tokens may also just be the same value
+everywhere, but don't have to be).
 
 ```bash
 # terminal 1 — SERVER-role sidecar
+export ARQIT_SIDECAR_TOKEN=server-secret
 python sidecar/arqit_sidecar.py --socket /tmp/arqit-server.sock
 
 # terminal 2 — CLIENT-role sidecar
+export ARQIT_SIDECAR_TOKEN=client-secret
 python sidecar/arqit_sidecar.py --socket /tmp/arqit-client.sock
 
 # terminal 3
 KEY_PROVIDER_NAME=arqit_py ARQIT_SIDECAR_SOCKET_SERVER=/tmp/arqit-server.sock \
+  ARQIT_SIDECAR_TOKEN_SERVER=server-secret \
   npx tsx tests/vault-server.ts
 
 # terminal 4
 KEY_PROVIDER_NAME=arqit_py ARQIT_SIDECAR_SOCKET_CLIENT=/tmp/arqit-client.sock \
+  ARQIT_SIDECAR_TOKEN_CLIENT=client-secret \
   npx tsx tests/vault-client.ts
 ```
 

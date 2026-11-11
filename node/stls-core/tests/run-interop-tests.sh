@@ -60,6 +60,24 @@ SIDECAR_SOCKET_SERVER2="/tmp/stls-arqit-sidecar-server2-ci-$$.sock"
 SIDECAR_SOCKET_CLIENT2="/tmp/stls-arqit-sidecar-client2-ci-$$.sock"
 STARTED_LOCAL_REDIS=0
 
+# Shared secret for the sidecar's socket auth (#17/#18) — generated once
+# per script run and exported, so every sidecar process and every test
+# client spawned below inherits it with no per-line changes needed.
+export ARQIT_SIDECAR_TOKEN="$(openssl rand -hex 32)"
+
+# Polls for the socket file instead of a fixed sleep — more reliable
+# under CI load, and avoids confusing "connection refused" (sidecar not
+# listening yet) with an auth rejection in failures.
+wait_for_socket() {
+  local path="$1"
+  for _ in $(seq 1 50); do
+    [ -S "$path" ] && return 0
+    sleep 0.1
+  done
+  echo "ERROR: $path never appeared" >&2
+  return 1
+}
+
 cleanup() {
   if [ "$STARTED_LOCAL_REDIS" = "1" ]; then
     redis-cli -p "$REDIS_PORT" shutdown nosave >/dev/null 2>&1 || true
@@ -138,7 +156,7 @@ if [ "$SKIP_ARQIT_SIDECAR" != "1" ]; then
   KEY_PROVIDER_NAME=base "$PYTHON_VENV" "$REPO_ROOT/python/stls-core/sidecar/arqit_sidecar.py" \
     --socket "$SIDECAR_SOCKET" &
   SIDECAR_PID=$!
-  sleep 1
+  wait_for_socket "$SIDECAR_SOCKET"
   ARQIT_SIDECAR_SOCKET="$SIDECAR_SOCKET" npx tsx tests/interop/arqit-sidecar.smoke.ts
   # Same already-running sidecar process, still provider_name=base for
   # the "start" calls — the guard only applies to provider_name=arqit_py
@@ -153,7 +171,7 @@ if [ "$SKIP_ARQIT_SIDECAR" != "1" ]; then
   rm -f "$SIDECAR_SOCKET"
   "$PYTHON_VENV" "$REPO_ROOT/python/stls-core/sidecar/arqit_sidecar.py" --socket "$SIDECAR_SOCKET" &
   SIDECAR_PID=$!
-  sleep 1
+  wait_for_socket "$SIDECAR_SOCKET"
   ARQIT_SIDECAR_SOCKET="$SIDECAR_SOCKET" npx tsx tests/interop/arqit-sidecar-guard.smoke.ts
   kill "$SIDECAR_PID" 2>/dev/null || true
   wait "$SIDECAR_PID" 2>/dev/null || true
@@ -168,7 +186,8 @@ if [ "$SKIP_ARQIT_SIDECAR" != "1" ] && [ -n "${ARQIT_PY_CLIENT_CONFIG:-}" ] && [
   SERVER_SIDECAR_PID=$!
   "$PYTHON_VENV" "$REPO_ROOT/python/stls-core/sidecar/arqit_sidecar.py" --socket "$SIDECAR_SOCKET_CLIENT" &
   CLIENT_SIDECAR_PID=$!
-  sleep 1
+  wait_for_socket "$SIDECAR_SOCKET_SERVER"
+  wait_for_socket "$SIDECAR_SOCKET_CLIENT"
   ARQIT_SIDECAR_SOCKET_SERVER="$SIDECAR_SOCKET_SERVER" \
     ARQIT_SIDECAR_SOCKET_CLIENT="$SIDECAR_SOCKET_CLIENT" \
     npx tsx tests/interop/arqit-sidecar-real.live.ts
@@ -185,7 +204,8 @@ if [ "$SKIP_ARQIT_SIDECAR" != "1" ] && [ -n "${ARQIT_PY_CLIENT_CONFIG:-}" ] && [
   SERVER_SIDECAR_PID2=$!
   "$PYTHON_VENV" "$REPO_ROOT/python/stls-core/sidecar/arqit_sidecar.py" --socket "$SIDECAR_SOCKET_CLIENT2" &
   CLIENT_SIDECAR_PID2=$!
-  sleep 1
+  wait_for_socket "$SIDECAR_SOCKET_SERVER2"
+  wait_for_socket "$SIDECAR_SOCKET_CLIENT2"
   ARQIT_SIDECAR_SOCKET_SERVER="$SIDECAR_SOCKET_SERVER2" \
     ARQIT_SIDECAR_SOCKET_CLIENT="$SIDECAR_SOCKET_CLIENT2" \
     npx tsx tests/interop/provider-factory-arqit-real.live.ts

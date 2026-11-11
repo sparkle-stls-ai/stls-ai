@@ -15,6 +15,26 @@ await serverProvider.start();
 const serverSession = serverProvider.createProviderSession();
 console.log("OK: server connected to the Arqit sidecar, RPC session started");
 
+// #17/#18: a wrong token must be rejected before the sidecar does
+// anything else — proves an unauthenticated local process can no
+// longer reach get_session_key_data via this socket.
+const badTokenProvider = new KeyProviderClientArqitSidecar({
+  socketPath,
+  providerName: "base",
+  token: "definitely-the-wrong-token",
+});
+try {
+  // start() rejecting still leaves the underlying RPC socket open (set
+  // before the failing "authenticate" call) — stop() closes it even
+  // though start() never completed, same pattern as
+  // arqit-sidecar-guard.smoke.ts, otherwise the open socket keeps this
+  // process alive indefinitely after the assertions already passed.
+  await assert.rejects(badTokenProvider.start(), /invalid token/);
+  console.log("OK: a wrong token is rejected before 'start' is ever reached");
+} finally {
+  await badTokenProvider.stop();
+}
+
 const sessionCache = new InMemorySessionCache();
 const req = generateHandshakeRequest("node-client-via-sidecar");
 const response = await performHandshake(req, serverSession, sessionCache);

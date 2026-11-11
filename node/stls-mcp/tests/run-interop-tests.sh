@@ -88,6 +88,11 @@ BASE_URL="http://127.0.0.1:$SERVER_PORT"
 SIDECAR_SOCKET_SERVER="/tmp/stls-mcp-arqit-sidecar-server-ci-$$.sock"
 SIDECAR_SOCKET_CLIENT="/tmp/stls-mcp-arqit-sidecar-client-ci-$$.sock"
 
+# Shared secret for the sidecar's socket auth (#17/#18) — generated once
+# per script run and exported, so both sidecar processes and both
+# npx tsx invocations below inherit it with no per-line changes needed.
+export ARQIT_SIDECAR_TOKEN="$(openssl rand -hex 32)"
+
 # Every Python vault_server.py/vault_client.py invocation gets this exact
 # env — fixed paths/auth/backend, overriding whatever python/stls-mcp/.env
 # might otherwise set (see header comment).
@@ -118,6 +123,19 @@ cleanup() {
   rm -f "$SIDECAR_SOCKET_SERVER" "$SIDECAR_SOCKET_CLIENT"
 }
 trap cleanup EXIT
+
+# Polls for the socket file instead of a fixed sleep — more reliable
+# under CI load, and avoids confusing "connection refused" (sidecar not
+# listening yet) with an auth rejection in failures.
+wait_for_socket() {
+  local path="$1"
+  for _ in $(seq 1 50); do
+    [ -S "$path" ] && return 0
+    sleep 0.1
+  done
+  echo "ERROR: $path never appeared" >&2
+  return 1
+}
 
 # Waits for something to be listening on $BASE_URL — a plain sleep isn't
 # reliable enough across two different runtimes (Node's http.Server vs.
@@ -234,7 +252,8 @@ if [ "$SKIP_ARQIT_SIDECAR" != "1" ] && [ -n "${ARQIT_PY_CLIENT_CONFIG:-}" ] && [
   SERVER_SIDECAR_PID=$!
   (cd "$PYTHON_MCP_DIR" && "$ARQIT_SIDECAR_PYTHON" "$REPO_ROOT/python/stls-core/sidecar/arqit_sidecar.py" --socket "$SIDECAR_SOCKET_CLIENT") &
   CLIENT_SIDECAR_PID=$!
-  sleep 1
+  wait_for_socket "$SIDECAR_SOCKET_SERVER"
+  wait_for_socket "$SIDECAR_SOCKET_CLIENT"
 
   KEY_PROVIDER_NAME=arqit_py ARQIT_SIDECAR_SOCKET_SERVER="$SIDECAR_SOCKET_SERVER" \
     MCP_SERVER_PORT="$SERVER_PORT" MCP_SERVER_HOST=127.0.0.1 \
