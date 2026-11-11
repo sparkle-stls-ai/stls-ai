@@ -52,8 +52,16 @@ jobs:
       # liboqs tag in sync with stls-core-node-interop.yml's).
       - name: Build liboqs (C library for ML-KEM-768)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build build-essential libssl-dev
+          # Work around known GitHub Actions Ubuntu-runner flakiness: the
+          # Azure-hosted image's geo-mirror redirector (azure.archive.ubuntu.com,
+          # referenced via /etc/apt/apt-mirrors.txt) intermittently fails DNS
+          # resolution, breaking every apt-get call regardless of which
+          # nominal host (archive.ubuntu.com, security.ubuntu.com) triggered
+          # it. Point apt directly at the global Ubuntu mirror instead, and
+          # retry both apt-get calls a few times for good measure.
+          echo "http://archive.ubuntu.com/ubuntu" | sudo tee /etc/apt/apt-mirrors.txt
+          for i in 1 2 3; do sudo apt-get update && break || sleep 10; done
+          for i in 1 2 3; do sudo apt-get install -y cmake ninja-build build-essential libssl-dev && break || sleep 10; done
           git clone --depth 1 --branch 0.16.0 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
           cmake -S /tmp/liboqs -B /tmp/liboqs/build -GNinja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
           ninja -C /tmp/liboqs/build
