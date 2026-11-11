@@ -42,12 +42,17 @@
  *     Arqit SKA-Platform™ wheels)
  *   - two ALREADY-RUNNING Python sidecar processes, each on its own
  *     socket, each with ARQIT_PY_CLIENT_CONFIG/ARQIT_PY_SERVER_CONFIG
- *     pointing at a real, already-provisioned device pair:
- *       python sidecar/arqit_sidecar.py --socket /tmp/arqit-server.sock
- *       python sidecar/arqit_sidecar.py --socket /tmp/arqit-client.sock
+ *     pointing at a real, already-provisioned device pair, and each
+ *     with its own ARQIT_SIDECAR_TOKEN (required — #17/#18 local socket
+ *     authentication; may be the same value for both, doesn't have to be):
+ *       ARQIT_SIDECAR_TOKEN=server-secret python sidecar/arqit_sidecar.py --socket /tmp/arqit-server.sock
+ *       ARQIT_SIDECAR_TOKEN=client-secret python sidecar/arqit_sidecar.py --socket /tmp/arqit-client.sock
  *   - ARQIT_SIDECAR_SOCKET_SERVER / ARQIT_SIDECAR_SOCKET_CLIENT pointing
  *     at those two sockets (NOT the same socket — that reintroduces the
- *     same-process problem this file exists to avoid)
+ *     same-process problem this file exists to avoid), and
+ *     ARQIT_SIDECAR_TOKEN_SERVER / ARQIT_SIDECAR_TOKEN_CLIENT matching
+ *     each sidecar's own token (resolved automatically by
+ *     KeySessionProviderFactory, no code change needed here)
  *   - relative paths inside the device JSON configs
  *     (DEVICE_METADATA_FILEPATH etc.) resolve against the Python
  *     process's cwd, not the JSON file's location — start both sidecar
@@ -61,6 +66,8 @@
  * Usage:
  *   ARQIT_SIDECAR_SOCKET_SERVER=/tmp/arqit-server.sock \
  *   ARQIT_SIDECAR_SOCKET_CLIENT=/tmp/arqit-client.sock \
+ *   ARQIT_SIDECAR_TOKEN_SERVER=server-secret \
+ *   ARQIT_SIDECAR_TOKEN_CLIENT=client-secret \
  *   ARQIT_N_CLIENTS=3 \
  *   npx tsx tests/interop/arqit-sidecar-real.live.ts
  */

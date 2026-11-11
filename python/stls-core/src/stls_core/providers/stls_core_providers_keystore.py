@@ -107,6 +107,26 @@ class ArqitKeyStoreBase(ABC):
         """
 
     @abstractmethod
+    def remove(self, key_id: str) -> None:
+        """
+        Evicts a key when the session using it ends.
+
+        InMemoryArqitKeyStore: always safe — single-process dict, no
+        cross-instance sharing.
+
+        RedisArqitKeyStore: safe ONLY for the client role
+        (zrem_on_deliver=True, isolated per-instance namespace — see
+        ArqitKeyStoreFactory.build()). For the server role
+        (zrem_on_deliver=False), this is deliberately a no-op: that
+        namespace is shared across horizontally-scaled replicas on
+        purpose, so a sibling replica may still need to read the same
+        kid for the same session — deleting it here would reintroduce
+        the exact bug the shared namespace exists to avoid. The
+        existing idle-timeout TTL (GETEX, renewed on every get()) is
+        the correct eviction mechanism for that case.
+        """
+
+    @abstractmethod
     def startup_seen_keys(self) -> set[str]:
         """
         Returns the set of kids to be considered "already seen" at the
@@ -169,6 +189,12 @@ class InMemoryArqitKeyStore(ArqitKeyStoreBase):
     def mark_delivered(self, key_id: str) -> None:
         # In-memory needs no TTL update — no-op.
         pass
+
+    def remove(self, key_id: str) -> None:
+        with self._lock:
+            self._keys.pop(key_id, None)
+            if self._last_key_id == key_id:
+                self._last_key_id = None
 
     def startup_seen_keys(self) -> set[str]:
         """InMemory: no persistence — returns an empty set()."""
@@ -336,6 +362,27 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
             "[RedisKeyStore] key delivered: id=%s session_ttl=%ds zrem=%s",
             key_id, self._session_ttl, self._zrem_on_deliver,
         )
+
+    def remove(self, key_id: str) -> None:
+        """
+        Evicts the key value — only when safe (client role).
+
+        Server role (zrem_on_deliver=False): deliberately a no-op, see
+        the ABC docstring — sibling replicas share this namespace and
+        may still need this kid for the same session.
+        """
+        if not self._zrem_on_deliver:
+            logger.debug(
+                "[RedisKeyStore] remove(%s) skipped: server-role namespace "
+                "is shared across replicas, relying on idle-timeout TTL instead",
+                key_id,
+            )
+            return
+        pipe = self._r.pipeline()
+        pipe.delete(self._key(key_id))
+        pipe.zrem(self._pending(), key_id)
+        pipe.execute()
+        logger.debug("[RedisKeyStore] key evicted: id=%s", key_id)
 
     def startup_seen_keys(self) -> set[str]:
         """

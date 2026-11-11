@@ -200,6 +200,10 @@ class KeySessionProviderPQC(KeySessionProvider):
     def getPeerIdentity(self) -> Optional[str]:
         return None
 
+    def releaseSessionKeyData(self, session_key_identifier: str) -> None:
+        """Evicts the kid from the in-memory PQCKeyStore (single-process, safe)."""
+        self._key_store.remove(session_key_identifier)
+
     # ── Client-only properties ─────────────────────────────────────────────────
 
     @property

@@ -333,6 +333,17 @@ class KeySessionProviderArqitPy(KeySessionProvider):
     def getPeerIdentity(self) -> Optional[str]:
         return self._peer_identity
 
+    def releaseSessionKeyData(self, session_key_identifier: str) -> None:
+        """
+        Evicts the kid from the underlying ArqitKeyStoreBase.
+
+        Safe and immediate for InMemoryArqitKeyStore and
+        RedisArqitKeyStore's client role; a documented no-op for
+        RedisArqitKeyStore's server role (shared across replicas) — see
+        ArqitKeyStoreBase.remove()'s docstring.
+        """
+        self._key_store.remove(session_key_identifier)
+
 
 # ---------------------------------------------------------------------------
 # KeyProviderClientArqitPy — initiator side

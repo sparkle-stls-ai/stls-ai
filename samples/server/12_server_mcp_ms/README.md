@@ -44,10 +44,15 @@ etc. resolve against the sidecar process's cwd, not this script's):
 
 ```bash
 cd samples/server/12_server_mcp_ms/server_mcp_ms_1
+ARQIT_SIDECAR_TOKEN=some-shared-secret-1 \
 ARQIT_PY_SERVER_CONFIG=./aq-sf-node-mcp-server-ms-1.json \
 KEY_PROVIDER_NAME=arqit_py \
 python /path/to/python/stls-core/sidecar/arqit_sidecar.py --socket /tmp/stls-node-mcp-server-ms-1.sock
 ```
+
+The token must match `ARQIT_SIDECAR_TOKEN_SERVER` in this sample's own
+`.env.example` (required — #17/#18 local socket authentication; the
+sidecar refuses to start without one).
 
 ## Validated (2026-10-23)
 

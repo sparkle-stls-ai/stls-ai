@@ -253,17 +253,23 @@ peering stays on the Python side
 (`python/stls-core/sidecar/arqit_sidecar.py`) and Node talks to that
 process via JSON-RPC over a Unix domain socket:
 
+The socket requires a shared token (#17/#18 — see "Local socket
+authentication" below): same value exported in both terminals.
+
 ```bash
 # Terminal 1 — start the sidecar (in production: KEY_PROVIDER_NAME=arqit_py
 # with the Arqit wheels installed and ARQIT_PY_CLIENT_CONFIG/ARQIT_PY_SERVER_CONFIG
 # configured — see python/stls-core/README.md)
 cd python/stls-core
+export ARQIT_SIDECAR_TOKEN=some-shared-secret   # same value in both terminals
 KEY_PROVIDER_NAME=base .venv/bin/python sidecar/arqit_sidecar.py --socket /tmp/stls-arqit-sidecar.sock
 ```
 
 ```ts
 // Terminal 2 — Node
 import { KeyProviderClientArqitSidecar } from "stls-core";
+
+process.env.ARQIT_SIDECAR_TOKEN = "some-shared-secret"; // or export it in the shell, same as Terminal 1
 
 const client = new KeyProviderClientArqitSidecar({
   socketPath: "/tmp/stls-arqit-sidecar.sock",
@@ -273,6 +279,19 @@ const session = client.createProviderSession();
 const kid = await session.getSessionKeyIdentifier();
 const key = await session.getSessionKeyData(kid);
 ```
+
+#### Local socket authentication (#17/#18)
+
+The sidecar accepts no RPC call other than `authenticate` until the
+connection presents the matching token — required, no default: the
+sidecar refuses to start without `--token`/`ARQIT_SIDECAR_TOKEN` set.
+On Linux it also verifies the connecting process's uid via `SO_PEERCRED`
+(falls back to token-only auth with a warning where unavailable, e.g.
+macOS/Windows). A connection may call `start` only once (its
+role/provider/config is fixed for its whole lifetime), and the raw
+session key is evicted from the provider's key store when the session
+ends (`stop` or disconnect) — see `python/stls-core/sidecar/arqit_sidecar.py`'s
+module docstring for the full RPC protocol.
 
 **Important — one role per sidecar process for `provider_name=arqit_py`.**
 A SERVER and a CLIENT session for the same Arqit device pair must run
@@ -286,15 +305,18 @@ process is rejected immediately with an explicit error instead of
 failing mysteriously 30+ seconds later.
 
 ```bash
-# Two separate sidecar processes, one per role — not one process for both
+# Two separate sidecar processes, one per role — not one process for both.
+# Each process can use its own token (ARQIT_SIDECAR_TOKEN_SERVER /
+# ARQIT_SIDECAR_TOKEN_CLIENT are read automatically by the factory
+# below), or share one ARQIT_SIDECAR_TOKEN for both — either works.
 cd python/stls-core
-KEY_PROVIDER_NAME=arqit_py .venv/bin/python sidecar/arqit_sidecar.py --socket /tmp/arqit-server.sock &
-KEY_PROVIDER_NAME=arqit_py .venv/bin/python sidecar/arqit_sidecar.py --socket /tmp/arqit-client.sock &
+ARQIT_SIDECAR_TOKEN=server-secret KEY_PROVIDER_NAME=arqit_py .venv/bin/python sidecar/arqit_sidecar.py --socket /tmp/arqit-server.sock &
+ARQIT_SIDECAR_TOKEN=client-secret KEY_PROVIDER_NAME=arqit_py .venv/bin/python sidecar/arqit_sidecar.py --socket /tmp/arqit-client.sock &
 ```
 
 ```ts
-const server = new KeyProviderServerArqitSidecar({ socketPath: "/tmp/arqit-server.sock", providerName: "arqit_py" });
-const client = new KeyProviderClientArqitSidecar({ socketPath: "/tmp/arqit-client.sock", providerName: "arqit_py" });
+const server = new KeyProviderServerArqitSidecar({ socketPath: "/tmp/arqit-server.sock", providerName: "arqit_py", token: "server-secret" });
+const client = new KeyProviderClientArqitSidecar({ socketPath: "/tmp/arqit-client.sock", providerName: "arqit_py", token: "client-secret" });
 ```
 
 Verified against the real Arqit cloud this way — not just
@@ -335,6 +357,9 @@ SF_API_KEYS_TABLE=sf_api_keys
 ARQIT_SIDECAR_SOCKET=/tmp/stls-arqit-sidecar.sock             # single-process smoke tests (base provider, guard check)
 ARQIT_SIDECAR_SOCKET_SERVER=/tmp/arqit-server.sock            # real peering — SERVER role's own sidecar process
 ARQIT_SIDECAR_SOCKET_CLIENT=/tmp/arqit-client.sock            # real peering — CLIENT role's own sidecar process (must differ from SERVER's)
+ARQIT_SIDECAR_TOKEN=some-shared-secret        # required (#17/#18) — same value the sidecar process was started with
+ARQIT_SIDECAR_TOKEN_SERVER=server-secret      # optional: role-specific override, same convention as ARQIT_SIDECAR_SOCKET_SERVER
+ARQIT_SIDECAR_TOKEN_CLIENT=client-secret      # optional: role-specific override, same convention as ARQIT_SIDECAR_SOCKET_CLIENT
 ARQIT_N_CLIENTS=1                 # arqit-sidecar-real.live.ts: how many sequential clients to run against the one SERVER session
 KEY_PROVIDER_NAME=base            # also read by the Python sidecar: "base" | "arqit_py"
 ```
@@ -432,6 +457,7 @@ redis-cli -p 6399 shutdown nosave
 
 # Arqit sidecar — RPC mechanics (provider_name=base) + the role guard,
 # no real Arqit credentials needed for either
+export ARQIT_SIDECAR_TOKEN=some-shared-secret   # required — same shell, inherited by both the sidecar and npx tsx below
 python/stls-core/.venv/bin/python python/stls-core/sidecar/arqit_sidecar.py --socket /tmp/stls-arqit-sidecar-test.sock &
 ARQIT_SIDECAR_SOCKET=/tmp/stls-arqit-sidecar-test.sock npx tsx tests/interop/arqit-sidecar.smoke.ts
 ARQIT_SIDECAR_SOCKET=/tmp/stls-arqit-sidecar-test.sock npx tsx tests/interop/arqit-sidecar-guard.smoke.ts

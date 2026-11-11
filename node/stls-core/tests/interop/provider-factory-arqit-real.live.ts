@@ -20,11 +20,16 @@
  *     socket (SERVER and CLIENT must be two separate processes — see
  *     python/stls-core/sidecar/ARQIT_PEERING_NOTES.md), each with
  *     ARQIT_PY_CLIENT_CONFIG/ARQIT_PY_SERVER_CONFIG pointing at a real,
- *     already-provisioned device pair:
- *       python sidecar/arqit_sidecar.py --socket /tmp/arqit-server.sock
- *       python sidecar/arqit_sidecar.py --socket /tmp/arqit-client.sock
+ *     already-provisioned device pair, and each with its own
+ *     ARQIT_SIDECAR_TOKEN (required — #17/#18 local socket
+ *     authentication; may be the same value for both, doesn't have to be):
+ *       ARQIT_SIDECAR_TOKEN=server-secret python sidecar/arqit_sidecar.py --socket /tmp/arqit-server.sock
+ *       ARQIT_SIDECAR_TOKEN=client-secret python sidecar/arqit_sidecar.py --socket /tmp/arqit-client.sock
  *   - ARQIT_SIDECAR_SOCKET_SERVER / ARQIT_SIDECAR_SOCKET_CLIENT set to
- *     those two sockets
+ *     those two sockets, and ARQIT_SIDECAR_TOKEN_SERVER /
+ *     ARQIT_SIDECAR_TOKEN_CLIENT matching each sidecar's own token
+ *     (resolved automatically by KeySessionProviderFactory, no code
+ *     change needed here)
  *   - each sidecar process can complete its SERVER-role "start" only
  *     ONCE per process lifetime (the Arqit SDK's DevicePolicyStore is a
  *     process-wide singleton — see ARQIT_PEERING_NOTES.md) — use freshly
@@ -34,6 +39,8 @@
  * Usage:
  *   ARQIT_SIDECAR_SOCKET_SERVER=/tmp/arqit-server.sock \
  *   ARQIT_SIDECAR_SOCKET_CLIENT=/tmp/arqit-client.sock \
+ *   ARQIT_SIDECAR_TOKEN_SERVER=server-secret \
+ *   ARQIT_SIDECAR_TOKEN_CLIENT=client-secret \
  *   npx tsx tests/interop/provider-factory-arqit-real.live.ts
  */
 import assert from "node:assert/strict";

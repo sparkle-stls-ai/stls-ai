@@ -29,8 +29,13 @@
  *   - ONE already-running Python sidecar process for the CLIENT role,
  *     on its own socket, with NO ARQIT_PY_CLIENT_CONFIG env var set —
  *     this test supplies a different config_path per call instead:
+ *       ARQIT_SIDECAR_TOKEN=some-shared-secret \
  *       python sidecar/arqit_sidecar.py --socket /tmp/arqit-resolver-client.sock
- *   - ARQIT_SIDECAR_SOCKET_CLIENT pointing at that socket, and
+ *   - ARQIT_SIDECAR_SOCKET_CLIENT pointing at that socket,
+ *     ARQIT_SIDECAR_TOKEN_CLIENT (or the flat ARQIT_SIDECAR_TOKEN)
+ *     matching the token above (required — #17/#18 local socket
+ *     authentication; resolved automatically by
+ *     KeySessionProviderFactory, no code change needed here), and
  *     ARQIT_PY_CLIENT_CONFIG_1 / ARQIT_PY_CLIENT_CONFIG_2 pointing at
  *     the two already-provisioned client device configs
  *     (samples/client/11_client_mcp_ms/aq-sf-mcp-client-ms-{1,2}.json)
@@ -40,6 +45,7 @@
  *
  * Usage:
  *   ARQIT_SIDECAR_SOCKET_CLIENT=/tmp/arqit-resolver-client.sock \
+ *   ARQIT_SIDECAR_TOKEN=some-shared-secret \
  *   ARQIT_PY_CLIENT_CONFIG_1=.../aq-sf-mcp-client-ms-1.json \
  *   ARQIT_PY_CLIENT_CONFIG_2=.../aq-sf-mcp-client-ms-2.json \
  *   npx tsx tests/interop/key-session-resolver-multi-config.live.ts

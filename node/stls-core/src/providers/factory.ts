@@ -114,6 +114,16 @@ export interface GetSessionProviderOptions {
    * KeySessionResolver (Python) for the equivalent pattern.
    */
   configPath?: string;
+  /**
+   * arqit_py only: shared secret for the sidecar's socket auth (#17/#18).
+   * If omitted, reads ARQIT_SIDECAR_TOKEN_SERVER or
+   * ARQIT_SIDECAR_TOKEN_CLIENT depending on `sessionType` (falling back
+   * further to the flat ARQIT_SIDECAR_TOKEN) — same role-aware
+   * resolution as `socketPath` above, so samples/tests that already set
+   * the socket env vars need only add the matching token env var, no
+   * code changes.
+   */
+  token?: string;
 }
 
 export class KeySessionProviderFactory {
@@ -138,6 +148,7 @@ export class KeySessionProviderFactory {
         ? new KeyProviderArqitSidecar({
             socketPath: options.socketPath ?? resolveArqitSidecarSocketEnv(options.sessionType),
             providerName: "arqit_py",
+            token: options.token ?? resolveArqitSidecarTokenEnv(options.sessionType),
           })
         : KeyProviderFactory.getProvider(providerName);
 
@@ -166,4 +177,18 @@ function resolveArqitSidecarSocketEnv(sessionType: KeySessionProviderType): stri
     );
   }
   return socketPath;
+}
+
+/**
+ * Role-aware token lookup, mirroring resolveArqitSidecarSocketEnv above:
+ * prefers the role-suffixed var (matching a SERVER/CLIENT sidecar pair,
+ * each with its own token), falls back to the flat ARQIT_SIDECAR_TOKEN
+ * (single-sidecar setups, e.g. the base/pqc-style smoke tests).
+ * Non-throwing: KeyProviderArqitSidecar's own resolveToken() does the
+ * final "is it actually set" validation, same division of labor as
+ * socketPath's options.socketPath fallback above.
+ */
+function resolveArqitSidecarTokenEnv(sessionType: KeySessionProviderType): string | undefined {
+  const envVar = sessionType === KeySessionProviderType.SERVER ? "ARQIT_SIDECAR_TOKEN_SERVER" : "ARQIT_SIDECAR_TOKEN_CLIENT";
+  return process.env[envVar] ?? process.env.ARQIT_SIDECAR_TOKEN;
 }

@@ -9,6 +9,34 @@ of which this package is the TypeScript port.
 
 ---
 
+## [0.1.4] — 2026-11-11
+
+Node-side counterpart of `python/stls-core` 0.1.4's Arqit sidecar
+security hardening (issues #17/#18) — tracks that version.
+
+### Added
+
+- **`ArqitSidecarOptions.token`** (`providers/arqit-sidecar.ts`) —
+  required shared secret (falls back to env `ARQIT_SIDECAR_TOKEN`),
+  sent via a new `authenticate` RPC call before `start`, matching the
+  sidecar's new mandatory local-socket authentication.
+- **`KeySessionProviderFactory`** resolves the token the same
+  role-aware way it already resolves the socket path
+  (`ARQIT_SIDECAR_TOKEN_SERVER`/`ARQIT_SIDECAR_TOKEN_CLIENT`, falling
+  back to the flat `ARQIT_SIDECAR_TOKEN`) — existing callers through
+  `KeySessionResolver`/the factory (samples, live tests) need no code
+  changes, only the matching env var.
+
+### Fixed
+
+- `KeyProviderClientArqitSidecar.stop()`/`KeyProviderServerArqitSidecar.stop()`
+  now close the underlying socket in a `finally`, even if the `stop`
+  RPC call itself rejects — previously a rejection there (now possible
+  if a connection never successfully authenticated) left the socket
+  open, keeping the Node process alive indefinitely.
+
+---
+
 ## [0.1.3] — 2026-11-10
 
 Packaging-only release: no functional changes. Version bump to align

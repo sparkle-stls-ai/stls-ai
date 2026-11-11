@@ -18,8 +18,11 @@
  *
  * Usage (sidecar process started externally, same convention as
  * arqit-sidecar.smoke.ts):
+ *   ARQIT_SIDECAR_TOKEN=some-shared-secret \
  *   python sidecar/arqit_sidecar.py --socket /tmp/stls-arqit-guard.sock &
- *   ARQIT_SIDECAR_SOCKET=/tmp/stls-arqit-guard.sock npx tsx tests/interop/arqit-sidecar-guard.smoke.ts
+ *   ARQIT_SIDECAR_SOCKET=/tmp/stls-arqit-guard.sock \
+ *   ARQIT_SIDECAR_TOKEN=some-shared-secret \
+ *   npx tsx tests/interop/arqit-sidecar-guard.smoke.ts
  */
 import assert from "node:assert/strict";
 import {
