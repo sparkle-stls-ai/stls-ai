@@ -437,15 +437,17 @@ class TestKeySessionProviderPQC:
             x25519_private_key_bytes=x25519_priv,
             mlkem_secret_key_bytes=mlkem_sec,
         )
-        assert provider.x25519_private_key_bytes == x25519_priv
-        assert provider.mlkem_secret_key_bytes == mlkem_sec
+        # No public accessor for these on purpose (issue #5) — white-box
+        # check via the underscore-private attrs themselves.
+        assert provider._x25519_private_key_bytes == x25519_priv
+        assert provider._mlkem_secret_key_bytes == mlkem_sec
 
     def test_server_keypairs_are_none(self) -> None:
         provider = KeySessionProviderPQC(
             KeySessionProvider.KeySessionProviderType.SERVER, PQCKeyStore()
         )
-        assert provider.x25519_private_key_bytes is None
-        assert provider.mlkem_secret_key_bytes is None
+        assert provider._x25519_private_key_bytes is None
+        assert provider._mlkem_secret_key_bytes is None
 
 
 # ===========================================================================
@@ -514,17 +516,17 @@ class TestKeyProviderLifecycle:
         client = KeyProviderClientPQC()
         client.start()
         session = client.createProviderSession()
-        assert session.x25519_private_key_bytes is not None
-        assert session.mlkem_secret_key_bytes is not None
+        assert session._x25519_private_key_bytes is not None
+        assert session._mlkem_secret_key_bytes is not None
 
     @requires_liboqs
     def test_client_stop_zeros_private_keys(self) -> None:
         client = KeyProviderClientPQC()
         client.start()
         session = client.createProviderSession()
-        priv_len = len(session.x25519_private_key_bytes)
+        priv_len = len(session._x25519_private_key_bytes)
         client.stop()
-        assert session.x25519_private_key_bytes == b"\x00" * priv_len
+        assert session._x25519_private_key_bytes == b"\x00" * priv_len
 
     @requires_liboqs
     def test_client_each_start_fresh_keypair(self) -> None:
@@ -745,8 +747,8 @@ class TestRoundTrip:
 
         session = client.createProviderSession()
         client_key = derive_session_key_client(
-            session.x25519_private_key_bytes,
-            session.mlkem_secret_key_bytes,
+            session._x25519_private_key_bytes,
+            session._mlkem_secret_key_bytes,
             resp,
             nonce,
         )
@@ -846,8 +848,8 @@ class TestRoundTrip:
             resp = await perform_pqc_handshake(req, cache)
             session = client.createProviderSession()
             key = derive_session_key_client(
-                session.x25519_private_key_bytes,
-                session.mlkem_secret_key_bytes,
+                session._x25519_private_key_bytes,
+                session._mlkem_secret_key_bytes,
                 resp,
                 nonce,
             )

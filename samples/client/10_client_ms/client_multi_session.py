@@ -119,7 +119,7 @@ async def open_session(session_num: int) -> tuple[str, bytes]:
             client_id=f"pqc-multi-session-{session_num:03d}",
         )
         kid   = adapter.session_id
-        kdata = adapter.transport.session_key
+        kdata = adapter.transport.export_session_key()
     else:
         provider = KeySessionProviderFactory().get_session_provider(
             session_type=KeySessionProvider.KeySessionProviderType.CLIENT,

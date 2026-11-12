@@ -6,14 +6,16 @@
  * SecureToolsetManager, since that's an ADK-integration helper), the
  * Node side has no ADK at all — stls-mcp's Node client API is already
  * ADK-free (raw @modelcontextprotocol/sdk Client + stls-core's
- * KeySessionResolver), so this calls each server's tool directly, no
+ * getTransport()), so this calls each server's tool directly, no
  * agent framework needed. This is also the first real consumer of
- * KeySessionResolver + the sidecar configPath fix against two
- * DIFFERENT arqit_py device identities from one Node process (see
+ * getTransport()'s per-call configPath override against two DIFFERENT
+ * arqit_py device identities from one Node process (see
  * node/stls-core/CHANGELOG.md and
  * node/stls-core/tests/interop/key-session-resolver-multi-config.live.ts).
  *
- * Works, unmodified, with KEY_PROVIDER_NAME=base|pqc|arqit_py.
+ * Works, unmodified, with KEY_PROVIDER_NAME=base|pqc|arqit_py — one
+ * getTransport() call handles resolve+handshake for every provider, so
+ * there's no branch-on-provider here at all anymore.
  *
  * Run (after starting both servers):
  *   npx tsx --env-file=.env client_multi_server.ts
@@ -21,8 +23,8 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-import { KeySessionResolver } from "stls-core";
-import { createStlsFetch, performClientHandshake, performPqcClientHandshake } from "stls-mcp";
+import { getTransport } from "stls-core";
+import { createStlsFetch } from "stls-mcp";
 
 const PROVIDER_NAME = (process.env.KEY_PROVIDER_NAME ?? "pqc").trim().toLowerCase();
 
@@ -39,26 +41,16 @@ const ARQIT_CLIENT_CONFIGS: Record<string, string> = {
   [SERVERS[1][1]]: process.env.ARQIT_PY_CLIENT_CONFIG_2 ?? "./aq-sf-node-mcp-client-ms-2.json",
 };
 
-const resolver = new KeySessionResolver({ providerName: PROVIDER_NAME, targetConfigs: ARQIT_CLIENT_CONFIGS });
-
 async function callServer(label: string, baseUrl: string): Promise<boolean> {
   const toolName = `ping_${label.replace(/-/g, "_")}`;
   try {
-    let sessionId: string;
-    let transport: Awaited<ReturnType<typeof performClientHandshake>>["transport"];
-
-    if (PROVIDER_NAME === "pqc") {
-      const result = await performPqcClientHandshake(baseUrl, { clientId: "client-12-mcp-ms" });
-      sessionId = result.sessionId;
-      transport = result.transport;
-    } else {
-      const { kid, kdata } = await resolver.resolve(baseUrl, {
-        socketPath: process.env.ARQIT_SIDECAR_SOCKET_CLIENT,
-      });
-      const result = await performClientHandshake(baseUrl, kdata, { clientId: "client-12-mcp-ms", kid });
-      sessionId = result.sessionId;
-      transport = result.transport;
-    }
+    const { sessionId, transport } = await getTransport({
+      providerName: PROVIDER_NAME,
+      baseUrl,
+      clientId: "client-12-mcp-ms",
+      configPath: ARQIT_CLIENT_CONFIGS[baseUrl],
+      socketPath: process.env.ARQIT_SIDECAR_SOCKET_CLIENT,
+    });
 
     const stlsFetch = createStlsFetch(sessionId, transport);
     const mcpClient = new Client({ name: "client-12-mcp-ms", version: "1.0.0" });

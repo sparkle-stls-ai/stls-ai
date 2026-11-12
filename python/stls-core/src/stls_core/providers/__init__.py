@@ -15,7 +15,12 @@ from .stls_core_providers_factory import (
     KeyProviderFactory,
     KeySessionProviderFactory,
 )
-from .stls_core_providers_session_resolver import KeySessionResolver
+# KeySessionResolver is intentionally NOT re-exported here — resolve()
+# hands back raw key material, exactly what issue #5 ("Restrict
+# stls-core's public API surface") closes off. establish_session()/
+# resolve_transport() (stls_core_session_establish.py) are the public
+# replacement; they import it directly from
+# .stls_core_providers_session_resolver.
 
 from .stls_core_providers_keystore import (
     ArqitKeyStoreBase,
@@ -50,7 +55,6 @@ __all__ = [
     "KeySessionProviderBase",
     "KeyProviderFactory",
     "KeySessionProviderFactory",
-    "KeySessionResolver",
     "ArqitKeyStoreBase",
     "ArqitKeyStoreFactory",
     "InMemoryArqitKeyStore",

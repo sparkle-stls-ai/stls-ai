@@ -40,10 +40,10 @@ caller's side instead of hidden inside the first call.
 Multi-server caching: SecureToolsetManager (below) implements exactly
 the pattern this docstring used to defer — a cache keyed by base_url, a
 lock against double handshakes, same shape as stls-a2a's
-SecureSessionManager — built on stls-core's shared KeySessionResolver
-for the base/arqit_py path (pqc still does its own handshake here, via
-perform_pqc_client_handshake, exactly like SecureSessionManager's own
-PQC branch bypasses the resolver).
+SecureSessionManager — built on stls-core's establish_session(), which
+handles resolve+handshake uniformly for every provider (pqc included;
+see issue #5, "Restrict stls-core's public API surface" — raw session
+key bytes no longer pass through this module at all).
 
 Importing google-adk: lazy, inside STLSMCPToolset.__new__
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -72,14 +72,9 @@ from typing import Any, Callable, Optional
 
 import httpx
 
-from stls_core import KeySessionResolver
+from stls_core import establish_session
 
-from .stls_mcp_transport import (
-    StlsHandshakeFailed,
-    perform_client_handshake,
-    perform_pqc_client_handshake,
-    stls_httpx_factory,
-)
+from .stls_mcp_transport import StlsHandshakeFailed, stls_httpx_factory
 from .stls_mcp_constants import MCP_STLS_PATH
 
 logger = logging.getLogger(__name__)
@@ -183,8 +178,9 @@ async def create_stls_mcp_toolset(
     *,
     client_id: str,
     provider: str = "pqc",
-    session_key: Optional[bytes] = None,
-    session_key_identifier: Optional[str] = None,
+    config_path: Optional[str] = None,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
     stls_path: str = MCP_STLS_PATH,
     handshake_path: Optional[str] = None,
     timeout: float = 30.0,
@@ -203,18 +199,18 @@ async def create_stls_mcp_toolset(
                          audit/logging, not a secret).
         provider:       "pqc" (default — no pre-shared key required,
                          X25519+ML-KEM-768 KEM handshake) or "base"/"arqit_py"
-                         (requires a session_key already resolved from your
-                         own KeySessionProvider, exactly like the server
-                         side — see stls_core.KeySessionProviderFactory).
-        session_key:    required if provider != "pqc". Ignored for "pqc"
-                         (the key originates from the KEM handshake itself).
-        session_key_identifier: optional kid resolved alongside session_key
-                         (e.g. from the same KeySessionProvider call) —
-                         passed through as a hint so the server resolves
-                         THIS exact key directly for arqit_py, instead of a
-                         plain "next available" lookup (see
-                         HandshakeRequest.kid's docstring in
-                         stls_core_handshake.py). Ignored for "pqc"/"base".
+                         — the session key is resolved internally via
+                         stls_core.establish_session(), never passed in by
+                         the caller (issue #5, "Restrict stls-core's public
+                         API surface": raw key material no longer flows
+                         through this function's own signature).
+        config_path:    arqit_py only — device config override for THIS
+                         call, forwarded to establish_session(). Ignored
+                         for "pqc"/"base".
+        host, port:     forwarded to establish_session() (base/arqit_py
+                         only — kept for interface parity with
+                         KeySessionProviderFactory.get_session_provider();
+                         ignored for "pqc").
         stls_path:      path of the encrypted endpoint (defaults to
                          stls_mcp_constants.MCP_STLS_PATH, "/mcp-stls").
         handshake_path: path of the handshake endpoint. Defaults to
@@ -247,30 +243,17 @@ async def create_stls_mcp_toolset(
     Raises:
         StlsHandshakeFailed: HTTP handshake failed or invalid proof of
                               possession.
-        ValueError:           provider != "pqc" but session_key not provided.
     """
-    if provider == "pqc":
-        session_id, transport = await perform_pqc_client_handshake(
-            base_url,
-            client_id=client_id,
-            handshake_path=handshake_path or "/stls/pqc/handshake",
-            httpx_client=handshake_httpx_client,
-        )
-    else:
-        if session_key is None:
-            raise ValueError(
-                f"provider={provider!r} requires an explicit session_key "
-                "(resolved from your own KeySessionProvider, like the server side). "
-                "Only 'pqc' derives the key from the handshake itself."
-            )
-        session_id, transport = await perform_client_handshake(
-            base_url,
-            session_key,
-            client_id=client_id,
-            kid=session_key_identifier,
-            handshake_path=handshake_path or "/stls/handshake",
-            httpx_client=handshake_httpx_client,
-        )
+    session_id, _kid, transport = await establish_session(
+        provider_name=provider,
+        base_url=base_url,
+        client_id=client_id,
+        config_path=config_path,
+        host=host,
+        port=port,
+        handshake_path=handshake_path,
+        httpx_client=handshake_httpx_client,
+    )
 
     logger.info(
         "create_stls_mcp_toolset: STLS session ready (provider=%s, session_id=%s) against %s%s",
@@ -330,10 +313,11 @@ class SecureToolsetManager:
                          audit/logging, not a secret) — forwarded to
                          create_stls_mcp_toolset() for every target.
         provider_name:  "pqc" (default — no pre-shared key required) |
-                         "base" | "arqit_py". For "base"/"arqit_py", the
-                         session key is resolved via stls-core's
-                         KeySessionResolver (shared with stls-a2a's
-                         SecureSessionManager) instead of a handshake.
+                         "base" | "arqit_py". The session key is resolved
+                         internally by create_stls_mcp_toolset() via
+                         stls-core's establish_session() for every
+                         provider — this class only adds the base_url
+                         cache/lock on top.
         arqit_client_configs: optional {base_url: config_path} map, used
                          only when provider_name="arqit_py" — lets one
                          process hold distinct Arqit device configs for
@@ -357,10 +341,7 @@ class SecureToolsetManager:
     ) -> None:
         self.client_id = client_id
         self._provider_name = provider_name.strip().lower()
-        self._resolver = KeySessionResolver(
-            provider_name=self._provider_name,
-            target_configs=arqit_client_configs,
-        )
+        self._arqit_client_configs = arqit_client_configs or {}
         self._handshake_httpx_client = handshake_httpx_client
         self._toolsets: dict[str, STLSMCPToolset] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -374,11 +355,12 @@ class SecureToolsetManager:
 
     async def get_toolset(self, base_url: str, **toolset_kwargs: Any) -> STLSMCPToolset:
         """
-        Returns the cached toolset for base_url, building it (handshake
-        or key resolution, then create_stls_mcp_toolset()) on first use.
-        Extra kwargs (stls_path, headers, tool_filter, ...) are passed
-        through to create_stls_mcp_toolset() on a cache miss only — they
-        have no effect on an already-cached toolset.
+        Returns the cached toolset for base_url, building it (via
+        create_stls_mcp_toolset(), which resolves+handshakes internally
+        for every provider) on first use. Extra kwargs (stls_path,
+        headers, tool_filter, ...) are passed through to
+        create_stls_mcp_toolset() on a cache miss only — they have no
+        effect on an already-cached toolset.
         """
         toolset = self._toolsets.get(base_url)
         if toolset is not None:
@@ -389,24 +371,14 @@ class SecureToolsetManager:
             if toolset is not None:
                 return toolset
 
-            if self._provider_name == "pqc":
-                toolset = await create_stls_mcp_toolset(
-                    base_url,
-                    client_id=self.client_id,
-                    provider="pqc",
-                    handshake_httpx_client=self._handshake_httpx_client,
-                    **toolset_kwargs,
-                )
-            else:
-                session_key_id, session_key_data = await self._resolver.resolve(base_url)
-                toolset = await create_stls_mcp_toolset(
-                    base_url,
-                    client_id=self.client_id,
-                    provider=self._provider_name,
-                    session_key=session_key_data,
-                    session_key_identifier=session_key_id,
-                    **toolset_kwargs,
-                )
+            toolset = await create_stls_mcp_toolset(
+                base_url,
+                client_id=self.client_id,
+                provider=self._provider_name,
+                config_path=self._arqit_client_configs.get(base_url),
+                handshake_httpx_client=self._handshake_httpx_client,
+                **toolset_kwargs,
+            )
 
             self._toolsets[base_url] = toolset
             return toolset

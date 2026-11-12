@@ -89,4 +89,4 @@ __all__ = [
     "STLS_EXTENSION_URI",
 ]
 
-__version__ = "0.1.2"
+__version__ = "0.1.4"

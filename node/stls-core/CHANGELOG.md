@@ -9,6 +9,40 @@ of which this package is the TypeScript port.
 
 ---
 
+## [0.1.5] — 2026-11-12
+
+Restricts the package's public API surface (issue #5): nothing exported
+from `stls-core` hands back raw session-key bytes anymore.
+
+### Added
+
+- **`getTransport()`** (`providers/session-establish.ts`) — the public
+  replacement for the old "`KeySessionResolver.resolve()` then feed
+  `kdata` into `performClientHandshake()`" two-step dance. Resolves the
+  session key (or, for `pqc`, runs the KEM handshake) AND performs the
+  handshake in one call, returning `{ sessionId, kid, transport }` —
+  the raw key never leaves the function. One call handles every
+  provider (`base`/`pqc`/`arqit_py`) uniformly.
+- **`performClientHandshake()`/`performPqcClientHandshake()`** moved
+  here from `node/stls-mcp`'s `transport.ts` (generic STLS-protocol
+  handshake, no MCP-specific knowledge) — `getTransport()` is built on
+  them. `node/stls-mcp` now re-exports both unchanged; its own public
+  API is unaffected.
+- **`KeySessionProviderPQC.deriveSessionKey()`/`destroyPrivateKeyMaterial()`**
+  (`providers/pqc.ts`) — the ephemeral X25519/ML-KEM-768 KEM private key
+  bytes, previously `public` fields read directly by the client
+  handshake code, are now `private`; these two methods are the only way
+  to use them from outside the class.
+
+### Removed
+
+- **`KeySessionResolver`** is no longer exported from the package
+  (`providers/index.ts`/`index.ts`) — `resolve()` handed back raw key
+  material, exactly what this issue closes off. The class itself is
+  unchanged and still used internally, by `getTransport()`.
+
+---
+
 ## [0.1.4] — 2026-11-11
 
 Node-side counterpart of `python/stls-core` 0.1.4's Arqit sidecar

@@ -37,9 +37,9 @@ export type { ArqitSidecarOptions } from "./arqit-sidecar.js";
 export { KeyProviderFactory, KeySessionProviderFactory } from "./factory.js";
 export type { GetSessionProviderOptions } from "./factory.js";
 
-export { KeySessionResolver } from "./session-resolver.js";
-export type {
-  KeySessionResolverOptions,
-  ResolveOptions,
-  ResolvedKeyMaterial,
-} from "./session-resolver.js";
+// KeySessionResolver itself is intentionally NOT exported — resolve()
+// hands back raw key material, exactly what issue #5 ("Restrict
+// stls-core's public API surface") closes off. getTransport() below is
+// the public replacement; it uses KeySessionResolver internally.
+export { getTransport } from "./session-establish.js";
+export type { GetTransportOptions, GetTransportResult } from "./session-establish.js";

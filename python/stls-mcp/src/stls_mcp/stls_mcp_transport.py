@@ -30,98 +30,23 @@ from typing import Any
 
 import httpx
 
-from stls_core import HEADER_SESSION_ID, HandshakeRequest, verify_handshake_proof
+from stls_core import HEADER_SESSION_ID
 from stls_core.stls_core_crypto import StlsTransport
-from stls_core.stls_core_handshake import HandshakeError, HandshakeResponse
+
+# perform_client_handshake(), perform_pqc_client_handshake() and
+# StlsHandshakeFailed moved to stls-core (stls_core_client_handshake.py)
+# as part of issue #5 ("Restrict stls-core's public API surface") —
+# establish_session() there needs to own resolve+handshake end to end so
+# it never has to hand raw key material back to its caller. Re-exported
+# here unchanged: stls-mcp's own public API (names, signatures, README
+# samples) is unaffected.
+from stls_core import (  # noqa: F401 — re-export
+    StlsHandshakeFailed,
+    perform_client_handshake,
+    perform_pqc_client_handshake,
+)
 
 logger = logging.getLogger(__name__)
-
-
-class StlsHandshakeFailed(Exception):
-    """Raised if the client-side handshake fails or the proof is invalid."""
-
-
-async def perform_client_handshake(
-    base_url: str,
-    session_key: bytes,
-    *,
-    client_id: str,
-    kid: str | None = None,
-    handshake_path: str = "/stls/handshake",
-    httpx_client: httpx.AsyncClient | None = None,
-) -> tuple[str, StlsTransport]:
-    """
-    Performs the STLS handshake against the server and returns a ready
-    session.
-
-    Args:
-        base_url:       base URL of the server (e.g. "https://my-server.example.com").
-        session_key:     session key the client already possesses (resolved
-                        from its own KeySessionProvider — base or arqit_py —
-                        exactly like the server side). Never transmitted:
-                        the handshake only proves mutual possession via an
-                        HMAC proof.
-        client_id:       client identifier, passed in the handshake request
-                        (for server-side audit/logging purposes only).
-        kid:             optional kid the caller already resolved alongside
-                        session_key (e.g. via KeySessionProvider.getSessionKeyIdentifier()
-                        for arqit_py) — passed as a hint so the server
-                        resolves THIS exact key directly instead of a plain
-                        "next available" lookup, which is not safe once more
-                        than one handshake can be in flight concurrently
-                        against the same long-running server-side provider
-                        instance (see HandshakeRequest.kid's own docstring
-                        in stls_core_handshake.py). Leave unset for base
-                        (nothing to disambiguate) or when unavailable.
-        handshake_path:  path of the handshake endpoint (default "/stls/handshake").
-        httpx_client:    optional httpx client to reuse; if None, a
-                        temporary one is created just for the handshake.
-
-    Returns:
-        (session_id, transport): session_id to use in the
-        X-STLS-Session-ID header of every subsequent request, and an
-        StlsTransport already ready to encrypt/decrypt with that session.
-
-    Raises:
-        StlsHandshakeFailed: if the HTTP handshake fails or the proof
-                             returned by the server doesn't match the
-                             session_key held by the client (meaning the
-                             server doesn't hold the same key — possible
-                             attack or misconfiguration).
-    """
-    request = HandshakeRequest.generate(client_id=client_id, kid=kid)
-    url = base_url.rstrip("/") + handshake_path
-
-    owns_client = httpx_client is None
-    client = httpx_client or httpx.AsyncClient()
-    try:
-        resp = await client.post(url, json=request.model_dump())
-    except httpx.HTTPError as exc:
-        raise StlsHandshakeFailed(f"HTTP handshake failed against {url}: {exc}") from exc
-    finally:
-        if owns_client:
-            await client.aclose()
-
-    if resp.status_code != 200:
-        raise StlsHandshakeFailed(
-            f"Handshake rejected by server (status={resp.status_code}): {resp.text}"
-        )
-
-    try:
-        response = HandshakeResponse.model_validate(resp.json())
-    except Exception as exc:
-        raise StlsHandshakeFailed(f"Invalid handshake response: {exc}") from exc
-
-    if not verify_handshake_proof(session_key=session_key, nonce=request.nonce, response=response):
-        raise StlsHandshakeFailed(
-            "Invalid proof of possession — the server does not appear to hold "
-            "the same session key as the client. Handshake rejected for safety."
-        )
-
-    logger.info("STLS-MCP handshake completed: session_id=%s", response.session_id)
-
-    transport = StlsTransport(session_key=session_key, session_id=response.session_id)
-    return response.session_id, transport
 
 
 class StlsHttpxTransport(httpx.AsyncBaseTransport):
@@ -215,131 +140,6 @@ class StlsHttpxTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._inner.aclose()
-
-
-async def perform_pqc_client_handshake(
-    base_url: str,
-    *,
-    client_id: str,
-    handshake_path: str = "/stls/pqc/handshake",
-    httpx_client: httpx.AsyncClient | None = None,
-) -> tuple[str, StlsTransport]:
-    """
-    Performs the PQC STLS handshake against the server (X25519 + ML-KEM-768).
-
-    Unlike perform_client_handshake(), this doesn't require a
-    pre-shared session_key: it generates the keypairs client-side, sends
-    them to the server, and derives the session_key locally via the KEM
-    exchange (X25519 decap + ML-KEM). Requires liboqs-python installed
-    (uv pip install -e '.[pqc]').
-
-    Flow:
-        1. Generate X25519 + ML-KEM-768 keypairs (client-side).
-        2. POST /stls/pqc/handshake with the public keys.
-        3. Receive server_x25519_pub + mlkem_ciphertext + proof.
-        4. Derive session_key via HKDF(X25519_secret ‖ ML-KEM_secret, salt=nonce).
-        5. Verify proof = HMAC(session_key, nonce) — proof of possession.
-        6. Zero out the client's private keys (best-effort).
-
-    Args:
-        base_url:       base URL of the server (e.g. "https://my-server.example.com").
-        client_id:      client identifier (server-side audit/logging).
-        handshake_path: path of the PQC endpoint (default "/stls/pqc/handshake").
-        httpx_client:   optional httpx client to reuse; if None, a
-                        temporary one is created.
-
-    Returns:
-        (session_id, transport): session_id to use in X-STLS-Session-ID,
-        an StlsTransport already ready to encrypt/decrypt.
-
-    Raises:
-        StlsHandshakeFailed: if the HTTP handshake fails, the proof is
-                             invalid, or liboqs is not installed/compatible.
-    """
-    try:
-        from stls_core import (
-            PQCHandshakeRequest,
-            PQCHandshakeResponse,
-            KeyProviderClientPQC,
-            derive_session_key_client,
-            verify_pqc_handshake_proof,
-        )
-    except ImportError as exc:
-        raise StlsHandshakeFailed(
-            f"perform_pqc_client_handshake requires liboqs-python: {exc}"
-        ) from exc
-
-    # 1. Generate X25519 + ML-KEM-768 keypairs client-side
-    pqc_client = KeyProviderClientPQC()
-    try:
-        pqc_client.start()
-    except Exception as exc:
-        raise StlsHandshakeFailed(
-            f"PQC keypair generation failed — is liboqs installed and compatible? {exc}"
-        ) from exc
-
-    # 2. Prepare the request with the client's public keys
-    request = PQCHandshakeRequest.generate(
-        client_id,
-        pqc_client.x25519_public_key_bytes,
-        pqc_client.mlkem_public_key_bytes,
-    )
-    nonce = request.nonce
-
-    # 3. POST to the server
-    url = base_url.rstrip("/") + handshake_path
-    owns_client = httpx_client is None
-    client = httpx_client or httpx.AsyncClient()
-    try:
-        resp = await client.post(url, json=request.model_dump())
-    except httpx.HTTPError as exc:
-        raise StlsHandshakeFailed(
-            f"PQC HTTP handshake failed against {url}: {exc}"
-        ) from exc
-    finally:
-        if owns_client:
-            await client.aclose()
-
-    if resp.status_code != 200:
-        raise StlsHandshakeFailed(
-            f"PQC handshake rejected by server "
-            f"(status={resp.status_code}): {resp.text}"
-        )
-
-    try:
-        response = PQCHandshakeResponse.model_validate(resp.json())
-    except Exception as exc:
-        raise StlsHandshakeFailed(f"Invalid PQCHandshake response: {exc}") from exc
-
-    # 4. Derive session_key via KEM (X25519 + ML-KEM decap, then HKDF)
-    session = pqc_client.createProviderSession()
-    try:
-        session_key = derive_session_key_client(
-            session.x25519_private_key_bytes,
-            session.mlkem_secret_key_bytes,
-            response,
-            nonce,
-        )
-    except Exception as exc:
-        raise StlsHandshakeFailed(f"PQC session_key derivation failed: {exc}") from exc
-    finally:
-        pqc_client.stop()  # zero out private keys (best-effort)
-
-    # 5. Verify the server's proof — mutual proof of possession
-    if not verify_pqc_handshake_proof(session_key, nonce, response):
-        raise StlsHandshakeFailed(
-            "Invalid PQC proof of possession — the server did not derive "
-            "the same session_key. Possible attack or misconfiguration. "
-            "Handshake rejected for safety."
-        )
-
-    logger.info(
-        "PQC STLS-MCP handshake completed: session_id=%s kid=%s",
-        response.session_id, response.kid,
-    )
-
-    transport = StlsTransport(session_key=session_key, session_id=response.session_id)
-    return response.session_id, transport
 
 
 def stls_httpx_factory(session_id: str, transport: StlsTransport, *, stls_path: str = "/mcp-stls"):

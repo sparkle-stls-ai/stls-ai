@@ -7,6 +7,30 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.4] — 2026-11-12
+
+Tracks [`stls_core`](../stls-core/CHANGELOG.md) 0.1.5 (issue #5,
+"Restrict stls-core's public API surface").
+
+### Changed
+
+- `create_stls_mcp_toolset()` no longer takes `session_key`/
+  `session_key_identifier` — the session key is resolved internally via
+  `stls_core.establish_session()` for every provider (`pqc` included,
+  collapsing what used to be two separate code paths into one). New
+  `config_path` (arqit_py only) and `host`/`port` passthrough params
+  replace them.
+- `SecureToolsetManager` no longer holds a `KeySessionResolver`; it
+  stores its own `{base_url: config_path}` map and forwards it to
+  `create_stls_mcp_toolset()`.
+- `stls_mcp_transport.py`'s `perform_client_handshake()`/
+  `perform_pqc_client_handshake()`/`StlsHandshakeFailed` moved to
+  `stls_core` (generic STLS-protocol handshake, no MCP-specific
+  knowledge) and are now re-exported here unchanged — same names, same
+  signatures, same behavior.
+
+---
+
 ## [0.1.3] — 2026-11-10
 
 Packaging-only release: no functional changes. Version bump to enable

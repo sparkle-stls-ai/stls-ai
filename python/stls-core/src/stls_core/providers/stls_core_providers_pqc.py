@@ -204,17 +204,43 @@ class KeySessionProviderPQC(KeySessionProvider):
         """Evicts the kid from the in-memory PQCKeyStore (single-process, safe)."""
         self._key_store.remove(session_key_identifier)
 
-    # ── Client-only properties ─────────────────────────────────────────────────
+    # ── Client-only: KEM derivation ──────────────────────────────────────────
+    #
+    # x25519_private_key_bytes/mlkem_secret_key_bytes used to be public
+    # properties, read directly by stls-mcp's/stls-a2a's client handshake
+    # code (issue #5, "Restrict stls-core's public API surface" — this is
+    # ephemeral KEM private key material, never meant to leave this class).
+    # derive_client_key() is now the only way to use them from outside.
 
-    @property
-    def x25519_private_key_bytes(self) -> Optional[bytes]:
-        """Client's X25519 private key — used in x25519_exchange()."""
-        return self._x25519_private_key_bytes
+    def derive_client_key(
+        self,
+        server_x25519_public_key_bytes: bytes,
+        mlkem_ciphertext: bytes,
+        nonce: bytes,
+    ) -> bytes:
+        """
+        Derives the shared session key from this CLIENT session's own
+        ephemeral KEM private material and the server's public
+        contribution (already-decoded raw bytes from the handshake
+        response, not the response DTO itself — callers already have it
+        decoded, and this keeps this module decoupled from the wire-format
+        modules' types).
+        """
+        if self._x25519_private_key_bytes is None or self._mlkem_secret_key_bytes is None:
+            raise RuntimeError(
+                "[KeySessionProviderPQC] derive_client_key() requires a CLIENT "
+                "session with KEM private material (server session?)"
+            )
+        x25519_secret = x25519_exchange(self._x25519_private_key_bytes, server_x25519_public_key_bytes)
+        mlkem_secret = mlkem_decap(self._mlkem_secret_key_bytes, mlkem_ciphertext)
+        return derive_hybrid_key(x25519_secret, mlkem_secret, nonce)
 
-    @property
-    def mlkem_secret_key_bytes(self) -> Optional[bytes]:
-        """Client's ML-KEM-768 secret key — used in mlkem_decap()."""
-        return self._mlkem_secret_key_bytes
+    def destroy_private_key_material(self) -> None:
+        """Best-effort zeroing of this session's own KEM private key material."""
+        if self._x25519_private_key_bytes:
+            self._x25519_private_key_bytes = b"\x00" * len(self._x25519_private_key_bytes)
+        if self._mlkem_secret_key_bytes:
+            self._mlkem_secret_key_bytes = b"\x00" * len(self._mlkem_secret_key_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -263,14 +289,7 @@ class KeyProviderClientPQC(KeyProviderClient):
     def stop(self) -> None:
         """Zeroes out the private keys in memory (best-effort in Python)."""
         if self._session is not None:
-            if self._session._x25519_private_key_bytes:
-                self._session._x25519_private_key_bytes = (
-                    b"\x00" * len(self._session._x25519_private_key_bytes)
-                )
-            if self._session._mlkem_secret_key_bytes:
-                self._session._mlkem_secret_key_bytes = (
-                    b"\x00" * len(self._session._mlkem_secret_key_bytes)
-                )
+            self._session.destroy_private_key_material()
         logger.debug("[KeyProviderClientPQC] stop() — private keys zeroed")
 
     @property

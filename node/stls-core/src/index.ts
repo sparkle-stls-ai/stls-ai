@@ -10,7 +10,8 @@ export * from "./crypto.js";
 export * from "./session.js";
 export * from "./handshake.js";
 export * from "./handshake-pqc.js";
+export * from "./client-handshake.js";
 export * from "./providers/index.js";
 export * from "./auth/index.js";
 
-export const STLS_CORE_NODE_VERSION = "0.1.1";
+export const STLS_CORE_NODE_VERSION = "0.1.5";

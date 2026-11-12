@@ -80,7 +80,7 @@ cd ../stls-mcp  && uv pip install -e ".[adk,dev]" --python "$VENV/bin/python"
 #    repeatedly in practice — it's a uv dependency-resolution quirk,
 #    not a one-time fluke), which breaks every script needing
 #    anything added to stls-core after its last published version
-#    (e.g. KeySessionResolver). Re-running step 1 after 2 restores the
+#    (e.g. establish_session()). Re-running step 1 after 2 restores the
 #    editable link:
 cd ../stls-core
 uv pip install -e ".[arqit_py,dev]" \
@@ -101,7 +101,7 @@ import stls_core, stls_a2a, stls_mcp
 print(stls_core.__file__)   # must be .../python/stls-core/src/stls_core/__init__.py
 print(stls_a2a.__file__)    # must be .../python/stls-a2a/src/stls_a2a/__init__.py
 print(stls_mcp.__file__)    # must be .../python/stls-mcp/src/stls_mcp/__init__.py
-print('KeySessionResolver' in dir(stls_core))   # must be True
+print('establish_session' in dir(stls_core))   # must be True
 import uk.arqit.device.common   # must not raise
 import google.adk               # must not raise — needed by client_agent_multi_server.py / 11_'s ADK-based client
 "

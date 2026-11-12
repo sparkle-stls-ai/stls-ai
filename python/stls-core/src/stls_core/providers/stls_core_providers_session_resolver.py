@@ -14,6 +14,13 @@ higher-level object (an A2A transport adapter, an MCP toolset) — each
 protocol layer keeps caching ITS OWN derived object, keyed the same
 way, calling resolve() only on its own cache miss. This mirrors exactly
 what SecureSessionManager already did before this refactor.
+
+NOT exported from the `stls_core` package's public surface anymore —
+resolve() hands back raw key material, exactly what issue #5
+("Restrict stls-core's public API surface") closes off. This class is
+now an internal implementation detail of stls_core_session_establish.py
+(establish_session()/resolve_transport()), which owns the per-provider
+resolver instances and never lets the raw bytes escape.
 """
 
 from __future__ import annotations
@@ -64,12 +71,19 @@ class KeySessionResolver:
         *,
         host: Optional[str] = None,
         port: Optional[int] = None,
+        config_path: Optional[str] = None,
     ) -> tuple[str, bytes]:
         """
         Returns (session_key_identifier, session_key_data) for
         target_key, under a per-target_key lock so concurrent callers
         resolving the SAME target don't race each other into duplicate
         provider instances.
+
+        config_path: optional override for THIS call, taking precedence
+        over target_configs[target_key] — lets a stateless caller (e.g.
+        establish_session()/resolve_transport()) supply a single
+        resolved path per call instead of pre-building a whole
+        target_key map at construction time.
 
         getSessionKeyIdentifier()/getSessionKeyData() are declared
         `async def` on KeySessionProvider, so they're awaited directly
@@ -80,9 +94,9 @@ class KeySessionResolver:
         async with self._lock_for(target_key):
             options: dict[str, str] = {}
             if self._provider_name == "arqit_py":
-                config_path = self._target_configs.get(target_key)
-                if config_path:
-                    options["config_path"] = config_path
+                resolved_config_path = config_path or self._target_configs.get(target_key)
+                if resolved_config_path:
+                    options["config_path"] = resolved_config_path
 
             provider: KeySessionProvider = KeySessionProviderFactory().get_session_provider(
                 session_type=KeySessionProvider.KeySessionProviderType.CLIENT,

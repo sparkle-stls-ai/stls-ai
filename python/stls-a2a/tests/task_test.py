@@ -1140,7 +1140,7 @@ async def task_test():
         session_key_identifier = _pqc_adapter.session_id
         # session_key_data: raw key kept in SecureA2ATransport
         # (used by call_agent to build new SecureA2ATransportAdapter instances)
-        session_key_data = _pqc_adapter.transport.session_key
+        session_key_data = _pqc_adapter.transport.export_session_key()
         logger.info(
             "PQC handshake completed: session_id=%s key_len=%d",
             session_key_identifier, len(session_key_data),

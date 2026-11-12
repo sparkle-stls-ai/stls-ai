@@ -124,34 +124,14 @@ async def build_toolset(*, secure: bool, base_url: str) -> MCPToolset:
     provider = os.getenv("KEY_PROVIDER_NAME", "pqc").strip().lower()
     client_id = os.getenv("STLS_CLIENT_ID", "vault-agent-test")
 
-    session_key = None
-    if provider != "pqc":
-        # base/arqit_py: the session_key must be resolved from its own
-        # KeySessionProvider BEFORE the handshake — exactly like
-        # vault_server.py does to build its own SERVER provider. It must
-        # be the same provider as the server's, or the handshake will
-        # fail on the proof-of-possession (not a silent mismatch).
-        from stls_core import KeySessionProviderFactory
-        from stls_core.providers.stls_core_providers_base import KeySessionProvider
-
-        key_session_provider = KeySessionProviderFactory().get_session_provider(
-            session_type=KeySessionProvider.KeySessionProviderType.CLIENT,
-            host="localhost",
-            port=int(os.getenv("KEY_SESSION_PORT", "8091")),
-        )
-        # Do NOT use KeySessionProviderFactory.resolve_if_awaitable() here:
-        # it calls asyncio.run() internally, meant for synchronous callers
-        # with no event loop already running (e.g. non-async scripts).
-        # build_toolset() is already async, running inside this script's
-        # asyncio.run(main()) — a second, nested asyncio.run() raises a
-        # RuntimeError ("cannot be called from a running event loop").
-        # getSessionKeyIdentifier()/getSessionKeyData() are always
-        # coroutines by ABC contract (KeySessionProvider in
-        # stls_core_providers_base.py), so they're awaited directly, no
-        # need for the helper.
-        kid = await key_session_provider.getSessionKeyIdentifier()
-        session_key = await key_session_provider.getSessionKeyData(kid)
-
+    # base/arqit_py: the session key is now resolved AND handshaked
+    # internally by create_stls_mcp_toolset() (via stls_core's
+    # establish_session() — issue #5, "Restrict stls-core's public API
+    # surface"), using the same provider as the server's (or the
+    # handshake will fail on the proof-of-possession, not a silent
+    # mismatch). host/port are forwarded for interface parity with the
+    # KeySessionProviderFactory this script used to call directly;
+    # ignored for "pqc".
     logger.info(
         "ENCRYPTED toolset (provider=%s) against %s%s", provider, base_url, MCP_STLS_PATH
     )
@@ -159,7 +139,8 @@ async def build_toolset(*, secure: bool, base_url: str) -> MCPToolset:
         base_url,
         client_id=client_id,
         provider=provider,
-        session_key=session_key,
+        host="localhost",
+        port=int(os.getenv("KEY_SESSION_PORT", "8091")),
         stls_path=MCP_STLS_PATH,
         headers={"X-API-Key": VAULT_API_KEY} if VAULT_API_KEY else None,
     )

@@ -49,6 +49,18 @@
  *   ARQIT_PY_CLIENT_CONFIG_1=.../aq-sf-mcp-client-ms-1.json \
  *   ARQIT_PY_CLIENT_CONFIG_2=.../aq-sf-mcp-client-ms-2.json \
  *   npx tsx tests/interop/key-session-resolver-multi-config.live.ts
+ *
+ * NOTE (issue #5, "Restrict stls-core's public API surface"):
+ * KeySessionResolver is no longer exported from the package's public
+ * barrel (providers/index.ts/index.ts) — getTransport() is the public
+ * replacement, used internally by every real caller now. This test
+ * deliberately keeps importing the class via its internal relative path
+ * (below) rather than from "stls-core": it's white-box coverage of the
+ * configPath-override + per-target-lock mechanism itself (the thing
+ * getTransport() relies on internally), which needs the raw kid/kdata
+ * assertions below to actually prove two distinct device identities
+ * were resolved — that's legitimate for the package's own test suite,
+ * unlike handing kdata back to an external caller.
  */
 import assert from "node:assert/strict";
 import { KeySessionResolver } from "../../src/providers/session-resolver.js";

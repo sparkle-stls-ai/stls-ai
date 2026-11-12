@@ -349,7 +349,7 @@ async def _ensure_pqc_session(session_id: str, target_url: str, session: KeySess
             ) from exc
 
         session.key_identifier = adapter.session_id
-        session.key_data       = adapter.transport.session_key
+        session.key_data       = adapter.transport.export_session_key()
         await _cache.save(session_id, session)
 
         logger.info(

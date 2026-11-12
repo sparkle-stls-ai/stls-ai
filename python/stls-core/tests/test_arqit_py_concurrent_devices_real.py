@@ -10,7 +10,10 @@ sequentially — in ONE Python process, via asyncio.gather.
 Why this exists
 ~~~~~~~~~~~~~~~~
 stls_core.providers.stls_core_providers_session_resolver.KeySessionResolver
-(and the stls-a2a/stls-mcp managers built on it) already support one
+(internal — not part of stls_core's public API since issue #5,
+"Restrict stls-core's public API surface"; used via
+establish_session()/resolve_transport() now, and the stls-a2a/stls-mcp
+managers built on them) already support one
 process holding several arqit_py device configs via
 options["config_path"] — but every real validation so far (see
 samples/client/10_client_ms/README.md, samples/client/11_client_mcp_ms/README.md)

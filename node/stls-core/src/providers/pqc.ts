@@ -65,8 +65,8 @@ export class KeySessionProviderPQC implements KeySessionProvider {
   constructor(
     private readonly sessionType: KeySessionProviderType,
     private readonly keyStore: PQCKeyStore,
-    public readonly x25519PrivateKeyBytes: Buffer | null = null,
-    public mlkemSecretKeyBytes: Buffer | null = null,
+    private readonly x25519PrivateKeyBytes: Buffer | null = null,
+    private mlkemSecretKeyBytes: Buffer | null = null,
   ) {}
 
   getSessionType(): KeySessionProviderType {
@@ -103,6 +103,35 @@ export class KeySessionProviderPQC implements KeySessionProvider {
   getPeerIdentity(): string | null {
     return null;
   }
+
+  /**
+   * Derives the shared session key from this CLIENT session's own
+   * ephemeral KEM private material (never exposed outside this class)
+   * and the server's public contribution from its handshake response.
+   * Takes already-decoded raw bytes (not the PQCHandshakeResponse DTO
+   * itself) so this module has no dependency on handshake-pqc.ts's wire
+   * types — that file already depends on this one for the primitives,
+   * and a two-way import would be circular.
+   */
+  deriveSessionKey(serverX25519PublicKeyBytes: Buffer, mlkemCiphertext: Buffer, nonce: Buffer): Buffer {
+    if (this.x25519PrivateKeyBytes === null || this.mlkemSecretKeyBytes === null) {
+      throw new Error(
+        "[KeySessionProviderPQC] deriveSessionKey() requires a CLIENT session with KEM private material (server session?)",
+      );
+    }
+    const x25519Secret = x25519Exchange(this.x25519PrivateKeyBytes, serverX25519PublicKeyBytes);
+    const mlkemSecret = mlkemDecap(this.mlkemSecretKeyBytes, mlkemCiphertext);
+    return deriveHybridKey(x25519Secret, mlkemSecret, nonce);
+  }
+
+  /** Best-effort zeroing of this session's own KEM private key material. */
+  destroyPrivateKeyMaterial(): void {
+    this.x25519PrivateKeyBytes?.fill(0);
+    if (this.mlkemSecretKeyBytes) {
+      this.mlkemSecretKeyBytes.fill(0);
+      this.mlkemSecretKeyBytes = null;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -138,14 +167,7 @@ export class KeyProviderClientPQC implements KeyProviderClient {
   }
 
   stop(): void {
-    // Best-effort zeroing of private keys in memory.
-    if (this.session?.x25519PrivateKeyBytes) {
-      this.session.x25519PrivateKeyBytes.fill(0);
-    }
-    if (this.session?.mlkemSecretKeyBytes) {
-      this.session.mlkemSecretKeyBytes.fill(0);
-      this.session.mlkemSecretKeyBytes = null;
-    }
+    this.session?.destroyPrivateKeyMaterial();
   }
 
   get x25519PublicKey(): Buffer {

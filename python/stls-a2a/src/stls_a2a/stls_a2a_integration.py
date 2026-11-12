@@ -31,7 +31,7 @@ from .stls_a2a_adapters import (
     a2a_to_agent_request,
     agent_response_to_a2a
 )
-from stls_core import KeySessionProvider, SessionCacheBase, SessionCacheFactory
+from stls_core import KeySessionProvider, SessionCacheBase, SessionCacheFactory, StlsTransport
 from .stls_a2a_task import task_store, TaskState
 
 
@@ -292,7 +292,13 @@ class SecureA2ATransportAdapter:
 
     def __init__(self, session_key: bytes, session_id: str, base_url: str):
         """
-        Initializes the secure transport adapter
+        Initializes the secure transport adapter from a raw session key.
+
+        Low-level constructor: only for callers that legitimately
+        derive/hold the raw key themselves (e.g. create_pqc_a2a_transport()).
+        Callers going through stls-core's resolve_transport() —
+        which deliberately never hands back raw key material — should
+        use from_transport() instead.
 
         Args:
             session_key: Shared session key for encryption
@@ -300,6 +306,22 @@ class SecureA2ATransportAdapter:
             base_url: Base URL of the remote A2A server
         """
         self.transport = SecureA2ATransport(session_key=session_key, session_id=session_id)
+        self._init_routing(session_id, base_url)
+
+    @classmethod
+    def from_transport(cls, transport: StlsTransport, session_id: str, base_url: str) -> "SecureA2ATransportAdapter":
+        """
+        Builds a SecureA2ATransportAdapter from an already-established
+        StlsTransport (e.g. from stls_core.resolve_transport()) — no raw
+        key material involved at all on this path.
+        """
+        self = cls.__new__(cls)
+        self.transport = SecureA2ATransport.from_transport(transport, session_id)
+        self._init_routing(session_id, base_url)
+        return self
+
+    def _init_routing(self, session_id: str, base_url: str) -> None:
+        """Shared setup between __init__ and from_transport()."""
         self.base_url = base_url.rstrip('/')
         self.session_id = str(session_id)
         self.client = httpx.AsyncClient(timeout=30.0)
@@ -307,7 +329,7 @@ class SecureA2ATransportAdapter:
         _b = self.base_url
         self._secure_url = _b if _b.endswith("/secure-a2a") else f"{_b}/secure-a2a"
         self._stream_url  = (f"{_b}/stream" if _b.endswith("/secure-a2a") else f"{_b}/secure-a2a/stream")
-    
+
     def _encrypt_message(self, message: Dict[str, Any], effective_method: str) -> Dict[str, Any]:
         """
         Internal helper: builds and encrypts an A2AMessage.
@@ -793,11 +815,7 @@ class SecureA2AHTTPMiddleware:
         cached = self.sessions.get(session_id)
         if cached is not None:
             logger.debug("Reusing cached transport for session_id=%s", session_id)
-            wrapper = SecureA2ATransport.__new__(SecureA2ATransport)
-            wrapper.session_id = session_id
-            wrapper.session_key = None  # not kept on the cache side, only in the transport
-            wrapper._transport = cached
-            return wrapper
+            return SecureA2ATransport.from_transport(cached, session_id)
 
         logger.info("Creating secure transport for session_id=%s", session_id)
 
@@ -909,7 +927,6 @@ class SecureA2AHTTPMiddleware:
         logger.debug(f"Transport obtained for session {session_id}")
         logger.debug(f"Encrypted data received: {encrypted_data}")
         logger.debug(f"Transport session ID: {transport.session_id}")
-        logger.debug(f"Transport session key: {transport.session_key}")
 
         # Decrypts the message
         decrypted_msg = transport.decrypt_message(encrypted_data)
@@ -1697,12 +1714,13 @@ async def create_pqc_a2a_transport(
         RuntimeError: If the handshake fails, the proof is invalid,
                       or liboqs isn't installed/compatible.
     """
+    import base64
+
     try:
         from stls_core import (
             PQCHandshakeRequest,
             PQCHandshakeResponse,
             KeyProviderClientPQC,
-            derive_session_key_client,
             verify_pqc_handshake_proof,
         )
     except ImportError as exc:
@@ -1750,14 +1768,15 @@ async def create_pqc_a2a_transport(
     except Exception as exc:
         raise RuntimeError(f"Invalid PQC handshake response: {exc}") from exc
 
-    # 3. Derives session_key via KEM on the client side
+    # 3. Derives session_key via KEM on the client side — entirely inside
+    #    KeySessionProviderPQC, never touching its private key attributes
+    #    directly (issue #5, "Restrict stls-core's public API surface").
     session = pqc_client.createProviderSession()
     try:
-        session_key = derive_session_key_client(
-            session.x25519_private_key_bytes,
-            session.mlkem_secret_key_bytes,
-            response,
-            nonce,
+        session_key = session.derive_client_key(
+            base64.b64decode(response.server_x25519_public_key),
+            base64.b64decode(response.mlkem_ciphertext),
+            base64.b64decode(nonce),
         )
     except Exception as exc:
         raise RuntimeError(f"PQC session_key derivation failed: {exc}") from exc

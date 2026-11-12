@@ -54,6 +54,12 @@ from .stls_core_handshake_pqc import (
     perform_pqc_handshake,
     verify_pqc_handshake_proof,
 )
+from .stls_core_client_handshake import (
+    StlsHandshakeFailed,
+    perform_client_handshake,
+    perform_pqc_client_handshake,
+)
+from .stls_core_session_establish import establish_session, resolve_transport
 from .providers import (
     BlockableResult,
     KeyProvider,
@@ -66,7 +72,6 @@ from .providers import (
     KeySessionProvider,
     KeySessionProviderBase,
     KeySessionProviderFactory,
-    KeySessionResolver,
     # PQC
     KeyProviderPQC,
     KeyProviderClientPQC,
@@ -97,7 +102,7 @@ from .auth import (
     hash_key,
 )
 
-__version__ = "0.1.2"
+__version__ = "0.1.5"
 
 __all__ = [
     # constants
@@ -145,6 +150,13 @@ __all__ = [
     "perform_pqc_handshake",
     "derive_session_key_client",
     "verify_pqc_handshake_proof",
+    # client handshake
+    "StlsHandshakeFailed",
+    "perform_client_handshake",
+    "perform_pqc_client_handshake",
+    # session establishment (issue #5)
+    "establish_session",
+    "resolve_transport",
     # providers
     "BlockableResult",
     "KeyProvider",
@@ -157,7 +169,6 @@ __all__ = [
     "KeySessionProviderBase",
     "KeyProviderFactory",
     "KeySessionProviderFactory",
-    "KeySessionResolver",
     # PQC providers
     "KeyProviderPQC",
     "KeyProviderClientPQC",

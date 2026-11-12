@@ -300,7 +300,7 @@ second back-to-back green run as proof, space retries out instead.
 fully serial process-wide by design — a throughput cost, not a
 correctness one, and unavoidable until Arqit fixes their SDK's own
 locking. Callers (`SecureSessionManager`, `SecureToolsetManager`, the
-Node `KeySessionResolver`, or raw scripts) no longer need to avoid
+Node `getTransport()`, or raw scripts) no longer need to avoid
 parallelizing `arqit_py` calls themselves; the provider now does that
 safely on their behalf. The Node sidecar needed no code change of its
 own — it's a Python process running this same module under the hood,
