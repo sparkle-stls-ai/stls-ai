@@ -84,8 +84,11 @@ Everything under [src/stls_mcp](./src/stls_mcp):
 - `stls_mcp_constants.py` — paths (`/mcp`, `/mcp-stls`), MCP-specific headers, discovery keys
 - `stls_mcp_server.py` — `create_secure_mcp_app()`, the server-side entry point
 - `stls_mcp_middleware.py` — `StlsMcpMiddleware`, the encrypted ASGI proxy
-- `stls_mcp_transport.py` — client side: `perform_client_handshake()` (base/arqit_py),
-  `perform_pqc_client_handshake()` (PQC), `StlsHttpxTransport`, `stls_httpx_factory()`
+- `stls_mcp_transport.py` — client side: `StlsHttpxTransport`, `stls_httpx_factory()`;
+  re-exports `perform_client_handshake()` (base/arqit_py) and
+  `perform_pqc_client_handshake()` (PQC) from `stls_core`, where they now
+  live (see its CHANGELOG, issue #5) — this package's own public API is
+  unchanged
 - `stls_mcp_auth.py` — API key protection (`AuthConfig`, `wrap_with_auth()`),
   applied at the ASGI transport level in front of `/mcp` and `/mcp-stls`
 - `stls_mcp_secure_toolset.py` — client-side integration with Google ADK
@@ -374,7 +377,7 @@ from stls_mcp import create_stls_mcp_toolset
 toolset = await create_stls_mcp_toolset(
     BASE_URL,
     client_id="my-agent",
-    provider="pqc",                              # or "base"/"arqit_py" with session_key=
+    provider="pqc",                              # or "base"/"arqit_py" — session key resolved internally
     headers={"X-API-Key": API_KEY} if API_KEY else None,
 )
 

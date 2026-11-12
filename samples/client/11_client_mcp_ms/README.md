@@ -3,9 +3,10 @@
 The MCP analogue of
 [`samples/client/10_client_ms/client_agent_multi_server.py`](../10_client_ms/README.md):
 validates `stls_mcp.SecureToolsetManager` — the stls-mcp twin of
-`stls_a2a.SecureSessionManager`, built on the same shared
-`stls_core.KeySessionResolver` (see `python/stls-mcp/CHANGELOG.md` and
-`python/stls-core/CHANGELOG.md`).
+`stls_a2a.SecureSessionManager`. Both are built on stls-core's non-leaking
+session-establishment API (`stls_core.establish_session()` here,
+`stls_core.resolve_transport()` on the A2A side — see
+`python/stls-mcp/CHANGELOG.md` and `python/stls-core/CHANGELOG.md`).
 
 This directory has two scripts:
 

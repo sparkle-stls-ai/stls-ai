@@ -7,6 +7,49 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.5] — 2026-11-12
+
+Restricts the package's public API surface (issue #5): nothing exported
+from `stls_core` hands back raw session-key bytes anymore.
+
+### Added
+
+- **`establish_session()`/`resolve_transport()`** (`stls_core_session_establish.py`)
+  — the public replacement for the old "`KeySessionResolver.resolve()`
+  then feed `session_key_data` into `perform_client_handshake()`"
+  two-step dance. `establish_session()` resolves the key (or, for
+  `pqc`, runs the KEM handshake) AND performs the STLS handshake in one
+  call; `resolve_transport()` resolves and builds the `StlsTransport`
+  with NO handshake (for stls-a2a's base/arqit_py path, whose wire
+  protocol has none). Neither ever returns the raw key.
+- **`perform_client_handshake()`/`perform_pqc_client_handshake()`/
+  `StlsHandshakeFailed`** moved here from `python/stls-mcp`'s
+  `stls_mcp_transport.py` (generic STLS-protocol handshake, no
+  MCP-specific knowledge) — `establish_session()` is built on them.
+  `python/stls-mcp` now re-exports all three unchanged; its own public
+  API is unaffected. `httpx` moves from `[dev]`-only to a real runtime
+  dependency as a consequence.
+- **`KeySessionProviderPQC.derive_client_key()`/`destroy_private_key_material()`**
+  (`providers/stls_core_providers_pqc.py`) — the ephemeral
+  X25519/ML-KEM-768 KEM private key bytes, previously exposed via
+  public `x25519_private_key_bytes`/`mlkem_secret_key_bytes`
+  properties, are now private attributes; these two methods are the
+  only way to use them from outside the class.
+
+### Removed
+
+- **`KeySessionResolver`** is no longer exported from the `stls_core`
+  package (`__init__.py`) — `resolve()` handed back raw key material,
+  exactly what this issue closes off. The class itself is unchanged and
+  still used internally, by `establish_session()`/`resolve_transport()`.
+
+### Fixed
+
+- `__version__` in `__init__.py` was hardcoded at `"0.1.2"`, out of sync
+  with `pyproject.toml`'s version since 0.1.3 — now kept aligned.
+
+---
+
 ## [0.1.4] — 2026-11-11
 
 Security hardening of the Arqit sidecar's local IPC boundary (issues

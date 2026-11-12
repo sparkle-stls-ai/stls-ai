@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stls_a2a"
-version = "0.1.6"
+version = "0.1.7"
 description = "SDK for building Agentic A2A comunication using quantum-safe encrypted channels"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -16,7 +16,7 @@ dependencies = [
     # Cryptography, session cache, handshake, key provider (base/arqit_py) and
     # API key auth now live in stls-core — shared with stls-mcp.
     # Resolved as a local package via [tool.uv.sources] below.
-    "stls_core>=0.1.1",
+    "stls_core>=0.1.5",
     "fastapi>=0.129.0",
     # ADK 2.x introduces breaking changes in the async runner that cause
     # GeneratorExit / OpenTelemetry context detach errors. Tested with 1.26.0.

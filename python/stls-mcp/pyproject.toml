@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stls_mcp"
-version = "0.1.3"
+version = "0.1.4"
 description = "STLS extension of the Model Context Protocol — transparent application-layer symmetric encryption over Streamable HTTP, sharing the stls-core crypto/session/handshake/provider/auth layer with stls-a2a"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -16,7 +16,7 @@ dependencies = [
     # Cryptography, session cache, handshake, key provider (base/arqit_py) and
     # API key auth — shared with stls-a2a. Resolved as a local package
     # of the monorepo via [tool.uv.sources] below.
-    "stls_core>=0.1.1",
+    "stls_core>=0.1.5",
     # Official MCP SDK — FastMCP + Streamable HTTP transport.
     # <2 upper bound to stay compatible until the stable v2 release
     # (beta expected 2026-06-30, stable 2026-07-27).

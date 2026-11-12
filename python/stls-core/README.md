@@ -15,8 +15,14 @@ stls-mcp (Model Context Protocol extension).
 stls-a2a and stls-mcp encrypt different payloads (A2A JSON-RPC vs. MCP
 JSON-RPC) but use identical cryptography, identical session management,
 and identical authentication schema. stls-core extracts this common
-logic into a package independent of FastAPI, httpx, or any application
-framework — it works only on bytes and JSON-serializable dicts.
+logic into a package independent of FastAPI or any application
+framework — the crypto/session/auth layers work only on bytes and
+JSON-serializable dicts. The one exception is the client-side STLS
+handshake (`stls_core_client_handshake.py`, behind
+`establish_session()`): since issue #5 ("Restrict stls-core's public
+API surface") moved it here from stls-mcp, `httpx` is a real runtime
+dependency of this package now — needed to actually perform that
+handshake's HTTP POST, not just for tests.
 
 ## Features
 
@@ -35,12 +41,20 @@ framework — it works only on bytes and JSON-serializable dicts.
   (Arqit SKA-Platform™ via the native Python SDK, quantum-safe key
   exchange via QKD), and `pqc` (hybrid X25519 + ML-KEM-768, software-based
   quantum-safe, redistributable, no dependency on external services).
-- **`KeySessionResolver`** (`providers/stls_core_providers_session_resolver.py`):
-  generic resolution of `{kid, kdata}` for an arbitrary caller-defined
-  `target_key`, with a per-`target_key` async lock and an optional
-  `target_configs={target_key: config_path}` map for `arqit_py` — lets one
-  process hold distinct `arqit_py` device identities for different remote
-  counterparts instead of being limited to a single device/config per process.
+- **`establish_session()`/`resolve_transport()`** (`stls_core_session_establish.py`):
+  the public, non-leaking way to get a ready `StlsTransport` for an
+  arbitrary caller-defined `base_url`/`target_key` — `establish_session()`
+  resolves the key AND performs the STLS handshake in one call (used by
+  stls-mcp, whose wire protocol always does a handshake round trip);
+  `resolve_transport()` resolves + builds the transport with NO
+  handshake (used by stls-a2a's base/arqit_py path, which has none). The
+  raw key never leaves either function. Both share one internal
+  per-`target_key` async lock plus a per-call `config_path` override for
+  `arqit_py` — lets one process hold distinct `arqit_py` device
+  identities for different remote counterparts instead of being limited
+  to a single device/config per process. (`KeySessionResolver` itself is
+  the internal implementation detail behind both — not part of the
+  public API since issue #5, "Restrict stls-core's public API surface".)
 - **API key authentication**: two composable levels. `AuthConfig`
   (static, in-memory, timing-safe) for quick tests and small deployments
   with no infrastructure — shared by stls-a2a and stls-mcp, not
@@ -62,12 +76,12 @@ uv pip install -e ".[dev]"
 
 | Extra | Contents | When to install it |
 |---|---|---|
-| (base) | `cryptography`, `pydantic`, `python-dotenv` | always — the minimum needed to use the package |
+| (base) | `cryptography`, `pydantic`, `python-dotenv`, `httpx` | always — the minimum needed to use the package (`httpx` since issue #5, for the client-side handshake) |
 | `redis` | `redis>=7.4.0` | if `SESSION_CACHE_BACKEND=redis` |
 | `postgres` | `asyncpg>=0.31.0` | if `AUTH_LOADER_BACKEND=postgres` |
 | `arqit_py` | Arqit SKA-Platform™ wheels (proprietary, not redistributable) | only if `KEY_PROVIDER_NAME=arqit_py` |
 | `pqc` | `liboqs-python` | only if `KEY_PROVIDER_NAME=pqc` |
-| `dev` | `pytest`, `pytest-asyncio`, `pytest-cov`, `fastapi`, `uvicorn`, `httpx`, `fakeredis` | development and testing |
+| `dev` | `pytest`, `pytest-asyncio`, `pytest-cov`, `fastapi`, `uvicorn`, `fakeredis` | development and testing (`httpx` moved to the base dependencies) |
 
 ```bash
 # Crypto/auth only, no Redis or Arqit dependency

@@ -97,7 +97,7 @@ KEY_PROVIDER_NAME=arqit_py python client_multi_session.py
 
 If a command above fails with `TypeError: ... unexpected keyword argument
 'arqit_client_configs'` or `ImportError: cannot import name
-'KeySessionResolver'`, the venv you're using has a stale/non-editable
+'establish_session'`, the venv you're using has a stale/non-editable
 `stls_core`/`stls_a2a` — see the verification step in
 [`10_server_ms`'s README](../../server/10_server_ms/README.md#prerequisites)
 and redo the relevant `uv pip install -e` step there.

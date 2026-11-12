@@ -103,7 +103,7 @@ Everything under [src/](./src):
 - `constants.ts` — paths (`/mcp`, `/mcp-stls`), MCP-specific headers, STLS discovery keys
 - `server.ts` — `createSecureMcpApp()`, the server-side entry point; also `stlsCapabilitiesFragment()`
 - `middleware.ts` — `encryptedHandler()`, the encrypted request wrapper around `innerHandle`
-- `transport.ts` — client side: `performClientHandshake()` (base/arqit_py), `performPqcClientHandshake()` (PQC), `createStlsFetch()`
+- `transport.ts` — client side: `createStlsFetch()`; re-exports `performClientHandshake()` (base/arqit_py) and `performPqcClientHandshake()` (PQC) from `stls-core`, where they now live (see its CHANGELOG, issue #5) — this package's own public API is unchanged
 - `auth.ts` — `wrapWithAuth()`, API key protection applied to both exposures
 - `http-adapter.ts` — `toNodeRequestListener()`, converts the Web-standard handler to a `node:http` listener
 

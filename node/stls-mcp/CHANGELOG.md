@@ -7,6 +7,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.4] — 2026-11-12
+
+Tracks [`stls-core`](../../node/stls-core/CHANGELOG.md) 0.1.5 (issue #5,
+"Restrict stls-core's public API surface"). No change to this package's
+own public API.
+
+### Changed
+
+- `transport.ts`'s `performClientHandshake()`/`performPqcClientHandshake()`/
+  `StlsHandshakeFailed` moved to `stls-core` (generic STLS-protocol
+  handshake, no MCP-specific knowledge) and are now re-exported here
+  unchanged — same names, same signatures, same behavior.
+
+---
+
 ## [0.1.3] — 2026-11-10
 
 Packaging-only release: no functional changes. Version bump to align

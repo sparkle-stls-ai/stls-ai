@@ -52,15 +52,62 @@ class SecureA2ATransport:
 
     def __init__(self, session_key: bytes, session_id: str):
         """
-        Initializes the secure transport
+        Initializes the secure transport from a raw session key.
+
+        Low-level constructor: only for callers that legitimately need
+        to hold the raw key themselves afterward (e.g. create_pqc_a2a_transport(),
+        whose derived key sofia-client-secure persists across process
+        restarts via export_session_key() below). Callers going through
+        stls-core's resolve_transport()/establish_session() — which
+        deliberately never hand back raw key material — should use
+        from_transport() instead.
 
         Args:
             session_key: Shared session key
             session_id: A2A session identifier
         """
         self.session_id = session_id
-        self.session_key = session_key  # kept for log/debug backward compatibility
+        self._session_key: Optional[bytes] = session_key
         self._transport = StlsTransport(session_key=session_key, session_id=session_id)
+
+    @classmethod
+    def from_transport(cls, transport: StlsTransport, session_id: Optional[str] = None) -> "SecureA2ATransport":
+        """
+        Builds a SecureA2ATransport from an already-established StlsTransport
+        (e.g. from stls_core.resolve_transport()) — no raw key material
+        involved at all on this path. export_session_key() is not
+        available on an instance built this way (there is no raw key to
+        return).
+        """
+        self = cls.__new__(cls)
+        self.session_id = session_id if session_id is not None else transport.session_id
+        self._session_key = None
+        self._transport = transport
+        return self
+
+    def export_session_key(self) -> bytes:
+        """
+        Returns the raw session key, for callers with a legitimate need
+        to persist it themselves (e.g. sofia-client-secure, which
+        reconstructs a transport across process restarts without
+        re-handshaking). Not a casual accessor — most callers never need
+        the raw key at all; use the transport's own encrypt/decrypt
+        instead.
+
+        Raises:
+            RuntimeError: if this instance was built via from_transport()
+                          (established through resolve_transport()/
+                          establish_session(), which never expose the
+                          raw key in the first place).
+        """
+        if self._session_key is None:
+            raise RuntimeError(
+                "export_session_key() is not available on a SecureA2ATransport "
+                "built via from_transport() — it was established through "
+                "stls_core.resolve_transport()/establish_session(), which never "
+                "hand back raw key material."
+            )
+        return self._session_key
 
     def encrypt_message(self, message: A2AMessage) -> Dict[str, str]:
         """

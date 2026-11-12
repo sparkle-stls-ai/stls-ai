@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stls_core"
-version = "0.1.4"
+version = "0.1.5"
 description = "Core cryptographic transport layer for STLS — protocol-agnostic symmetric encryption, quantum-safe key providers and API key auth"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,6 +19,12 @@ dependencies = [
     "pydantic>=2.0.0",
     # Env var loading (.env support in providers)
     "python-dotenv>=1.2.1",
+    # Client-side STLS handshake (stls_core_client_handshake.py:
+    # perform_client_handshake()/perform_pqc_client_handshake(), used by
+    # establish_session()/resolve_transport()) — moved here from
+    # stls-mcp as part of issue #5, "Restrict stls-core's public API
+    # surface". A real runtime dependency now, not just a test-only one.
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]
@@ -77,8 +83,9 @@ pqc = [
 ]
 
 # Development and test dependencies.
-# fastapi/uvicorn/httpx are only needed for the over-the-wire E2E test
+# fastapi/uvicorn are only needed for the over-the-wire E2E test
 # (test_e2e_client_server.py) — not runtime dependencies of the package.
+# httpx moved to [project.dependencies] above (issue #5).
 # Install:  uv pip install -e ".[dev]"
 dev = [
     "pytest>=8.0.0",
@@ -86,7 +93,6 @@ dev = [
     "pytest-cov>=5.0.0",
     "fastapi>=0.129.0",
     "uvicorn>=0.40.0",
-    "httpx>=0.28.1",
     # Fake Redis for the Redis keystore tests, no real server needed.
     # Supports GETEX, ZRANGEBYSCORE, pipeline — covers all of RedisArqitKeyStore.
     "fakeredis>=2.23.0",

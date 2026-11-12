@@ -1,6 +1,6 @@
 {
   "name": "stls-core",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Core cryptographic transport layer for STLS — protocol-agnostic symmetric encryption, quantum-safe key providers and API key auth (Node.js port of python/stls-core)",
   "license": "(AGPL-3.0-or-later OR LicenseRef-Commercial)",
   "repository": {

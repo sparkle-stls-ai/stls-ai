@@ -94,7 +94,7 @@ import httpx
 
 import uuid as _uuid
 
-from stls_core import KeySessionResolver
+from stls_core import resolve_transport
 
 from .stls_a2a_integration import (
     SecureA2ATransportAdapter,
@@ -243,14 +243,12 @@ class SecureSessionManager:
         self.client_id = client_id
         self._handshake_path = handshake_path
         self._provider_name = provider_name.strip().lower()
-        # Generic cache/lock/config-override resolution lives in
-        # stls-core's KeySessionResolver (shared with stls-mcp's own
-        # multi-session manager) — this class only adds the A2A-specific
-        # part (building/caching SecureA2ATransportAdapter below).
-        self._resolver = KeySessionResolver(
-            provider_name=self._provider_name,
-            target_configs=arqit_client_configs,
-        )
+        # Generic cache/lock resolution lives in stls-core's
+        # resolve_transport() (shared internal resolver with stls-mcp's
+        # own multi-session manager) — this class only adds the
+        # A2A-specific part (building/caching SecureA2ATransportAdapter
+        # below) and its own {base_url: config_path} map.
+        self._arqit_client_configs = arqit_client_configs or {}
         self._owns_http = httpx_client is None
         self._http = httpx_client or httpx.AsyncClient()
         self._sessions: dict[str, SecureA2ATransportAdapter] = {}
@@ -346,11 +344,17 @@ class SecureSessionManager:
         actually comes from (arqit_py's peer address is in its config
         file, not derived from base_url) — see the module docstring.
 
-        For arqit_py, the resolver's target_configs[base_url] overrides
+        For arqit_py, self._arqit_client_configs[base_url] overrides
         ARQIT_PY_CLIENT_CONFIG for this session only when that base_url
         has an entry; absent an entry (or for any other provider), it
-        falls back to the env var as before — see
-        stls_core.KeySessionResolver.
+        falls back to the env var as before.
+
+        Uses stls_core.resolve_transport() (not establish_session()):
+        this path has no HTTP handshake at all, so establish_session()
+        — which always does one — doesn't fit. resolve_transport() gives
+        the same resolve+lock guarantees without ever handing the raw
+        key back to this method (issue #5, "Restrict stls-core's public
+        API surface").
         """
         host = os.getenv("KEY_SESSION_HOST", "localhost")
         port = int(os.getenv("KEY_SESSION_PORT", "8081"))
@@ -358,13 +362,14 @@ class SecureSessionManager:
             "SecureSessionManager: resolving %s session for %s (KeySessionProvider host=%s port=%s)",
             self._provider_name, base_url, host, port,
         )
-        session_key_identifier, session_key_data = await self._resolver.resolve(
-            base_url, host=host, port=port,
+        kid, transport = await resolve_transport(
+            self._provider_name, base_url, host=host, port=port,
+            config_path=self._arqit_client_configs.get(base_url),
         )
 
-        return SecureA2ATransportAdapter(
-            session_key=session_key_data,
-            session_id=session_key_identifier,
+        return SecureA2ATransportAdapter.from_transport(
+            transport,
+            session_id=kid,
             base_url=base_url,
         )
 

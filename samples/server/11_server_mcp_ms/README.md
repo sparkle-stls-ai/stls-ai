@@ -4,8 +4,9 @@ The MCP analogue of
 [`samples/server/10_server_ms/`](../10_server_ms/README.md): two
 independent MCP server processes used to validate the multi-server /
 multi-session `arqit_py` support added to
-`stls_mcp.SecureToolsetManager` (same pattern and underlying
-`stls_core.KeySessionResolver` as `stls_a2a.SecureSessionManager`).
+`stls_mcp.SecureToolsetManager` (same cache/lock pattern as
+`stls_a2a.SecureSessionManager`, both built on stls-core's non-leaking
+session-establishment API — `establish_session()`/`resolve_transport()`).
 Each one is a minimal single-tool MCP server (`FastMCP`) exposed
 through `stls_mcp.create_secure_mcp_app`.
 

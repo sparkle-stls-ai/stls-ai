@@ -13,6 +13,13 @@
  * higher-level object — callers keep caching their own derived object
  * (a toolset, an adapter), keyed the same way, calling resolve() only
  * on their own cache miss.
+ *
+ * NOT exported from the package's public API (providers/index.ts /
+ * index.ts) — resolve() hands back raw key material, exactly what
+ * issue #5 ("Restrict stls-core's public API surface") closes off.
+ * This class is now an internal implementation detail of
+ * providers/session-establish.ts's getTransport(), which owns the
+ * per-targetKey resolver instances and never lets the raw kdata escape.
  */
 
 import { KeySessionProviderFactory } from "./factory.js";
@@ -34,6 +41,13 @@ export interface ResolveOptions {
   port?: number;
   /** arqit_py only: which sidecar socket to use for this call. */
   socketPath?: string;
+  /**
+   * arqit_py only: device config_path for THIS call, overriding whatever
+   * this.options.targetConfigs[targetKey] would otherwise resolve to —
+   * lets a stateless caller (e.g. getTransport()) supply a single
+   * resolved path per call instead of pre-building a whole targetKey map.
+   */
+  configPath?: string;
 }
 
 export interface ResolvedKeyMaterial {
@@ -61,7 +75,7 @@ export class KeySessionResolver {
   }
 
   private async doResolve(targetKey: string, opts: ResolveOptions): Promise<ResolvedKeyMaterial> {
-    const configPath = this.options.targetConfigs?.[targetKey];
+    const configPath = opts.configPath ?? this.options.targetConfigs?.[targetKey];
     const provider = await KeySessionProviderFactory.getSessionProvider({
       sessionType: KeySessionProviderType.CLIENT,
       name: this.options.providerName,

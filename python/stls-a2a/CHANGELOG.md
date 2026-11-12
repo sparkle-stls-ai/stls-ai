@@ -7,6 +7,44 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.7] — 2026-11-12
+
+Tracks [`stls_core`](../stls-core/CHANGELOG.md) 0.1.5 (issue #5,
+"Restrict stls-core's public API surface").
+
+### Added
+
+- **`SecureA2ATransport.export_session_key()`** (`stls_a2a_transport.py`)
+  — explicit, documented accessor for callers with a legitimate need to
+  persist the raw session key themselves (e.g. `sofia-client-secure`,
+  across process restarts). Replaces the `session_key` public attribute,
+  which was kept only for "log/debug backward compatibility" — a
+  leftover, not load-bearing. Raises if the instance was built via the
+  new `from_transport()` classmethod (no raw key exists on that path).
+- **`SecureA2ATransport.from_transport()`/`SecureA2ATransportAdapter.from_transport()`**
+  — build either from an already-established `StlsTransport` (e.g. from
+  `stls_core.resolve_transport()`), with no raw key material involved.
+
+### Changed
+
+- `SecureSessionManager`'s base/arqit_py path
+  (`_resolve_via_key_session_provider()`) now uses
+  `stls_core.resolve_transport()` instead of the removed
+  `KeySessionResolver` directly — same no-handshake wire behavior
+  (this path never did one), but the raw key no longer passes through
+  this method at all, even internally.
+- `create_pqc_a2a_transport()` now derives its session key via
+  `KeySessionProviderPQC.derive_client_key()` instead of reading
+  `x25519_private_key_bytes`/`mlkem_secret_key_bytes` directly (those
+  are private now — see `stls_core`'s own CHANGELOG entry).
+
+### Fixed
+
+- Removed a debug log line in `stls_a2a_integration.py` that printed
+  the raw session key at `DEBUG` level.
+
+---
+
 ## [0.1.6] — 2026-11-10
 
 Packaging-only release: no functional changes. Version bump to enable
