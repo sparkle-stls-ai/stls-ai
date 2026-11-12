@@ -20,7 +20,7 @@ import {
   HANDSHAKE_PATH,
   HANDSHAKE_PQC_PATH,
 } from "./constants.js";
-import { StlsTransport } from "./crypto.js";
+import { StlsDirection, StlsTransport } from "./crypto.js";
 import { HandshakeResponse, generateHandshakeRequest, verifyHandshakeProof } from "./handshake.js";
 import {
   PQCHandshakeResponse,
@@ -65,6 +65,13 @@ export interface PerformClientHandshakeOptions {
   kid?: string;
   handshakePath?: string;
   fetch?: FetchLike;
+  /**
+   * Optional: builds the resulting StlsTransport with this direction
+   * instead of the default single-shared-key mode. Must match what the
+   * server was given (opposite value) for the two to interoperate —
+   * see StlsTransport's own docstring.
+   */
+  direction?: StlsDirection;
 }
 
 /**
@@ -127,7 +134,7 @@ export async function performClientHandshake(
     );
   }
 
-  const transport = new StlsTransport(sessionKey, handshakeResponse.session_id);
+  const transport = new StlsTransport(sessionKey, handshakeResponse.session_id, options.direction);
   return { sessionId: handshakeResponse.session_id, kid: handshakeResponse.kid, transport };
 }
 
@@ -139,6 +146,8 @@ export interface PerformPqcClientHandshakeOptions {
   clientId: string;
   handshakePath?: string;
   fetch?: FetchLike;
+  /** See PerformClientHandshakeOptions.direction. */
+  direction?: StlsDirection;
 }
 
 /**
@@ -213,7 +222,7 @@ export async function performPqcClientHandshake(
       );
     }
 
-    const transport = new StlsTransport(sessionKey, pqcResponse.session_id);
+    const transport = new StlsTransport(sessionKey, pqcResponse.session_id, options.direction);
     return { sessionId: pqcResponse.session_id, kid: pqcResponse.kid, transport };
   } finally {
     pqcClient.stop(); // best-effort zeroing of private keys

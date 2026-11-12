@@ -9,6 +9,36 @@ of which this package is the TypeScript port.
 
 ---
 
+## [0.1.6] — 2026-11-12
+
+Hardens `StlsTransport` (issues #10, #12) and extends its correctness
+test coverage (#11), mirroring
+[`python/stls-core` 0.1.6](../../python/stls-core/CHANGELOG.md).
+Additive — no existing caller (node/stls-mcp, or stls-core's own
+session/handshake code) needed to change.
+
+### Added
+
+- **`new StlsTransport(sessionKey, sessionId, direction?: "c2s" | "s2c")`**
+  — optional 3rd constructor argument deriving four independent keys
+  (AES+HMAC per direction), instead of the single shared key pair.
+  The two peers of a session agree on their direction out of band.
+  Default (`direction` omitted) is unchanged: one shared key pair for
+  both directions. Intended for the upcoming NaaS federation PoC;
+  not needed by node/stls-mcp's existing MCP request/response flow.
+- **`tests/crypto.smoke.ts`** (`npm run test:crypto-smoke`) — unit-level
+  coverage for `StlsTransport`/`StlsEnvelope`, previously nonexistent
+  on the Node side (only the cross-language interop smoke test
+  existed). Mirrors `python/stls-core`'s test suite case-for-case.
+
+### Changed
+
+- `encrypt()`/`decrypt()` now bind `version` and `session_id` into the
+  envelope's integrity (AES-GCM AAD + the outer HMAC's input), same
+  change and same wire-format consequence as the Python side — see
+  its changelog entry above for the detail. `tag`/`mac` change even
+  in the default mode; `ciphertext` doesn't.
+
 ## [0.1.5] — 2026-11-12
 
 Restricts the package's public API surface (issue #5): nothing exported

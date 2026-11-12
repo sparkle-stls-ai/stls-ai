@@ -31,9 +31,15 @@ import {
   ENVELOPE_TAG,
   ENVELOPE_VERSION,
   HKDF_INFO_AES,
+  HKDF_INFO_AES_C2S,
+  HKDF_INFO_AES_S2C,
   HKDF_INFO_HMAC,
+  HKDF_INFO_HMAC_C2S,
+  HKDF_INFO_HMAC_S2C,
   STLS_VERSION,
 } from "./constants.js";
+
+export type StlsDirection = "c2s" | "s2c";
 
 // ---------------------------------------------------------------------------
 // HKDF-Expand (RFC 5869 §2.3) — PRK passed in directly, no extract step.
@@ -124,44 +130,93 @@ export class StlsEnvelope {
 /**
  * STLS transport: encrypts and decrypts arbitrary payloads. Protocol-agnostic.
  * Stateless after construction — safe for concurrent calls.
+ *
+ * Direction (`direction` ctor arg, optional): by default (undefined) both
+ * peers derive a single AES/HMAC key pair used for both encrypt() and
+ * decrypt() — the mode used by stls-mcp today, where the same transport
+ * object serves both directions of one session. Passing "c2s" or "s2c"
+ * instead derives four keys and splits them per direction, so the two
+ * directions of a session never share key material; the two peers must
+ * agree out of band on who is "c2s" and who is "s2c". See the Python
+ * counterpart's docstring for the full rationale.
  */
 export class StlsTransport {
-  private readonly aesKey: Buffer;
-  private readonly hmacKey: Buffer;
+  private readonly encAesKey: Buffer;
+  private readonly decAesKey: Buffer;
+  private readonly encHmacKey: Buffer;
+  private readonly decHmacKey: Buffer;
 
   constructor(
     sessionKey: Buffer,
     public readonly sessionId: string,
+    public readonly direction?: StlsDirection,
   ) {
-    this.aesKey = hkdfExpand(sessionKey, HKDF_INFO_AES, 32);
-    this.hmacKey = hkdfExpand(sessionKey, HKDF_INFO_HMAC, 32);
+    if (direction !== undefined && direction !== "c2s" && direction !== "s2c") {
+      throw new Error(`Invalid direction: ${direction} (expected "c2s", "s2c" or undefined)`);
+    }
+
+    if (direction === undefined) {
+      const aesKey = hkdfExpand(sessionKey, HKDF_INFO_AES, 32);
+      const hmacKey = hkdfExpand(sessionKey, HKDF_INFO_HMAC, 32);
+      this.encAesKey = this.decAesKey = aesKey;
+      this.encHmacKey = this.decHmacKey = hmacKey;
+    } else {
+      const aesC2s = hkdfExpand(sessionKey, HKDF_INFO_AES_C2S, 32);
+      const aesS2c = hkdfExpand(sessionKey, HKDF_INFO_AES_S2C, 32);
+      const hmacC2s = hkdfExpand(sessionKey, HKDF_INFO_HMAC_C2S, 32);
+      const hmacS2c = hkdfExpand(sessionKey, HKDF_INFO_HMAC_S2C, 32);
+      if (direction === "c2s") {
+        this.encAesKey = aesC2s;
+        this.decAesKey = aesS2c;
+        this.encHmacKey = hmacC2s;
+        this.decHmacKey = hmacS2c;
+      } else {
+        this.encAesKey = aesS2c;
+        this.decAesKey = aesC2s;
+        this.encHmacKey = hmacS2c;
+        this.decHmacKey = hmacC2s;
+      }
+    }
   }
 
   encrypt(plaintext: Buffer): StlsEnvelope {
     const iv = randomBytes(12); // 96-bit for AES-GCM
+    const aad = buildAad(STLS_VERSION, this.sessionId);
 
-    const cipher = createCipheriv("aes-256-gcm", this.aesKey, iv);
+    const cipher = createCipheriv("aes-256-gcm", this.encAesKey, iv);
+    cipher.setAAD(aad);
     const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
     const tag = cipher.getAuthTag(); // 128-bit GCM authentication tag
 
-    const mac = this.computeMac(iv, ciphertext, tag);
+    const mac = this.computeMac(this.encHmacKey, aad, iv, ciphertext, tag);
 
-    return new StlsEnvelope(this.sessionId, iv, ciphertext, tag, mac);
+    return new StlsEnvelope(this.sessionId, iv, ciphertext, tag, mac, STLS_VERSION);
   }
 
   decrypt(envelope: StlsEnvelope): Buffer {
+    if (envelope.version !== STLS_VERSION) {
+      throw new Error(
+        `Unsupported envelope version: ${envelope.version} (expected ${STLS_VERSION})`,
+      );
+    }
+
     if (envelope.sessionId !== this.sessionId) {
       throw new Error(
         `Session ID mismatch: expected ${this.sessionId}, got ${envelope.sessionId}`,
       );
     }
 
-    const expectedMac = this.computeMac(envelope.iv, envelope.ciphertext, envelope.tag);
+    const aad = buildAad(envelope.version, envelope.sessionId);
+
+    const expectedMac = this.computeMac(
+      this.decHmacKey, aad, envelope.iv, envelope.ciphertext, envelope.tag,
+    );
     if (!constantTimeEqual(expectedMac, envelope.mac)) {
       throw new Error("MAC verification failed — message integrity compromised");
     }
 
-    const decipher = createDecipheriv("aes-256-gcm", this.aesKey, envelope.iv);
+    const decipher = createDecipheriv("aes-256-gcm", this.decAesKey, envelope.iv);
+    decipher.setAAD(aad);
     decipher.setAuthTag(envelope.tag);
     try {
       return Buffer.concat([decipher.update(envelope.ciphertext), decipher.final()]);
@@ -183,13 +238,31 @@ export class StlsTransport {
     return JSON.parse(plaintext.toString("utf-8"));
   }
 
-  private computeMac(iv: Buffer, ciphertext: Buffer, tag: Buffer): Buffer {
-    return createHmac("sha256", this.hmacKey)
+  private computeMac(
+    hmacKey: Buffer, aad: Buffer, iv: Buffer, ciphertext: Buffer, tag: Buffer,
+  ): Buffer {
+    return createHmac("sha256", hmacKey)
+      .update(aad)
       .update(iv)
       .update(ciphertext)
       .update(tag)
       .digest();
   }
+}
+
+/**
+ * Self-delimiting AAD from (version, session_id) — length-prefixed fields
+ * so no two distinct (version, session_id) pairs ever concatenate to the
+ * same bytes. Must stay byte-compatible with the Python counterpart
+ * (StlsTransport._build_aad).
+ */
+function buildAad(version: string, sessionId: string): Buffer {
+  const versionBytes = Buffer.from(version, "utf-8");
+  const sessionIdBytes = Buffer.from(sessionId, "utf-8");
+  const versionLen = Buffer.from([versionBytes.length]);
+  const sessionIdLen = Buffer.alloc(2);
+  sessionIdLen.writeUInt16BE(sessionIdBytes.length);
+  return Buffer.concat([versionLen, versionBytes, sessionIdLen, sessionIdBytes]);
 }
 
 function constantTimeEqual(a: Buffer, b: Buffer): boolean {

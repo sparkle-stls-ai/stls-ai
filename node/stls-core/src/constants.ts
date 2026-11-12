@@ -28,8 +28,14 @@ export const ENVELOPE_TAG = "tag";
 export const ENVELOPE_MAC = "mac";
 
 // HKDF domain separators (expand-only, PRK = session_key)
+// Direction-less labels: legacy mode (single shared key pair, default).
 export const HKDF_INFO_AES = Buffer.from("stls-aes-256-gcm", "utf-8");
 export const HKDF_INFO_HMAC = Buffer.from("stls-hmac-sha256", "utf-8");
+// Direction labels: used only when StlsTransport is given a `direction`.
+export const HKDF_INFO_AES_C2S = Buffer.from("stls-aes-256-gcm-c2s", "utf-8");
+export const HKDF_INFO_AES_S2C = Buffer.from("stls-aes-256-gcm-s2c", "utf-8");
+export const HKDF_INFO_HMAC_C2S = Buffer.from("stls-hmac-sha256-c2s", "utf-8");
+export const HKDF_INFO_HMAC_S2C = Buffer.from("stls-hmac-sha256-s2c", "utf-8");
 
 // Environment variables
 export const ENV_KEY_PROVIDER_NAME = "KEY_PROVIDER_NAME";

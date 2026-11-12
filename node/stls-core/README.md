@@ -412,6 +412,7 @@ and `npm install && npm run build` already run in this directory.
 ### Node-only functional tests
 
 ```bash
+npx tsx tests/crypto.smoke.ts                 # StlsTransport/StlsEnvelope unit checks, no fixture
 npx tsx tests/auth.smoke.ts
 npx tsx tests/postgres-loader.smoke.ts        # error paths only, no real DB
 

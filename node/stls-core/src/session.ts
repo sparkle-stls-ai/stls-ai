@@ -14,7 +14,7 @@
  * internally and the Promise resolves immediately.
  */
 
-import { StlsTransport } from "./crypto.js";
+import { StlsDirection, StlsTransport } from "./crypto.js";
 
 export interface StlsSession {
   sessionId: string;
@@ -43,8 +43,14 @@ export function createStlsSession(
 }
 
 export interface SessionCache {
-  /** Registers a new STLS session after a completed handshake. */
-  put(sessionId: string, kid: string, sessionKey: Buffer): Promise<void>;
+  /**
+   * Registers a new STLS session after a completed handshake.
+   * `direction` is optional and additive: leave it unset for the
+   * existing single-shared-key mode (used by stls-mcp today); pass
+   * "c2s"/"s2c" only for callers that label the two ends of a session
+   * themselves — see StlsTransport's own docstring.
+   */
+  put(sessionId: string, kid: string, sessionKey: Buffer, direction?: StlsDirection): Promise<void>;
   /** Retrieves the transport for an active session, renewing the idle TTL. */
   get(sessionId: string): Promise<StlsTransport | undefined>;
   /** Explicitly removes a session. Returns true if it existed. */
@@ -82,9 +88,14 @@ export class InMemorySessionCache implements SessionCache {
         ));
   }
 
-  async put(sessionId: string, kid: string, sessionKey: Buffer): Promise<void> {
+  async put(
+    sessionId: string,
+    kid: string,
+    sessionKey: Buffer,
+    direction?: StlsDirection,
+  ): Promise<void> {
     const now = Date.now();
-    const transport = new StlsTransport(sessionKey, sessionId);
+    const transport = new StlsTransport(sessionKey, sessionId, direction);
 
     if (this.store.has(sessionId)) {
       this.store.delete(sessionId);

@@ -503,10 +503,11 @@ wheels = [
 
 [[package]]
 name = "stls-core"
-version = "0.1.1"
+version = "0.1.6"
 source = { directory = "../stls-core" }
 dependencies = [
     { name = "cryptography" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "python-dotenv" },
 ]
@@ -524,7 +525,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=46.0.5" },
     { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.23.0" },
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.129.0" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28.1" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "liboqs-python", marker = "extra == 'pqc'", specifier = ">=0.14.1" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },

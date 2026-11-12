@@ -7,6 +7,38 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.6] — 2026-11-12
+
+Hardens `StlsTransport` (issues #10, #12) and extends its correctness
+test coverage (#11). Additive — no existing caller (stls-a2a, stls-mcp,
+or stls-core's own session/handshake code) needed to change.
+
+### Added
+
+- **`StlsTransport(..., direction="c2s" | "s2c")`** — optional parameter
+  deriving four independent keys (AES+HMAC per direction) via four new
+  HKDF info labels (`HKDF_INFO_{AES,HMAC}_{C2S,S2C}`), instead of the
+  single shared key pair. The two peers of a session agree on their
+  direction out of band (no handshake negotiation). Default is still
+  `direction=None`: one shared key pair for both directions, identical
+  to the previous behavior. Intended for the upcoming NaaS federation
+  PoC, where two peer nodes label their own transport directions —
+  not needed by the existing A2A/MCP request/response flows.
+
+### Changed
+
+- `encrypt()`/`decrypt()` now bind `version` and `session_id` into the
+  envelope's integrity: both are fed as AES-GCM additional authenticated
+  data (AAD), and the outer HMAC now covers `AAD ‖ IV ‖ ciphertext ‖ tag`
+  (previously `IV ‖ ciphertext ‖ tag` only — `version`/`session_id`
+  were not authenticated at all). `decrypt()` also now explicitly
+  rejects an unexpected `version`. This changes `tag`/`mac` for every
+  envelope, including the default (direction-less) mode — `ciphertext`
+  bytes are unchanged, but **old and new code can't interoperate**
+  (both sides of a session need the same `stls-core` version). No
+  impact on data at rest: cached sessions store the raw `session_key`,
+  never ciphertext.
+
 ## [0.1.5] — 2026-11-12
 
 Restricts the package's public API surface (issue #5): nothing exported
