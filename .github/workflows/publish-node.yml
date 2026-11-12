@@ -119,15 +119,32 @@ jobs:
         if: steps.version.outputs.changed == 'true'
         working-directory: node/stls-mcp
         run: |
+          # The version we actually just (or previously) published in the
+          # sibling job — not just "whatever npm view returns" (see below).
+          expected_version=$(node -p "require('../stls-core/package.json').version")
           core_version=""
-          for i in 1 2 3 4 5; do
-            core_version=$(npm view stls-core version 2>/dev/null || echo "")
-            [ -n "$core_version" ] && break
-            echo "stls-core not visible on the registry yet, retrying in 10s..."
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            seen_version=$(npm view stls-core version 2>/dev/null || echo "")
+            if [ "$seen_version" = "$expected_version" ]; then
+              core_version="$seen_version"
+              break
+            fi
+            # A stale read here is NOT "not visible yet" — npm's registry
+            # has a real post-publish propagation delay across edge nodes,
+            # during which `npm view` can keep returning the PREVIOUS
+            # published version for a while instead of erroring or coming
+            # back empty. Checking only for a non-empty response (as this
+            # loop used to) accepts that stale read as success on the
+            # first try, pinning stls-mcp to the old stls-core release
+            # (observed: pinned ^0.1.4 right after publishing stls-core
+            # 0.1.5, because 0.1.4 was still what the registry handed back
+            # moments after the publish). Looping until the version
+            # actually matches what this run published closes that race.
+            echo "stls-core $expected_version not visible on the registry yet (saw '${seen_version:-<empty>}'), retrying in 10s..."
             sleep 10
           done
           if [ -z "$core_version" ]; then
-            echo "::error::Could not resolve a published stls-core version from the registry"
+            echo "::error::stls-core $expected_version never became visible on the registry (npm propagation delay?)"
             exit 1
           fi
           echo "Pinning stls-core to ^$core_version"
