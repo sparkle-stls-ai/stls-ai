@@ -71,10 +71,22 @@ Structure:
 # ---------------------------------------------------------------------------
 
 HKDF_INFO_AES: bytes = b"stls-aes-256-gcm"
-"""Info label for deriving the AES key via HKDF-Expand."""
+"""Info label for deriving the AES key via HKDF-Expand (direction-less / legacy mode)."""
 
 HKDF_INFO_HMAC: bytes = b"stls-hmac-sha256"
-"""Info label for deriving the HMAC key via HKDF-Expand."""
+"""Info label for deriving the HMAC key via HKDF-Expand (direction-less / legacy mode)."""
+
+HKDF_INFO_AES_C2S: bytes = b"stls-aes-256-gcm-c2s"
+"""Info label for the client->server AES key, used only when StlsTransport is given a direction."""
+
+HKDF_INFO_AES_S2C: bytes = b"stls-aes-256-gcm-s2c"
+"""Info label for the server->client AES key, used only when StlsTransport is given a direction."""
+
+HKDF_INFO_HMAC_C2S: bytes = b"stls-hmac-sha256-c2s"
+"""Info label for the client->server HMAC key, used only when StlsTransport is given a direction."""
+
+HKDF_INFO_HMAC_S2C: bytes = b"stls-hmac-sha256-s2c"
+"""Info label for the server->client HMAC key, used only when StlsTransport is given a direction."""
 
 
 # ---------------------------------------------------------------------------

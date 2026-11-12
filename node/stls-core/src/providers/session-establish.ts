@@ -22,6 +22,7 @@ import {
   performClientHandshake,
   performPqcClientHandshake,
 } from "../client-handshake.js";
+import type { StlsDirection } from "../crypto.js";
 import { KeySessionResolver } from "./session-resolver.js";
 import type { FetchLike } from "../client-handshake.js";
 
@@ -39,6 +40,8 @@ export interface GetTransportOptions {
   port?: number;
   handshakePath?: string;
   fetch?: FetchLike;
+  /** See PerformClientHandshakeOptions.direction. */
+  direction?: StlsDirection;
 }
 
 export type GetTransportResult = StlsClientSession;
@@ -68,6 +71,7 @@ export async function getTransport(options: GetTransportOptions): Promise<GetTra
       clientId: options.clientId,
       handshakePath: options.handshakePath,
       fetch: options.fetch,
+      direction: options.direction,
     });
   }
 
@@ -84,6 +88,7 @@ export async function getTransport(options: GetTransportOptions): Promise<GetTra
     kid: resolvedKid,
     handshakePath: options.handshakePath,
     fetch: options.fetch,
+    direction: options.direction,
   };
   return performClientHandshake(options.baseUrl, kdata, handshakeOptions);
 }

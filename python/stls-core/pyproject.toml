@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stls_core"
-version = "0.1.5"
+version = "0.1.6"
 description = "Core cryptographic transport layer for STLS — protocol-agnostic symmetric encryption, quantum-safe key providers and API key auth"
 readme = "README.md"
 requires-python = ">=3.12"

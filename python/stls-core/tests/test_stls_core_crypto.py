@@ -12,11 +12,19 @@ Copertura:
   T06 — ciphertext alterato → ValueError (GCM tag fallisce)
   T07 — encrypt_json / decrypt_json round-trip su dict
   T08 — encrypt_json / decrypt_json round-trip su lista
-  T09 — chiavi AES e HMAC derivate sono diverse tra loro
+  T09 — chiavi di encrypt e di MAC derivate sono diverse tra loro
   T10 — due transport con stessa key+session_id producono chiavi derivate identiche
   T11 — StlsEnvelope.to_dict / from_dict round-trip
   T12 — plaintext vuoto cifra e decifra correttamente
   T13 — plaintext grande (1 MB) cifra e decifra correttamente
+  T14 — version alterato nell'envelope → ValueError (AAD/version ora autenticati)
+  T15 — session_id alterato nell'envelope (via dict, non il check locale) → ValueError
+  T16 — direction="c2s"/"s2c": round-trip bidirezionale tra due transport
+  T17 — direction: le chiavi delle due direzioni sono indipendenti (incrociate correttamente
+        tra i due transport, un transport non può decifrare il proprio stesso output)
+  T18 — direction=None (default) e direction="c2s" derivano chiavi diverse (nessuna
+        confusione tra le due modalità)
+  T19 — direction invalido → ValueError
 """
 
 import json
@@ -120,34 +128,17 @@ def test_T05_mac_tampered(stls_transport):
 
 def test_T06_ciphertext_tampered(stls_transport):
     envelope = stls_transport.encrypt(b"payload originale")
-    # Altera il ciphertext — il GCM tag non corrisponde più
+    # Altera il ciphertext, lasciando il MAC originale: il check HMAC (che
+    # copre anche il ciphertext) deve fallire prima ancora di arrivare al GCM.
     bad_ct = bytes([envelope.ciphertext[0] ^ 0x01]) + envelope.ciphertext[1:]
-    # Ricalcola un MAC valido sul ciphertext alterato per superare il check HMAC
-    # e arrivare al check GCM (test che GCM fallisce indipendentemente)
-    import hmac as _hmac
-    from hashlib import sha256
-    from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.backends import default_backend
-    from stls_core.stls_core_constants import HKDF_INFO_HMAC
-
-    hmac_key = HKDFExpand(
-        algorithm=hashes.SHA256(),
-        length=32,
-        info=HKDF_INFO_HMAC,
-        backend=default_backend(),
-    ).derive(stls_transport._aes_key)  # usa aes_key come base (test interno)
-
-    # In realtà non possiamo ricalcolare il MAC senza la hmac_key interna.
-    # Verifichiamo semplicemente che il MAC fallisce quando il ct è alterato.
     tampered = StlsEnvelope(
         session_id=envelope.session_id,
         iv=envelope.iv,
         ciphertext=bad_ct,
         tag=envelope.tag,
-        mac=envelope.mac,  # MAC originale su ct originale → fallisce
+        mac=envelope.mac,
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="MAC verification failed"):
         stls_transport.decrypt(tampered)
 
 
@@ -176,7 +167,10 @@ def test_T08_json_roundtrip_list(stls_transport):
 # ---------------------------------------------------------------------------
 
 def test_T09_derived_keys_differ(stls_transport):
-    assert stls_transport._aes_key != stls_transport._hmac_key
+    assert stls_transport._enc_aes_key != stls_transport._enc_hmac_key
+    # Modalità default (direction=None): stessa chiave per encrypt e decrypt.
+    assert stls_transport._enc_aes_key == stls_transport._dec_aes_key
+    assert stls_transport._enc_hmac_key == stls_transport._dec_hmac_key
 
 
 # ---------------------------------------------------------------------------
@@ -186,8 +180,8 @@ def test_T09_derived_keys_differ(stls_transport):
 def test_T10_deterministic_key_derivation(session_key_32, session_id):
     t1 = StlsTransport(session_key_32, session_id)
     t2 = StlsTransport(session_key_32, session_id)
-    assert t1._aes_key == t2._aes_key
-    assert t1._hmac_key == t2._hmac_key
+    assert t1._enc_aes_key == t2._enc_aes_key
+    assert t1._enc_hmac_key == t2._enc_hmac_key
 
 
 # ---------------------------------------------------------------------------
@@ -226,3 +220,97 @@ def test_T13_large_plaintext(stls_transport):
     envelope = stls_transport.encrypt(plaintext)
     recovered = stls_transport.decrypt(envelope)
     assert recovered == plaintext
+
+
+# ---------------------------------------------------------------------------
+# T14 — version alterato nell'envelope → ValueError
+# ---------------------------------------------------------------------------
+
+def test_T14_version_tampered(stls_transport):
+    envelope = stls_transport.encrypt(b"payload")
+    wire = envelope.to_dict()
+    wire["version"] = "9.9"  # MAC/AAD originali sono su version="1.0"
+    tampered = StlsEnvelope.from_dict(wire)
+    with pytest.raises(ValueError):
+        stls_transport.decrypt(tampered)
+
+
+# ---------------------------------------------------------------------------
+# T15 — session_id alterato nell'envelope (via dict) → ValueError
+# ---------------------------------------------------------------------------
+
+def test_T15_session_id_field_tampered(stls_transport):
+    envelope = stls_transport.encrypt(b"payload")
+    wire = envelope.to_dict()
+    wire["session_id"] = stls_transport.session_id + "-tampered"
+    tampered = StlsEnvelope.from_dict(wire)
+    with pytest.raises(ValueError, match="Session ID mismatch"):
+        stls_transport.decrypt(tampered)
+
+
+# ---------------------------------------------------------------------------
+# T16 — direction c2s/s2c: round-trip bidirezionale
+# ---------------------------------------------------------------------------
+
+def test_T16_direction_roundtrip(session_key_32, session_id):
+    client = StlsTransport(session_key_32, session_id, direction="c2s")
+    server = StlsTransport(session_key_32, session_id, direction="s2c")
+
+    request_envelope = client.encrypt(b"richiesta dal client")
+    assert server.decrypt(request_envelope) == b"richiesta dal client"
+
+    response_envelope = server.encrypt(b"risposta dal server")
+    assert client.decrypt(response_envelope) == b"risposta dal server"
+
+
+# ---------------------------------------------------------------------------
+# T17 — direction: chiavi delle due direzioni indipendenti
+# ---------------------------------------------------------------------------
+
+def test_T17_direction_keys_are_independent(session_key_32, session_id):
+    client = StlsTransport(session_key_32, session_id, direction="c2s")
+    server = StlsTransport(session_key_32, session_id, direction="s2c")
+
+    # Le due direzioni concordano: la chiave di encrypt di un lato è la
+    # chiave di decrypt dell'altro (altrimenti il round-trip di T16 non
+    # funzionerebbe) — verificato qui a livello di chiave, non solo di esito.
+    assert client._enc_aes_key == server._dec_aes_key
+    assert server._enc_aes_key == client._dec_aes_key
+    assert client._enc_hmac_key == server._dec_hmac_key
+    assert server._enc_hmac_key == client._dec_hmac_key
+
+    # Le due direzioni non condividono materiale crittografico tra loro.
+    assert client._enc_aes_key != client._dec_aes_key
+    assert client._enc_hmac_key != client._dec_hmac_key
+
+    # Un transport non può decifrare il proprio stesso output: la chiave di
+    # encrypt e quella di decrypt sono diverse per costruzione.
+    envelope = client.encrypt(b"solo per il server")
+    with pytest.raises(ValueError, match="MAC verification failed"):
+        client.decrypt(envelope)
+
+
+# ---------------------------------------------------------------------------
+# T18 — direction=None vs direction="c2s": chiavi diverse, nessuna confusione
+# ---------------------------------------------------------------------------
+
+def test_T18_legacy_mode_keys_differ_from_direction_mode(session_key_32, session_id):
+    legacy = StlsTransport(session_key_32, session_id)
+    labeled = StlsTransport(session_key_32, session_id, direction="c2s")
+
+    assert legacy._enc_aes_key != labeled._enc_aes_key
+    assert legacy._enc_hmac_key != labeled._enc_hmac_key
+
+    # Un envelope della modalità legacy non è decifrabile dalla modalità labeled.
+    envelope = legacy.encrypt(b"legacy payload")
+    with pytest.raises(ValueError, match="MAC verification failed"):
+        labeled.decrypt(envelope)
+
+
+# ---------------------------------------------------------------------------
+# T19 — direction invalido → ValueError
+# ---------------------------------------------------------------------------
+
+def test_T19_invalid_direction_rejected(session_key_32, session_id):
+    with pytest.raises(ValueError, match="Invalid direction"):
+        StlsTransport(session_key_32, session_id, direction="bogus")

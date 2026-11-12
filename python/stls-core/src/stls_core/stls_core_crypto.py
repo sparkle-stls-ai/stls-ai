@@ -26,7 +26,7 @@ import hmac as _hmac
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Literal, Optional
 
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -40,9 +40,15 @@ from .stls_core_constants import (
     ENVELOPE_TAG,
     ENVELOPE_VERSION,
     HKDF_INFO_AES,
+    HKDF_INFO_AES_C2S,
+    HKDF_INFO_AES_S2C,
     HKDF_INFO_HMAC,
+    HKDF_INFO_HMAC_C2S,
+    HKDF_INFO_HMAC_S2C,
     STLS_VERSION,
 )
+
+StlsDirection = Literal["c2s", "s2c"]
 
 logger = logging.getLogger(__name__)
 
@@ -144,11 +150,33 @@ class StlsTransport:
            session_key with distinct domain separators — they are never
            used directly.
 
+    Direction (`direction` param, optional):
+        By default (direction=None) both peers derive a single AES/HMAC
+        key pair and use it for both encrypt() and decrypt() — this is
+        the mode used by stls-a2a and stls-mcp today, where the same
+        transport object serves both directions of one session.
+
+        Passing direction="c2s" or "s2c" instead derives four keys
+        (AES+HMAC for each direction) and splits them so that the two
+        directions of a session never share key material: a peer
+        declaring "c2s" encrypts with the c2s keys and decrypts with the
+        s2c keys, and a peer declaring "s2c" does the opposite. Both
+        peers must agree on who is "c2s" and who is "s2c" out of band
+        (there is no handshake negotiation of this). Intended for
+        callers that label the two ends of a session themselves (e.g.
+        two peer nodes), not for the existing A2A/MCP request/response
+        flows, which don't need it.
+
     Thread-safety: each instance is stateless after __init__; encrypt/decrypt
     do not mutate internal state and are safe for concurrent calls.
     """
 
-    def __init__(self, session_key: bytes, session_id: str) -> None:
+    def __init__(
+        self,
+        session_key: bytes,
+        session_id: str,
+        direction: Optional[StlsDirection] = None,
+    ) -> None:
         """
         Initializes the transport.
 
@@ -156,28 +184,50 @@ class StlsTransport:
             session_key: Shared session key (output of the KeyProvider).
                          Minimum 16 bytes; typically 32 bytes (256 bit).
             session_id:  Unique identifier of the STLS session (UUID).
+            direction:   None (default) for a single shared key pair used
+                         for both directions. "c2s" or "s2c" to derive
+                         independent per-direction keys instead — see the
+                         class docstring.
         """
+        if direction is not None and direction not in ("c2s", "s2c"):
+            raise ValueError(f"Invalid direction: {direction!r} (expected 'c2s', 's2c' or None)")
+
         self.session_id = session_id
+        self.direction = direction
 
         # Derives the AES and HMAC keys via HKDF-Expand.
         # The SKA session_key is already high-entropy → only Expand is used
-        # (no Extract phase). The two info labels act as domain separators:
-        # the two derived keys never share cryptographic material.
-        self._aes_key: bytes = HKDFExpand(
-            algorithm=hashes.SHA256(),
-            length=32,
-            info=HKDF_INFO_AES,
-        ).derive(session_key)
-
-        self._hmac_key: bytes = HKDFExpand(
-            algorithm=hashes.SHA256(),
-            length=32,
-            info=HKDF_INFO_HMAC,
-        ).derive(session_key)
+        # (no Extract phase). Each info label is a domain separator: none
+        # of the derived keys ever share cryptographic material.
+        if direction is None:
+            aes_key = self._derive(session_key, HKDF_INFO_AES)
+            hmac_key = self._derive(session_key, HKDF_INFO_HMAC)
+            self._enc_aes_key = self._dec_aes_key = aes_key
+            self._enc_hmac_key = self._dec_hmac_key = hmac_key
+        else:
+            aes_c2s = self._derive(session_key, HKDF_INFO_AES_C2S)
+            aes_s2c = self._derive(session_key, HKDF_INFO_AES_S2C)
+            hmac_c2s = self._derive(session_key, HKDF_INFO_HMAC_C2S)
+            hmac_s2c = self._derive(session_key, HKDF_INFO_HMAC_S2C)
+            if direction == "c2s":
+                self._enc_aes_key, self._dec_aes_key = aes_c2s, aes_s2c
+                self._enc_hmac_key, self._dec_hmac_key = hmac_c2s, hmac_s2c
+            else:
+                self._enc_aes_key, self._dec_aes_key = aes_s2c, aes_c2s
+                self._enc_hmac_key, self._dec_hmac_key = hmac_s2c, hmac_c2s
 
         logger.debug(
-            "StlsTransport inizializzato: session_id=%s", session_id
+            "StlsTransport inizializzato: session_id=%s direction=%s",
+            session_id, direction,
         )
+
+    @staticmethod
+    def _derive(session_key: bytes, info: bytes) -> bytes:
+        return HKDFExpand(
+            algorithm=hashes.SHA256(),
+            length=32,
+            info=info,
+        ).derive(session_key)
 
     # ------------------------------------------------------------------
     # Public API
@@ -189,9 +239,12 @@ class StlsTransport:
 
         Pipeline:
             1. Generates a random 96-bit IV (12 bytes).
-            2. Encrypts with AES-256-GCM → ciphertext + GCM tag (128-bit).
-            3. Computes HMAC-SHA256 over (IV ‖ ciphertext ‖ GCM tag).
-            4. Returns a StlsEnvelope with all components.
+            2. Builds the AAD from (version, session_id) and feeds it to
+               GCM, so both fields are bound to the ciphertext's integrity
+               — not just carried alongside it.
+            3. Encrypts with AES-256-GCM → ciphertext + GCM tag (128-bit).
+            4. Computes HMAC-SHA256 over (AAD ‖ IV ‖ ciphertext ‖ GCM tag).
+            5. Returns a StlsEnvelope with all components.
 
         Args:
             plaintext: Payload to encrypt (any bytes).
@@ -200,16 +253,18 @@ class StlsTransport:
             StlsEnvelope ready for serialization and transport.
         """
         iv = os.urandom(12)  # 96-bit for AES-GCM
+        aad = self._build_aad(STLS_VERSION, self.session_id)
 
         cipher = Cipher(
-            algorithms.AES(self._aes_key),
+            algorithms.AES(self._enc_aes_key),
             modes.GCM(iv),
         )
         encryptor = cipher.encryptor()
+        encryptor.authenticate_additional_data(aad)
         ciphertext = encryptor.update(plaintext) + encryptor.finalize()
         tag = encryptor.tag  # 128-bit GCM authentication tag
 
-        mac = self._compute_mac(iv, ciphertext, tag)
+        mac = self._compute_mac(self._enc_hmac_key, aad, iv, ciphertext, tag)
 
         logger.debug(
             "encrypt: session_id=%s ct_len=%d",
@@ -222,6 +277,7 @@ class StlsTransport:
             ciphertext=ciphertext,
             tag=tag,
             mac=mac,
+            version=STLS_VERSION,
         )
 
     def decrypt(self, envelope: StlsEnvelope) -> bytes:
@@ -229,9 +285,14 @@ class StlsTransport:
         Decrypts a STLS envelope.
 
         Pipeline:
-            1. Verifies session_id.
-            2. Verifies HMAC-SHA256 over the envelope (IV ‖ ciphertext ‖ tag).
-            3. Decrypts with AES-256-GCM (verifies the GCM tag internally).
+            1. Verifies version and session_id (local, fail-fast checks).
+            2. Rebuilds the AAD from the envelope's own (version, session_id)
+               and verifies HMAC-SHA256 over (AAD ‖ IV ‖ ciphertext ‖ tag) —
+               so tampering either field, even with iv/ciphertext/tag/mac
+               otherwise left alone, is caught here before any decryption
+               is attempted.
+            3. Decrypts with AES-256-GCM, authenticating the same AAD
+               (verifies the GCM tag internally).
             4. Returns the original plaintext.
 
         Args:
@@ -241,30 +302,39 @@ class StlsTransport:
             Original plaintext as bytes.
 
         Raises:
-            ValueError: If session_id doesn't match or the HMAC / GCM
-                        verification fails (integrity compromised).
+            ValueError: If version/session_id don't match, or the HMAC /
+                        GCM verification fails (integrity compromised).
         """
+        if envelope.version != STLS_VERSION:
+            raise ValueError(
+                f"Unsupported envelope version: {envelope.version!r} "
+                f"(expected {STLS_VERSION!r})"
+            )
+
         if envelope.session_id != self.session_id:
             raise ValueError(
                 f"Session ID mismatch: expected {self.session_id!r}, "
                 f"got {envelope.session_id!r}"
             )
 
+        aad = self._build_aad(envelope.version, envelope.session_id)
+
         # Verifies the HMAC before attempting decryption (fail-fast)
         expected_mac = self._compute_mac(
-            envelope.iv, envelope.ciphertext, envelope.tag
+            self._dec_hmac_key, aad, envelope.iv, envelope.ciphertext, envelope.tag
         )
         if not self._constant_time_equal(expected_mac, envelope.mac):
             raise ValueError(
                 "MAC verification failed — message integrity compromised"
             )
 
-        # AES-256-GCM decryption (verifies the GCM tag internally)
+        # AES-256-GCM decryption (verifies the GCM tag + AAD internally)
         cipher = Cipher(
-            algorithms.AES(self._aes_key),
+            algorithms.AES(self._dec_aes_key),
             modes.GCM(envelope.iv, envelope.tag),
         )
         decryptor = cipher.decryptor()
+        decryptor.authenticate_additional_data(aad)
         try:
             plaintext = decryptor.update(envelope.ciphertext) + decryptor.finalize()
         except Exception as exc:
@@ -321,11 +391,35 @@ class StlsTransport:
     # Internals
     # ------------------------------------------------------------------
 
-    def _compute_mac(self, iv: bytes, ciphertext: bytes, tag: bytes) -> bytes:
-        """Computes HMAC-SHA256 over (IV ‖ ciphertext ‖ GCM tag)."""
-        h = hmac.HMAC(self._hmac_key, hashes.SHA256())
-        h.update(iv + ciphertext + tag)
+    @staticmethod
+    def _compute_mac(
+        hmac_key: bytes, aad: bytes, iv: bytes, ciphertext: bytes, tag: bytes
+    ) -> bytes:
+        """Computes HMAC-SHA256 over (AAD ‖ IV ‖ ciphertext ‖ GCM tag)."""
+        h = hmac.HMAC(hmac_key, hashes.SHA256())
+        h.update(aad)
+        h.update(iv)
+        h.update(ciphertext)
+        h.update(tag)
         return h.finalize()
+
+    @staticmethod
+    def _build_aad(version: str, session_id: str) -> bytes:
+        """
+        Builds a self-delimiting AAD from (version, session_id), so that
+        no two distinct (version, session_id) pairs can ever concatenate
+        to the same bytes (length-prefixed fields instead of bare
+        concatenation, which would let e.g. version="1" + session_id="0.a"
+        collide with version="1.0" + session_id="a").
+        """
+        version_b = version.encode("utf-8")
+        session_id_b = session_id.encode("utf-8")
+        return (
+            len(version_b).to_bytes(1, "big")
+            + version_b
+            + len(session_id_b).to_bytes(2, "big")
+            + session_id_b
+        )
 
     @staticmethod
     def _constant_time_equal(a: bytes, b: bytes) -> bool:

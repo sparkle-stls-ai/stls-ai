@@ -1,0 +1,15 @@
+{
+  "name": "13-client-core-sample",
+  "private": true,
+  "version": "0.0.0",
+  "description": "core-only (no stls-a2a/stls-mcp) client half of the 2-peer-node direction-labeled transport sample — see samples/server/13_server_core.",
+  "type": "module",
+  "dependencies": {
+    "stls-core": "file:../../../node/stls-core"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

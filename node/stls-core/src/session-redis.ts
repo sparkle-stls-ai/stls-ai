@@ -12,20 +12,26 @@
  *     {
  *       "session_key": "<base64(32 bytes)>",
  *       "kid":         "<kid>",
- *       "created_at":  <unix timestamp float>
+ *       "created_at":  <unix timestamp float>,
+ *       "direction":   "c2s" | "s2c" (omitted for the single-shared-key mode)
  *     }
+ *
+ * "direction" is optional on read: a payload written before it existed,
+ * or by a peer that never sets it, is read back as undefined — the
+ * correct default (single shared key for both directions).
  *
  * The TTL is sliding (renewed on every get() via GETEX), same as Python.
  */
 
 import { createClient, type RedisClientType } from "redis";
-import { StlsTransport } from "./crypto.js";
+import { StlsDirection, StlsTransport } from "./crypto.js";
 import type { SessionCache } from "./session.js";
 
 interface RedisSessionPayload {
   session_key: string;
   kid: string;
   created_at: number;
+  direction?: StlsDirection;
 }
 
 export class RedisSessionCache implements SessionCache {
@@ -60,11 +66,17 @@ export class RedisSessionCache implements SessionCache {
     return `${this.prefix}:${sessionId}`;
   }
 
-  async put(sessionId: string, kid: string, sessionKey: Buffer): Promise<void> {
+  async put(
+    sessionId: string,
+    kid: string,
+    sessionKey: Buffer,
+    direction?: StlsDirection,
+  ): Promise<void> {
     const payload: RedisSessionPayload = {
       session_key: sessionKey.toString("base64"),
       kid,
       created_at: Date.now() / 1000,
+      ...(direction !== undefined ? { direction } : {}),
     };
     await this.client.set(this.key(sessionId), JSON.stringify(payload), {
       expiration: { type: "EX", value: this.ttlSeconds },
@@ -84,7 +96,7 @@ export class RedisSessionCache implements SessionCache {
     try {
       const data = JSON.parse(raw) as RedisSessionPayload;
       const sessionKey = Buffer.from(data.session_key, "base64");
-      return new StlsTransport(sessionKey, sessionId);
+      return new StlsTransport(sessionKey, sessionId, data.direction);
     } catch {
       return undefined;
     }

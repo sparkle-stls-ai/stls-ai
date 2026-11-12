@@ -10,6 +10,7 @@
 
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { STLS_VERSION } from "./constants.js";
+import type { StlsDirection } from "./crypto.js";
 import type { KeySessionProvider } from "./providers/base.js";
 import type { SessionCache } from "./session.js";
 
@@ -76,6 +77,7 @@ export async function performHandshake(
   request: HandshakeRequest,
   keySessionProvider: KeySessionProvider,
   sessionCache: SessionCache,
+  direction?: StlsDirection,
 ): Promise<HandshakeResponse> {
   let nonce: Buffer;
   try {
@@ -128,7 +130,7 @@ export async function performHandshake(
   const proof = createHmac("sha256", sessionKey).update(nonce).digest("base64");
 
   try {
-    await sessionCache.put(sessionId, kid, sessionKey);
+    await sessionCache.put(sessionId, kid, sessionKey, direction);
   } catch (exc) {
     throw new HandshakeError(
       `Error registering the session in the cache: ${(exc as Error).message}`,
