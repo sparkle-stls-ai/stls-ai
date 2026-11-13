@@ -14,4 +14,4 @@ export * from "./client-handshake.js";
 export * from "./providers/index.js";
 export * from "./auth/index.js";
 
-export const STLS_CORE_NODE_VERSION = "0.1.6";
+export const STLS_CORE_NODE_VERSION = "0.1.8";

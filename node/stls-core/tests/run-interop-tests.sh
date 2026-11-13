@@ -136,6 +136,13 @@ npx tsx tests/interop/redis-step1-node-put.ts
 "$PYTHON_VENV" tests/interop/python_redis_step2_read_and_put.py
 npx tsx tests/interop/redis-step3-node-get.ts
 
+echo "== [5b/11] Redis session cache interop, encryption-at-rest (same KEK on both sides, issue #20) =="
+export STLS_CORE_ATREST_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")"
+npx tsx tests/interop/redis-step1-node-put.ts
+"$PYTHON_VENV" tests/interop/python_redis_step2_read_and_put.py
+npx tsx tests/interop/redis-step3-node-get.ts
+unset STLS_CORE_ATREST_KEY
+
 echo "== [6/11] Auth module (ApiKeyManager + a real RedisKeyCache) =="
 npx tsx tests/auth.smoke.ts
 

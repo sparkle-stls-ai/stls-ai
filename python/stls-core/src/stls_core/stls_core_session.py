@@ -28,10 +28,28 @@ Environment variables:
                                  instead of, the idle TTL above. Per-process
                                  config (server-side only, never client
                                  settable) — see issue #6.
+  STLS_CORE_ATREST_KEY          base64-encoded 32-byte wrapping key (KEK).
+                                 Unset (default): the Redis payload below
+                                 is stored in the clear, as before this
+                                 existed (a warning is logged once).
+                                 Set: the payload is additionally
+                                 AES-256-GCM-sealed (see stls_core_atrest.py)
+                                 before SET and opened after GET — see
+                                 issue #20. Shared with
+                                 RedisArqitKeyStore; domain-separated via
+                                 HKDF so one KEK safely serves both.
 
 Redis layout:
-  {prefix}:{session_id}  →  JSON {"session_key": "<base64>", "kid": "<kid>",
-                                   "created_at": <timestamp>}
+  {prefix}:{session_id}  →  JSON {"enc_aes_key": "<base64>",
+                                   "dec_aes_key": "<base64>",
+                                   "enc_hmac_key": "<base64>",
+                                   "dec_hmac_key": "<base64>",
+                                   "kid": "<kid>", "created_at": <timestamp>}
+                             — optionally AES-256-GCM-sealed as a whole
+                             when STLS_CORE_ATREST_KEY is set (see above).
+                             Only the already-HKDF-derived AES/HMAC keys
+                             are stored, never the raw session_key passed
+                             to put() — see issue #20.
                              TTL = SESSION_CACHE_TTL (idle timeout, renewed on get)
                              created_at also drives the max-age check above
                              when SESSION_KEY_MAX_AGE_SECONDS is set — every
@@ -66,7 +84,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from .stls_core_crypto import StlsTransport
+from .stls_core_atrest import AtRestCipher
+from .stls_core_crypto import DerivedKeys, StlsTransport
 
 logger = logging.getLogger(__name__)
 
@@ -305,16 +324,27 @@ class RedisSessionCache(SessionCacheBase):
     STLS sessions cache on Redis. For multi-replica, stateless Cloud Run deployments.
 
     Redis layout:
-      {prefix}:{session_id}  →  JSON string   TTL = ttl_seconds (idle timeout)
+      {prefix}:{session_id}  →  JSON string, optionally AES-256-GCM-sealed
+                                 as a whole (see below)   TTL = ttl_seconds
+                                 (idle timeout)
 
     The JSON contains:
       {
-        "session_key": "<base64(32 bytes)>",  ← raw key for reconstruction
-        "kid":         "<kid>",               ← audit and correlation with stls:ks:*
-        "created_at":  <unix timestamp float>  ← absolute creation time (wall
-                                                  clock); drives the max-age
-                                                  check below when enabled.
+        "enc_aes_key":  "<base64>",            ← already-HKDF-derived keys;
+        "dec_aes_key":  "<base64>",              the raw session_key passed
+        "enc_hmac_key": "<base64>",              to put() is never stored —
+        "dec_hmac_key": "<base64>",              see issue #20.
+        "kid":          "<kid>",               ← audit and correlation with stls:ks:*
+        "created_at":   <unix timestamp float>  ← absolute creation time (wall
+                                                   clock); drives the max-age
+                                                   check below when enabled.
       }
+
+    If STLS_CORE_ATREST_KEY is set, this JSON is AES-256-GCM-sealed as a
+    whole (AtRestCipher, see stls_core_atrest.py) before SET and opened
+    after GET — independent of Redis's own at-rest settings. If unset,
+    the JSON above is stored in the clear, as before encryption-at-rest
+    existed (a warning is logged once, at construction).
 
     The TTL is sliding (renewed on every get() via GETEX) — a session
     expires only after SESSION_CACHE_TTL seconds of inactivity. On top of
@@ -352,6 +382,13 @@ class RedisSessionCache(SessionCacheBase):
         self._ttl = ttl_seconds
         self._max_age = max_age_seconds
 
+        self._cipher = AtRestCipher.from_env(label=b"stls-core/session-cache")
+        if self._cipher is None:
+            logger.warning(
+                "RedisSessionCache: STLS_CORE_ATREST_KEY is not set — session "
+                "cache entries are stored in plaintext (see issue #20)."
+            )
+
         logger.info(
             "RedisSessionCache inizializzata: prefix=%s url=%s ttl=%ds max_age=%ds",
             prefix, redis_url, ttl_seconds, max_age_seconds,
@@ -361,12 +398,24 @@ class RedisSessionCache(SessionCacheBase):
         return f"{self._prefix}:{session_id}"
 
     def put(self, session_id: str, kid: str, session_key: bytes) -> None:
+        # Derives the AES/HMAC keys once and discards session_key — only
+        # the derived keys below are ever written to Redis (issue #20).
+        derived = StlsTransport.derive_keys(session_key)
         payload = json.dumps({
-            "session_key": base64.b64encode(session_key).decode(),
-            "kid":         kid,
-            "created_at":  time.time(),
-        })
-        self._r.set(self._key(session_id), payload, ex=self._ttl)
+            "enc_aes_key":  base64.b64encode(derived.enc_aes_key).decode(),
+            "dec_aes_key":  base64.b64encode(derived.dec_aes_key).decode(),
+            "enc_hmac_key": base64.b64encode(derived.enc_hmac_key).decode(),
+            "dec_hmac_key": base64.b64encode(derived.dec_hmac_key).decode(),
+            "kid":          kid,
+            "created_at":   time.time(),
+        }).encode("utf-8")
+
+        value = (
+            base64.b64encode(self._cipher.seal(payload)).decode()
+            if self._cipher is not None
+            else payload.decode("utf-8")
+        )
+        self._r.set(self._key(session_id), value, ex=self._ttl)
         logger.debug(
             "RedisSessionCache.put: session_id=%s kid=%s ttl=%ds",
             session_id, kid, self._ttl,
@@ -380,8 +429,14 @@ class RedisSessionCache(SessionCacheBase):
             return None
 
         try:
-            data = json.loads(raw)
-            session_key = base64.b64decode(data["session_key"])
+            payload = self._cipher.open(base64.b64decode(raw)) if self._cipher is not None else raw.encode("utf-8")
+            data = json.loads(payload)
+            derived = DerivedKeys(
+                enc_aes_key=base64.b64decode(data["enc_aes_key"]),
+                dec_aes_key=base64.b64decode(data["dec_aes_key"]),
+                enc_hmac_key=base64.b64decode(data["enc_hmac_key"]),
+                dec_hmac_key=base64.b64decode(data["dec_hmac_key"]),
+            )
         except Exception as exc:
             logger.error(
                 "RedisSessionCache.get: errore deserializzazione session_id=%s: %s",
@@ -400,7 +455,7 @@ class RedisSessionCache(SessionCacheBase):
                 )
                 return None
 
-        return StlsTransport(session_key=session_key, session_id=session_id)
+        return StlsTransport.from_derived_keys(derived, session_id=session_id)
 
     def remove(self, session_id: str) -> bool:
         deleted = self._r.delete(self._key(session_id))

@@ -53,8 +53,16 @@ returns a ready-to-use StlsTransport with the raw session_key discarded —
 this service needs the raw bytes on every call to rebuild
 SecureA2ATransportAdapter (base_url changes per request, so the adapter is
 never reused across calls). The cache below is therefore a small
-reimplementation, not a direct import, kept wire-compatible with
-stls_core.RedisSessionCache's Redis JSON envelope for operational parity.
+reimplementation, not a direct import — it needs the raw session key in
+its own "session_key" JSON field, which diverges from
+stls_core.RedisSessionCache's own Redis schema as of stls_core 0.1.8
+(issue #20: that cache no longer persists the raw key at all, only its
+already-derived AES/HMAC keys, and optionally seals the whole payload
+under STLS_CORE_ATREST_KEY). No longer wire-compatible for shared ops
+tooling across the two schemas — see samples/server/sofia-admin's
+"tools_redis.py", whose stls_core-side inspection degrades once
+encryption at rest is enabled there (this module's own session store
+is unaffected either way).
 """
 
 from __future__ import annotations

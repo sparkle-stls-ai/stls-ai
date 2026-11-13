@@ -25,6 +25,10 @@
  *         between the two transports; a transport can't decrypt its own output)
  *   T18 — direction=undefined (legacy) and direction="c2s" derive different keys
  *   T19 — invalid direction value is rejected
+ *   T20 — deriveKeys() + fromDerivedKeys() behave like the constructor (no direction)
+ *   T21 — same, with direction "c2s"/"s2c" splitting
+ *   T22 — deriveKeys() without a direction returns a single shared pair (enc == dec)
+ *   T23 — fromDerivedKeys() validates direction just like the constructor
  */
 
 import assert from "node:assert/strict";
@@ -243,6 +247,51 @@ const SESSION_ID = "test-session-id-0001";
   const key = freshKey();
   assert.throws(() => new StlsTransport(key, SESSION_ID, "bogus" as any), /Invalid direction/);
   console.log("OK: T19 invalid direction value is rejected");
+}
+
+// T20 — fromDerivedKeys() matches the constructor (no direction)
+{
+  const key = freshKey();
+  const direct = new StlsTransport(key, SESSION_ID);
+  const derived = StlsTransport.deriveKeys(key);
+  const reconstructed = StlsTransport.fromDerivedKeys(derived, SESSION_ID);
+
+  const envelope = direct.encrypt(Buffer.from("hello"));
+  assert.deepEqual(reconstructed.decrypt(envelope), Buffer.from("hello"));
+
+  const envelope2 = reconstructed.encrypt(Buffer.from("world"));
+  assert.deepEqual(direct.decrypt(envelope2), Buffer.from("world"));
+  console.log("OK: T20 fromDerivedKeys() matches the constructor");
+}
+
+// T21 — fromDerivedKeys() matches the constructor, with direction
+{
+  const key = freshKey();
+  const directS2c = new StlsTransport(key, SESSION_ID, "s2c");
+  const derivedC2s = StlsTransport.deriveKeys(key, "c2s");
+  const reconstructedC2s = StlsTransport.fromDerivedKeys(derivedC2s, SESSION_ID, "c2s");
+
+  const envelope = reconstructedC2s.encrypt(Buffer.from("c2s payload"));
+  assert.deepEqual(directS2c.decrypt(envelope), Buffer.from("c2s payload"));
+  console.log("OK: T21 fromDerivedKeys() matches the constructor (with direction)");
+}
+
+// T22 — deriveKeys() without a direction returns a single shared pair
+{
+  const derived = StlsTransport.deriveKeys(freshKey());
+  assert.deepEqual(derived.encAesKey, derived.decAesKey);
+  assert.deepEqual(derived.encHmacKey, derived.decHmacKey);
+  console.log("OK: T22 deriveKeys() without direction: enc == dec");
+}
+
+// T23 — fromDerivedKeys() validates direction
+{
+  const derived = StlsTransport.deriveKeys(freshKey());
+  assert.throws(
+    () => StlsTransport.fromDerivedKeys(derived, SESSION_ID, "bogus" as any),
+    /Invalid direction/,
+  );
+  console.log("OK: T23 fromDerivedKeys() rejects an invalid direction");
 }
 
 console.log("ALL CRYPTO UNIT CHECKS PASSED");

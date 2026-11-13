@@ -42,6 +42,16 @@ Environment variables (Redis backend)
     KEY_STORE_PENDING_TTL         pending key TTL in seconds (default: 300)
     KEY_STORE_SESSION_TTL         delivered key TTL in seconds (default: 3600)
     KEY_STORE_POLL_INTERVAL       wait_for_new_key polling interval (default: 0.3s)
+    STLS_CORE_ATREST_KEY          base64-encoded 32-byte wrapping key (KEK).
+                                   Unset (default): key_data is stored in
+                                   the clear, as before this existed (a
+                                   warning is logged once). Set: key_data
+                                   is additionally AES-256-GCM-sealed (see
+                                   stls_core_atrest.py) before SET and
+                                   opened after GET — see issue #20.
+                                   Shared with RedisSessionCache;
+                                   domain-separated via HKDF so one KEK
+                                   safely serves both.
 """
 
 from __future__ import annotations
@@ -52,6 +62,8 @@ import threading
 import time as _time
 from abc import ABC, abstractmethod
 from typing import Optional
+
+from ..stls_core_atrest import AtRestCipher
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +241,10 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
 
     Redis structures used (prefix = "stls:ks:{namespace}"):
 
-      stls:ks:{ns}:key:{kid}   STRING  key_data (bytes)
+      stls:ks:{ns}:key:{kid}   STRING  key_data (bytes), optionally
+                                        AES-256-GCM-sealed as a whole when
+                                        STLS_CORE_ATREST_KEY is set (see
+                                        stls_core_atrest.py and issue #20)
                                         TTL = KEY_PENDING_TTL while pending,
                                         TTL = KEY_SESSION_TTL after mark_delivered()
 
@@ -281,6 +296,13 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
         self._poll_interval = poll_interval
         self._zrem_on_deliver = zrem_on_deliver
 
+        self._cipher = AtRestCipher.from_env(label=b"stls-core/keystore")
+        if self._cipher is None:
+            logger.warning(
+                "[RedisKeyStore] STLS_CORE_ATREST_KEY is not set — key "
+                "material is stored in plaintext (see issue #20)."
+            )
+
         logger.info(
             "[RedisKeyStore] ns=%s url=%s pending_ttl=%ds session_ttl=%ds zrem_on_deliver=%s",
             namespace, redis_url, pending_ttl, session_ttl, zrem_on_deliver,
@@ -297,9 +319,12 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
     # -- ABC implementation -----------------------------------------------------
 
     def add(self, key_id: str, key_bytes: bytes) -> None:
+        # Envelope-encrypted at rest when STLS_CORE_ATREST_KEY is set —
+        # independent of Redis's own at-rest settings. See issue #20.
+        stored = self._cipher.seal(key_bytes) if self._cipher is not None else key_bytes
         now = _time.time()
         pipe = self._r.pipeline()
-        pipe.set(self._key(key_id), key_bytes, ex=self._pending_ttl)
+        pipe.set(self._key(key_id), stored, ex=self._pending_ttl)
         pipe.zadd(self._pending(), {key_id: now})
         pipe.execute()
         logger.debug(
@@ -313,7 +338,17 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
         # expires only if unused for TTL consecutive seconds) rather than a
         # fixed lifetime — the correct semantics for active cryptographic sessions.
         val = self._r.getex(self._key(key_id), ex=self._session_ttl)
-        return bytes(val) if val is not None else None
+        if val is None:
+            return None
+        if self._cipher is None:
+            return bytes(val)
+        try:
+            return self._cipher.open(bytes(val))
+        except Exception as exc:
+            logger.error(
+                "[RedisKeyStore] get: decryption failed for id=%s: %s", key_id, exc,
+            )
+            return None
 
     def get_last(self) -> Optional[tuple[str, bytes]]:
         """Returns the most recent pending key (highest score in the ZSET).

@@ -26,7 +26,7 @@ import hmac as _hmac
 import json
 import logging
 import os
-from typing import Any, Literal, Optional
+from typing import Any, Literal, NamedTuple, Optional
 
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -51,6 +51,26 @@ from .stls_core_constants import (
 StlsDirection = Literal["c2s", "s2c"]
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# DerivedKeys — the four AES/HMAC keys a StlsTransport operates on
+# ---------------------------------------------------------------------------
+
+class DerivedKeys(NamedTuple):
+    """
+    The four keys StlsTransport actually uses, already HKDF-derived from
+    a session_key. Letting a caller hold onto these instead of the raw
+    session_key — and reconstruct a StlsTransport from them later via
+    StlsTransport.from_derived_keys() — means a store sitting between
+    "derive" and "use" (e.g. a Redis-backed session cache) never needs
+    to persist the raw session_key at all. See issue #20.
+    """
+
+    enc_aes_key: bytes
+    dec_aes_key: bytes
+    enc_hmac_key: bytes
+    dec_hmac_key: bytes
 
 
 # ---------------------------------------------------------------------------
@@ -195,30 +215,88 @@ class StlsTransport:
         self.session_id = session_id
         self.direction = direction
 
-        # Derives the AES and HMAC keys via HKDF-Expand.
-        # The SKA session_key is already high-entropy → only Expand is used
-        # (no Extract phase). Each info label is a domain separator: none
-        # of the derived keys ever share cryptographic material.
-        if direction is None:
-            aes_key = self._derive(session_key, HKDF_INFO_AES)
-            hmac_key = self._derive(session_key, HKDF_INFO_HMAC)
-            self._enc_aes_key = self._dec_aes_key = aes_key
-            self._enc_hmac_key = self._dec_hmac_key = hmac_key
-        else:
-            aes_c2s = self._derive(session_key, HKDF_INFO_AES_C2S)
-            aes_s2c = self._derive(session_key, HKDF_INFO_AES_S2C)
-            hmac_c2s = self._derive(session_key, HKDF_INFO_HMAC_C2S)
-            hmac_s2c = self._derive(session_key, HKDF_INFO_HMAC_S2C)
-            if direction == "c2s":
-                self._enc_aes_key, self._dec_aes_key = aes_c2s, aes_s2c
-                self._enc_hmac_key, self._dec_hmac_key = hmac_c2s, hmac_s2c
-            else:
-                self._enc_aes_key, self._dec_aes_key = aes_s2c, aes_c2s
-                self._enc_hmac_key, self._dec_hmac_key = hmac_s2c, hmac_c2s
+        derived = self.derive_keys(session_key, direction)
+        self._enc_aes_key = derived.enc_aes_key
+        self._dec_aes_key = derived.dec_aes_key
+        self._enc_hmac_key = derived.enc_hmac_key
+        self._dec_hmac_key = derived.dec_hmac_key
 
         logger.debug(
             "StlsTransport inizializzato: session_id=%s direction=%s",
             session_id, direction,
+        )
+
+    @classmethod
+    def from_derived_keys(
+        cls,
+        derived: DerivedKeys,
+        session_id: str,
+        direction: Optional[StlsDirection] = None,
+    ) -> "StlsTransport":
+        """
+        Reconstructs a StlsTransport from already-derived keys, bypassing
+        HKDF derivation from a raw session_key.
+
+        For a store that sits between "derive once" and "use later" (e.g.
+        a Redis-backed session cache) and should never hold the raw
+        session_key at rest — see derive_keys() and issue #20.
+
+        Args:
+            derived:   The four keys, e.g. as returned by derive_keys().
+            session_id: Unique identifier of the STLS session (UUID).
+            direction:  Must match whatever was passed to derive_keys()
+                        when `derived` was produced — it is not re-derived
+                        here, only recorded on the instance.
+        """
+        if direction is not None and direction not in ("c2s", "s2c"):
+            raise ValueError(f"Invalid direction: {direction!r} (expected 'c2s', 's2c' or None)")
+
+        self = cls.__new__(cls)
+        self.session_id = session_id
+        self.direction = direction
+        self._enc_aes_key = derived.enc_aes_key
+        self._dec_aes_key = derived.dec_aes_key
+        self._enc_hmac_key = derived.enc_hmac_key
+        self._dec_hmac_key = derived.dec_hmac_key
+        return self
+
+    @staticmethod
+    def derive_keys(
+        session_key: bytes,
+        direction: Optional[StlsDirection] = None,
+    ) -> DerivedKeys:
+        """
+        Derives the four AES/HMAC keys from a raw session_key via
+        HKDF-Expand, without building a full StlsTransport.
+
+        The SKA session_key is already high-entropy → only Expand is used
+        (no Extract phase). Each info label is a domain separator: none
+        of the derived keys ever share cryptographic material.
+
+        Exposed so a caller can derive once, discard the raw session_key,
+        and persist/transport only the derived keys — reconstructing the
+        transport later via from_derived_keys(). See issue #20.
+        """
+        if direction is None:
+            aes_key = StlsTransport._derive(session_key, HKDF_INFO_AES)
+            hmac_key = StlsTransport._derive(session_key, HKDF_INFO_HMAC)
+            return DerivedKeys(
+                enc_aes_key=aes_key, dec_aes_key=aes_key,
+                enc_hmac_key=hmac_key, dec_hmac_key=hmac_key,
+            )
+
+        aes_c2s = StlsTransport._derive(session_key, HKDF_INFO_AES_C2S)
+        aes_s2c = StlsTransport._derive(session_key, HKDF_INFO_AES_S2C)
+        hmac_c2s = StlsTransport._derive(session_key, HKDF_INFO_HMAC_C2S)
+        hmac_s2c = StlsTransport._derive(session_key, HKDF_INFO_HMAC_S2C)
+        if direction == "c2s":
+            return DerivedKeys(
+                enc_aes_key=aes_c2s, dec_aes_key=aes_s2c,
+                enc_hmac_key=hmac_c2s, dec_hmac_key=hmac_s2c,
+            )
+        return DerivedKeys(
+            enc_aes_key=aes_s2c, dec_aes_key=aes_c2s,
+            enc_hmac_key=hmac_s2c, dec_hmac_key=hmac_c2s,
         )
 
     @staticmethod
