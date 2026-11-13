@@ -26,9 +26,14 @@
  *   R18 — no cross-instance coordination needed: two separate
  *         RedisSessionCache instances on the same Redis agree on max-age
  *         expiry by reading the same shared created_at
+ *   R19 — the raw session key is never stored, only the derived keys (issue #20 (a))
+ *   R20 — with STLS_CORE_ATREST_KEY set, the stored payload is sealed and
+ *         still round-trips through get() (issue #20 (b))
+ *   R21 — get() with the wrong KEK fails closed (returns undefined), doesn't throw
  */
 
 import assert from "node:assert/strict";
+import { createClient } from "redis";
 import { randomBytes } from "node:crypto";
 import { InMemorySessionCache } from "../src/session.js";
 import { RedisSessionCache } from "../src/session-redis.js";
@@ -154,6 +159,76 @@ async function main(): Promise<void> {
     await instanceA.close();
     await instanceB.close();
     console.log("OK: R18 no cross-instance coordination needed (Redis)");
+  }
+
+  // R19 — the raw session key is never stored, only the derived keys
+  {
+    const raw = createClient({ url: redisUrl });
+    await raw.connect();
+    const cache = await RedisSessionCache.connect({ url: redisUrl, prefix, ttlSeconds: 300 });
+    const sessionKey = freshKey();
+    await cache.put(SID1, KID1, sessionKey);
+
+    const stored = await raw.get(`${prefix}:${SID1}`);
+    assert.ok(stored !== null);
+    assert.ok(!stored!.includes(sessionKey.toString("base64")));
+    const parsed = JSON.parse(stored!);
+    assert.equal("session_key" in parsed, false);
+    assert.ok("enc_aes_key" in parsed);
+
+    await cache.remove(SID1);
+    await cache.close();
+    await raw.quit();
+    console.log("OK: R19 raw session key never stored, only derived keys");
+  }
+
+  // R20 — STLS_CORE_ATREST_KEY set: stored payload is sealed, still round-trips
+  {
+    const kek = randomBytes(32).toString("base64");
+    process.env.STLS_CORE_ATREST_KEY = kek;
+    try {
+      const raw = createClient({ url: redisUrl });
+      await raw.connect();
+      const cache = await RedisSessionCache.connect({ url: redisUrl, prefix, ttlSeconds: 300 });
+      await cache.put(SID1, KID1, freshKey());
+
+      const stored = await raw.get(`${prefix}:${SID1}`);
+      assert.ok(stored !== null);
+      assert.throws(() => JSON.parse(stored!));
+
+      const transport = await cache.get(SID1);
+      assert.notEqual(transport, undefined);
+      const envelope = transport!.encrypt(Buffer.from("sealed round-trip"));
+      assert.deepEqual(transport!.decrypt(envelope), Buffer.from("sealed round-trip"));
+
+      await cache.remove(SID1);
+      await cache.close();
+      await raw.quit();
+      console.log("OK: R20 STLS_CORE_ATREST_KEY set: payload sealed and round-trips");
+    } finally {
+      delete process.env.STLS_CORE_ATREST_KEY;
+    }
+  }
+
+  // R21 — wrong KEK fails closed (returns undefined), doesn't throw
+  {
+    process.env.STLS_CORE_ATREST_KEY = randomBytes(32).toString("base64");
+    const writer = await RedisSessionCache.connect({ url: redisUrl, prefix, ttlSeconds: 300 });
+    try {
+      process.env.STLS_CORE_ATREST_KEY = randomBytes(32).toString("base64");
+      const reader = await RedisSessionCache.connect({ url: redisUrl, prefix, ttlSeconds: 300 });
+      try {
+        await writer.put(SID1, KID1, freshKey());
+        assert.equal(await reader.get(SID1), undefined);
+      } finally {
+        await reader.remove(SID1);
+        await reader.close();
+      }
+    } finally {
+      delete process.env.STLS_CORE_ATREST_KEY;
+      await writer.close();
+    }
+    console.log("OK: R21 wrong KEK fails closed, doesn't throw");
   }
 
   console.log("\nAll session.smoke.ts checks passed.");

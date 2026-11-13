@@ -1,6 +1,6 @@
 {
   "name": "stls-core",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Core cryptographic transport layer for STLS — protocol-agnostic symmetric encryption, quantum-safe key providers and API key auth (Node.js port of python/stls-core)",
   "license": "(AGPL-3.0-or-later OR LicenseRef-Commercial)",
   "repository": {
@@ -24,6 +24,7 @@
     "build": "tsc -p tsconfig.json",
     "test:auth-smoke": "tsx tests/auth.smoke.ts",
     "test:crypto-smoke": "tsx tests/crypto.smoke.ts",
+    "test:atrest-smoke": "tsx tests/atrest.smoke.ts",
     "test:session-smoke": "tsx tests/session.smoke.ts",
     "test:provider-factory-smoke": "tsx tests/interop/provider-factory.smoke.ts",
     "test:crypto-interop": "tsx tests/interop/crypto.smoke.ts",

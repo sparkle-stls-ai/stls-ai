@@ -25,6 +25,10 @@ Copertura:
   T18 — direction=None (default) e direction="c2s" derivano chiavi diverse (nessuna
         confusione tra le due modalità)
   T19 — direction invalido → ValueError
+  T20 — derive_keys() + from_derived_keys() behave like the constructor (no direction)
+  T21 — same, with direction="c2s"/"s2c" splitting
+  T22 — derive_keys() without a direction returns a single shared pair (enc == dec)
+  T23 — from_derived_keys() validates direction just like the constructor
 """
 
 import json
@@ -314,3 +318,47 @@ def test_T18_legacy_mode_keys_differ_from_direction_mode(session_key_32, session
 def test_T19_invalid_direction_rejected(session_key_32, session_id):
     with pytest.raises(ValueError, match="Invalid direction"):
         StlsTransport(session_key_32, session_id, direction="bogus")
+
+
+# ---------------------------------------------------------------------------
+# T20-T23 — derive_keys() / from_derived_keys() (issue #20)
+# ---------------------------------------------------------------------------
+
+def test_T20_from_derived_keys_matches_constructor(session_key_32, session_id):
+    """T20 — a transport built from derive_keys() output behaves identically
+    to one built directly from the raw session_key (no direction)."""
+    direct = StlsTransport(session_key_32, session_id)
+    derived = StlsTransport.derive_keys(session_key_32)
+    reconstructed = StlsTransport.from_derived_keys(derived, session_id)
+
+    envelope = direct.encrypt(b"hello")
+    assert reconstructed.decrypt(envelope) == b"hello"
+
+    envelope2 = reconstructed.encrypt(b"world")
+    assert direct.decrypt(envelope2) == b"world"
+
+
+def test_T21_from_derived_keys_matches_constructor_with_direction(session_key_32, session_id):
+    """T21 — same as T20, but with direction="c2s"/"s2c" splitting."""
+    direct_c2s = StlsTransport(session_key_32, session_id, direction="c2s")
+    direct_s2c = StlsTransport(session_key_32, session_id, direction="s2c")
+
+    derived_c2s = StlsTransport.derive_keys(session_key_32, direction="c2s")
+    reconstructed_c2s = StlsTransport.from_derived_keys(derived_c2s, session_id, direction="c2s")
+
+    envelope = reconstructed_c2s.encrypt(b"c2s payload")
+    assert direct_s2c.decrypt(envelope) == b"c2s payload"
+
+
+def test_T22_derive_keys_no_direction_enc_equals_dec(session_key_32):
+    """T22 — without a direction, derive_keys() returns a single shared pair (enc == dec)."""
+    derived = StlsTransport.derive_keys(session_key_32)
+    assert derived.enc_aes_key == derived.dec_aes_key
+    assert derived.enc_hmac_key == derived.dec_hmac_key
+
+
+def test_T23_from_derived_keys_invalid_direction_rejected(session_key_32, session_id):
+    """T23 — from_derived_keys() validates direction just like the constructor."""
+    derived = StlsTransport.derive_keys(session_key_32)
+    with pytest.raises(ValueError, match="Invalid direction"):
+        StlsTransport.from_derived_keys(derived, session_id, direction="bogus")

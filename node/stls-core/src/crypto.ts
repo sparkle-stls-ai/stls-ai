@@ -41,11 +41,26 @@ import {
 
 export type StlsDirection = "c2s" | "s2c";
 
+/**
+ * The four keys a StlsTransport actually uses, already HKDF-derived from
+ * a session key. Letting a caller hold onto these instead of the raw
+ * session key — and reconstruct a StlsTransport from them later via
+ * StlsTransport.fromDerivedKeys() — means a store sitting between
+ * "derive" and "use" (e.g. a Redis-backed session cache) never needs to
+ * persist the raw session key at all. See issue #20.
+ */
+export interface DerivedKeys {
+  encAesKey: Buffer;
+  decAesKey: Buffer;
+  encHmacKey: Buffer;
+  decHmacKey: Buffer;
+}
+
 // ---------------------------------------------------------------------------
 // HKDF-Expand (RFC 5869 §2.3) — PRK passed in directly, no extract step.
 // ---------------------------------------------------------------------------
 
-function hkdfExpand(prk: Buffer, info: Buffer, length: number): Buffer {
+export function hkdfExpand(prk: Buffer, info: Buffer, length: number): Buffer {
   const hashLen = 32; // SHA-256
   const n = Math.ceil(length / hashLen);
   if (n > 255) {
@@ -146,8 +161,13 @@ export class StlsTransport {
   private readonly encHmacKey: Buffer;
   private readonly decHmacKey: Buffer;
 
+  /**
+   * @param sessionKeyOrDerived Either the raw session key (derived
+   *   internally via deriveKeys()), or an already-derived DerivedKeys —
+   *   see fromDerivedKeys() and issue #20.
+   */
   constructor(
-    sessionKey: Buffer,
+    sessionKeyOrDerived: Buffer | DerivedKeys,
     public readonly sessionId: string,
     public readonly direction?: StlsDirection,
   ) {
@@ -155,28 +175,51 @@ export class StlsTransport {
       throw new Error(`Invalid direction: ${direction} (expected "c2s", "s2c" or undefined)`);
     }
 
+    const derived = Buffer.isBuffer(sessionKeyOrDerived)
+      ? StlsTransport.deriveKeys(sessionKeyOrDerived, direction)
+      : sessionKeyOrDerived;
+    this.encAesKey = derived.encAesKey;
+    this.decAesKey = derived.decAesKey;
+    this.encHmacKey = derived.encHmacKey;
+    this.decHmacKey = derived.decHmacKey;
+  }
+
+  /**
+   * Reconstructs a StlsTransport from already-derived keys (e.g. as
+   * returned by deriveKeys()), bypassing HKDF derivation from a raw
+   * session key. See issue #20.
+   */
+  static fromDerivedKeys(
+    keys: DerivedKeys,
+    sessionId: string,
+    direction?: StlsDirection,
+  ): StlsTransport {
+    return new StlsTransport(keys, sessionId, direction);
+  }
+
+  /**
+   * Derives the four AES/HMAC keys from a raw session key via
+   * HKDF-Expand, without building a full StlsTransport.
+   *
+   * Exposed so a caller can derive once, discard the raw session key,
+   * and persist/transport only the derived keys — reconstructing the
+   * transport later via fromDerivedKeys(). See issue #20.
+   */
+  static deriveKeys(sessionKey: Buffer, direction?: StlsDirection): DerivedKeys {
     if (direction === undefined) {
       const aesKey = hkdfExpand(sessionKey, HKDF_INFO_AES, 32);
       const hmacKey = hkdfExpand(sessionKey, HKDF_INFO_HMAC, 32);
-      this.encAesKey = this.decAesKey = aesKey;
-      this.encHmacKey = this.decHmacKey = hmacKey;
-    } else {
-      const aesC2s = hkdfExpand(sessionKey, HKDF_INFO_AES_C2S, 32);
-      const aesS2c = hkdfExpand(sessionKey, HKDF_INFO_AES_S2C, 32);
-      const hmacC2s = hkdfExpand(sessionKey, HKDF_INFO_HMAC_C2S, 32);
-      const hmacS2c = hkdfExpand(sessionKey, HKDF_INFO_HMAC_S2C, 32);
-      if (direction === "c2s") {
-        this.encAesKey = aesC2s;
-        this.decAesKey = aesS2c;
-        this.encHmacKey = hmacC2s;
-        this.decHmacKey = hmacS2c;
-      } else {
-        this.encAesKey = aesS2c;
-        this.decAesKey = aesC2s;
-        this.encHmacKey = hmacS2c;
-        this.decHmacKey = hmacC2s;
-      }
+      return { encAesKey: aesKey, decAesKey: aesKey, encHmacKey: hmacKey, decHmacKey: hmacKey };
     }
+
+    const aesC2s = hkdfExpand(sessionKey, HKDF_INFO_AES_C2S, 32);
+    const aesS2c = hkdfExpand(sessionKey, HKDF_INFO_AES_S2C, 32);
+    const hmacC2s = hkdfExpand(sessionKey, HKDF_INFO_HMAC_C2S, 32);
+    const hmacS2c = hkdfExpand(sessionKey, HKDF_INFO_HMAC_S2C, 32);
+    if (direction === "c2s") {
+      return { encAesKey: aesC2s, decAesKey: aesS2c, encHmacKey: hmacC2s, decHmacKey: hmacS2c };
+    }
+    return { encAesKey: aesS2c, decAesKey: aesC2s, encHmacKey: hmacS2c, decHmacKey: hmacC2s };
   }
 
   encrypt(plaintext: Buffer): StlsEnvelope {

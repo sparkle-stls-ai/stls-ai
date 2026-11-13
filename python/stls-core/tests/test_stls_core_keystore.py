@@ -32,6 +32,10 @@ Copertura:
   R12 — wait_for_new_key() restituisce None al timeout
   R13 — wait_for_new_key() salta i kid presenti in seen_key_ids
   R14 — wait_for_new_key() ignora entry pending scadute (key:<kid> assente)
+  R18 — default (no KEK): key_data is stored in the clear (unchanged behavior)
+  R19 — with STLS_CORE_ATREST_KEY set, key_data is sealed and still
+         round-trips through get() (issue #20 (b))
+  R20 — get() with the wrong KEK fails closed (returns None), doesn't crash
 
   ArqitKeyStoreFactory
   ─────────────────────
@@ -78,8 +82,13 @@ def make_redis_store(
     session_ttl: int = 300,
     poll_interval: float = 0.05,
     zrem_on_deliver: bool = False,
+    cipher=None,
 ) -> RedisArqitKeyStore:
-    """Costruisce un RedisArqitKeyStore collegato a un fakeredis server."""
+    """Costruisce un RedisArqitKeyStore collegato a un fakeredis server.
+
+    cipher=None (default) matches the no-KEK fallback (plaintext bytes);
+    pass an AtRestCipher to test the encryption-at-rest path (issue #20).
+    """
     store = RedisArqitKeyStore.__new__(RedisArqitKeyStore)
     store._r = fakeredis.FakeRedis(server=server, decode_responses=False)
     store._ns = namespace
@@ -87,6 +96,7 @@ def make_redis_store(
     store._session_ttl = session_ttl
     store._poll_interval = poll_interval
     store._zrem_on_deliver = zrem_on_deliver
+    store._cipher = cipher
     return store
 
 
@@ -391,6 +401,38 @@ class TestRedisArqitKeyStore:
         # wait_for_new_key con stale_keys come seen → deve skippare KID1 e trovare KID2
         result = store.wait_for_new_key(seen_key_ids=stale_keys, timeout=2.0)
         assert result == (KID2, DATA2)
+
+    def test_r18_no_cipher_stores_key_data_in_the_clear(self, rstore):
+        """R18 — default (no KEK): key_data is stored byte-for-byte, as before issue #20."""
+        rstore.add(KID1, DATA1)
+        raw = rstore._r.get(rstore._key(KID1))
+        assert bytes(raw) == DATA1
+
+    def test_r19_atrest_cipher_set_seals_key_data(self, rserver):
+        """R19 — with a KEK configured, the stored value is opaque and still round-trips via get() (issue #20 (b))."""
+        from stls_core.stls_core_atrest import AtRestCipher
+
+        cipher = AtRestCipher(kek=b"\x42" * 32, label=b"stls-core/keystore")
+        store = make_redis_store(rserver, cipher=cipher)
+        store.add(KID1, DATA1)
+
+        raw = store._r.get(store._key(KID1))
+        assert bytes(raw) != DATA1
+
+        assert store.get(KID1) == DATA1
+
+    def test_r20_atrest_wrong_kek_fails_closed(self, rserver):
+        """R20 — get() with the wrong KEK treats the entry as a miss, not a crash."""
+        from stls_core.stls_core_atrest import AtRestCipher
+
+        writer = make_redis_store(
+            rserver, cipher=AtRestCipher(kek=b"\x01" * 32, label=b"stls-core/keystore")
+        )
+        reader = make_redis_store(
+            rserver, cipher=AtRestCipher(kek=b"\x02" * 32, label=b"stls-core/keystore")
+        )
+        writer.add(KID1, DATA1)
+        assert reader.get(KID1) is None
 
 
 # ---------------------------------------------------------------------------

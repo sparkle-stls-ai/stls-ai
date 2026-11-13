@@ -47,6 +47,10 @@ Copertura:
   R18 — no cross-instance coordination needed: two separate
          RedisSessionCache instances on the same Redis agree on max-age
          expiry by reading the same shared created_at (issue #6)
+  R19 — the raw session_key is never stored, only the derived keys (issue #20 (a))
+  R20 — with STLS_CORE_ATREST_KEY set, the stored payload is sealed and
+         still round-trips through get() (issue #20 (b))
+  R21 — get() with the wrong KEK fails closed (returns None), doesn't crash
 
   SessionCacheFactory
   ─────────────────────
@@ -107,13 +111,19 @@ def make_redis_cache(
     prefix: str = "stls:sc",
     ttl_seconds: int = 300,
     max_age_seconds: int = 0,
+    cipher=None,
 ) -> RedisSessionCache:
-    """Costruisce un RedisSessionCache collegato a un fakeredis server."""
+    """Costruisce un RedisSessionCache collegato a un fakeredis server.
+
+    cipher=None (default) matches the no-KEK fallback (plaintext JSON);
+    pass an AtRestCipher to test the encryption-at-rest path (issue #20).
+    """
     cache = RedisSessionCache.__new__(RedisSessionCache)
     cache._r = fakeredis.FakeRedis(server=server, decode_responses=True)
     cache._prefix = prefix
     cache._ttl = ttl_seconds
     cache._max_age = max_age_seconds
+    cache._cipher = cipher
     return cache
 
 
@@ -366,14 +376,54 @@ class TestRedisSessionCache:
 
     def test_r11_kid_serialized_in_payload(self, rcache):
         """R11 — kid correttamente serializzato e conservato nel payload JSON."""
-        import json, base64
+        import json
         rcache.put(SID1, KID1, KEY1)
         raw = rcache._r.get(rcache._key(SID1))
         data = json.loads(raw)
         assert data["kid"] == KID1
-        # session_key è base64 della chiave originale
-        stored_key = base64.b64decode(data["session_key"])
-        assert stored_key == KEY1
+        # The payload holds the already-derived keys, never the raw
+        # session_key — issue #20 (a).
+        assert "session_key" not in data
+        assert set(data.keys()) >= {
+            "enc_aes_key", "dec_aes_key", "enc_hmac_key", "dec_hmac_key",
+        }
+
+    def test_r19_raw_session_key_never_stored(self, rcache):
+        """R19 — the raw session_key bytes never appear in what's written to Redis (issue #20 (a))."""
+        import base64
+        rcache.put(SID1, KID1, KEY1)
+        raw = rcache._r.get(rcache._key(SID1))
+        assert base64.b64encode(KEY1).decode() not in raw
+
+    def test_r20_atrest_cipher_set_seals_payload(self, rserver):
+        """R20 — with a KEK configured, the stored value is opaque (not JSON) and round-trips via get() (issue #20 (b))."""
+        import json
+        from stls_core.stls_core_atrest import AtRestCipher
+
+        cipher = AtRestCipher(kek=b"\x42" * 32, label=b"stls-core/session-cache")
+        cache = make_redis_cache(rserver, cipher=cipher)
+        cache.put(SID1, KID1, KEY1)
+
+        raw = cache._r.get(cache._key(SID1))
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(raw)
+
+        transport = cache.get(SID1)
+        assert transport is not None
+        assert encrypt_decrypt_roundtrip(transport, SID1)
+
+    def test_r21_atrest_wrong_kek_fails_closed(self, rserver):
+        """R21 — a cache reading with the wrong KEK treats the entry as a miss, not a crash."""
+        from stls_core.stls_core_atrest import AtRestCipher
+
+        writer = make_redis_cache(
+            rserver, cipher=AtRestCipher(kek=b"\x01" * 32, label=b"stls-core/session-cache")
+        )
+        reader = make_redis_cache(
+            rserver, cipher=AtRestCipher(kek=b"\x02" * 32, label=b"stls-core/session-cache")
+        )
+        writer.put(SID1, KID1, KEY1)
+        assert reader.get(SID1) is None
 
     def test_r12_expired_session_not_found(self, rserver):
         """R12 — sessione scaduta (TTL Redis) non viene trovata."""

@@ -343,6 +343,12 @@ SESSION_CACHE_REDIS_NAMESPACE=stls:sc
 SESSION_CACHE_TTL=3600
 STLS_SESSION_CACHE_MAX=256
 
+# Encryption at rest for the Redis-backed session cache (issue #20).
+# Unset (default): falls back to storing the payload in the clear, as
+# before this existed — a warning is logged once at connect().
+# Generate with: openssl rand -base64 32
+STLS_CORE_ATREST_KEY=
+
 # Auth
 AUTH_LOADER_BACKEND=static        # "static" | "file" | "postgres"
 AUTH_KEYS_FILE=api_keys.yaml

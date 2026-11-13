@@ -9,6 +9,59 @@ of which this package is the TypeScript port.
 
 ---
 
+## [0.1.8] — 2026-11-13
+
+Encrypts the Redis-backed session cache at rest and stops persisting
+raw key material in it (issue #20), mirroring
+[`python/stls-core` 0.1.8](../../python/stls-core/CHANGELOG.md). The
+`RedisArqitKeyStore` half of issue #20 is Python-only — Node has no
+Arqit keystore of its own, it always proxies Arqit through the Python
+sidecar. Both changes here are opt-in / additive — no behavior change
+for existing deployments that don't set the new env var.
+
+### Added
+
+- **`StlsTransport.deriveKeys()` / `StlsTransport.fromDerivedKeys()`**
+  — expose the HKDF key derivation the constructor already did
+  internally, so a caller can derive the AES/HMAC keys once, discard
+  the raw session key, and reconstruct the transport later from the
+  derived keys alone. Purely additive — the constructor's first
+  parameter now also accepts a `DerivedKeys` object in place of the
+  raw key `Buffer`, but every existing call site (which passes a
+  `Buffer`) is unaffected.
+- **`atrest.ts` / `AtRestCipher`** — a small AES-256-GCM
+  envelope-encryption helper (HKDF-derives its working key from a
+  locally-held wrapping key, domain-separated by a label; reuses the
+  same expand-only HKDF `crypto.ts` already used, for byte-compatibility
+  with the Python port), used to seal a value before `SET` and open it
+  after `GET`, independent of Redis's own at-rest settings.
+- **`STLS_CORE_ATREST_KEY`** environment variable — base64-encoded
+  32-byte wrapping key (KEK). Unset (default): `RedisSessionCache`
+  falls back to storing its payload in the clear, as before this
+  existed — a warning is logged once at `connect()`. Set: the payload
+  is additionally AES-256-GCM-sealed. Same variable name and KEK as the
+  Python side, so one KEK configured identically on both sides keeps
+  them interoperable on a shared Redis — verified in
+  `tests/interop/redis-step1-node-put.ts` /
+  `python_redis_step2_read_and_put.py` / `redis-step3-node-get.ts` with
+  the KEK set, new `[5b/11]` step in `run-interop-tests.sh`.
+- **`tests/atrest.smoke.ts`** (`npm run test:atrest-smoke`) — unit
+  coverage for `AtRestCipher`, mirroring
+  `python/stls-core/tests/test_stls_core_atrest.py`.
+
+### Changed
+
+- **`RedisSessionCache`** no longer stores the raw session key at all,
+  with or without a KEK: `put()` now derives the AES/HMAC keys via
+  `StlsTransport.deriveKeys()` and persists only those; `get()`
+  reconstructs via `StlsTransport.fromDerivedKeys()`. Redis JSON schema
+  changed accordingly (`session_key` field replaced by
+  `enc_aes_key`/`dec_aes_key`/`enc_hmac_key`/`dec_hmac_key`) — old
+  entries already in Redis simply age out via their existing TTL, no
+  migration step needed.
+
+---
+
 ## [0.1.7] — 2026-11-13
 
 Adds the server-authoritative absolute key-rotation check to the
