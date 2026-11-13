@@ -41,7 +41,7 @@ from typing import Any, Awaitable, Callable, MutableMapping
 from stls_core import HEADER_SESSION_ID, SessionCache, SessionCacheBase
 from stls_core.stls_core_crypto import StlsTransport
 
-from .stls_mcp_constants import MCP_PLAIN_PATH, MCP_STLS_PATH
+from .stls_mcp_constants import ERR_SESSION_EXPIRED, MCP_PLAIN_PATH, MCP_STLS_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +58,16 @@ class StlsMcpError(Exception):
     Attributes:
         status_code: HTTP status code to return to the client.
         message:     human-readable message, never contains key material.
+        code:        optional JSON-RPC error code override. None (default)
+                     keeps _send_json_error()'s generic status-based code
+                     (-32600/-32603) — only the expired-session case below
+                     sets this explicitly, to ERR_SESSION_EXPIRED.
     """
-    def __init__(self, message: str, status_code: int = 400) -> None:
+    def __init__(self, message: str, status_code: int = 400, code: int | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        self.code = code
 
 
 class StlsMcpMiddleware:
@@ -120,7 +125,7 @@ class StlsMcpMiddleware:
             await self._handle_http(scope, receive, send)
         except StlsMcpError as exc:
             logger.warning("StlsMcpMiddleware: %s (status=%d)", exc.message, exc.status_code)
-            await self._send_json_error(send, exc.status_code, exc.message)
+            await self._send_json_error(send, exc.status_code, exc.message, code=exc.code)
         except Exception as exc:
             logger.exception("StlsMcpMiddleware: unhandled error")
             await self._send_json_error(send, 500, f"Internal STLS-MCP error: {exc}")
@@ -145,6 +150,7 @@ class StlsMcpMiddleware:
             raise StlsMcpError(
                 "Unknown or expired STLS session — repeat the handshake.",
                 status_code=401,
+                code=ERR_SESSION_EXPIRED,
             )
 
         # ── 1. Read and decrypt the inbound body ────────────────────────────
@@ -305,12 +311,17 @@ class StlsMcpMiddleware:
         return rewritten
 
     @staticmethod
-    async def _send_json_error(send: Send, status_code: int, message: str) -> None:
+    async def _send_json_error(
+        send: Send, status_code: int, message: str, *, code: int | None = None,
+    ) -> None:
         """Sends a plaintext JSON-RPC error (never encrypted — consistent with stls-a2a)."""
         import json
         body = json.dumps({
             "jsonrpc": "2.0",
-            "error": {"code": -32600 if status_code < 500 else -32603, "message": message},
+            "error": {
+                "code": code if code is not None else (-32600 if status_code < 500 else -32603),
+                "message": message,
+            },
             "id": None,
         }).encode("utf-8")
         await send({

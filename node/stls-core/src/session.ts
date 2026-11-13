@@ -3,6 +3,13 @@
  * ----------
  * Port of python/stls-core/src/stls_core/stls_core_session.py.
  *
+ * Environment variable SESSION_KEY_MAX_AGE_SECONDS (both backends): absolute
+ * key-rotation max-age in seconds. Unset or <=0 (default): disabled, no
+ * behavior change from before this existed. >0: get() also expires a
+ * session once its AGE (since creation, not since last access) exceeds
+ * this value, on top of, not instead of, the idle TTL. Server-side only,
+ * never client-settable — see issue #6.
+ *
  * Design note — why SessionCache is async here but sync in Python:
  * the Redis client used on the Python side (redis-py) is
  * synchronous/blocking, so SessionCacheBase can have sync methods even
@@ -65,6 +72,13 @@ interface CacheEntry {
   transport: StlsTransport;
   kid: string;
   lastAccessMs: number;
+  /**
+   * Set once, at first insertion, and never refreshed by get()/put()-on-
+   * update — unlike lastAccessMs, which slides. Drives the max-age check
+   * below. Both clocks use Date.now(), consistent with the rest of this
+   * class.
+   */
+  createdAtMs: number;
 }
 
 /**
@@ -75,9 +89,15 @@ interface CacheEntry {
 export class InMemorySessionCache implements SessionCache {
   private readonly maxSize: number;
   private readonly ttlMs: number;
+  /**
+   * Absolute key-rotation max-age, in ms. 0 (default, from an unset or
+   * <=0 env var) disables the check entirely — no behavior change from
+   * before this existed. See issue #6.
+   */
+  private readonly maxAgeMs: number;
   private readonly store = new Map<string, CacheEntry>();
 
-  constructor(options: { maxSize?: number; ttlSeconds?: number } = {}) {
+  constructor(options: { maxSize?: number; ttlSeconds?: number; maxAgeSeconds?: number } = {}) {
     this.maxSize =
       options.maxSize ?? Number(process.env.STLS_SESSION_CACHE_MAX ?? "256");
     this.ttlMs =
@@ -86,6 +106,9 @@ export class InMemorySessionCache implements SessionCache {
         Number(
           process.env.SESSION_CACHE_TTL ?? process.env.STLS_SESSION_TTL ?? "3600",
         ));
+    this.maxAgeMs =
+      1000 *
+      (options.maxAgeSeconds ?? Number(process.env.SESSION_KEY_MAX_AGE_SECONDS ?? "0"));
   }
 
   async put(
@@ -97,9 +120,13 @@ export class InMemorySessionCache implements SessionCache {
     const now = Date.now();
     const transport = new StlsTransport(sessionKey, sessionId, direction);
 
-    if (this.store.has(sessionId)) {
+    const existing = this.store.get(sessionId);
+    if (existing !== undefined) {
+      // Preserves the original createdAtMs — a put() on an already known
+      // sessionId is a redundant/idempotent re-registration, not a brand
+      // new session, so its max-age clock must not reset.
       this.store.delete(sessionId);
-      this.store.set(sessionId, { transport, kid, lastAccessMs: now });
+      this.store.set(sessionId, { transport, kid, lastAccessMs: now, createdAtMs: existing.createdAtMs });
       return;
     }
 
@@ -110,7 +137,7 @@ export class InMemorySessionCache implements SessionCache {
       }
     }
 
-    this.store.set(sessionId, { transport, kid, lastAccessMs: now });
+    this.store.set(sessionId, { transport, kid, lastAccessMs: now, createdAtMs: now });
   }
 
   async get(sessionId: string): Promise<StlsTransport | undefined> {
@@ -125,8 +152,14 @@ export class InMemorySessionCache implements SessionCache {
       return undefined;
     }
 
+    if (this.maxAgeMs > 0 && now - entry.createdAtMs > this.maxAgeMs) {
+      this.store.delete(sessionId);
+      return undefined;
+    }
+
     // LRU refresh + sliding TTL: re-insert at the end (Map preserves
     // insertion order, equivalent to OrderedDict.move_to_end()).
+    // createdAtMs is NOT refreshed here.
     this.store.delete(sessionId);
     entry.lastAccessMs = now;
     this.store.set(sessionId, entry);
@@ -141,7 +174,10 @@ export class InMemorySessionCache implements SessionCache {
     const now = Date.now();
     let removed = 0;
     for (const [sessionId, entry] of this.store) {
-      if (now - entry.lastAccessMs > this.ttlMs) {
+      if (
+        now - entry.lastAccessMs > this.ttlMs ||
+        (this.maxAgeMs > 0 && now - entry.createdAtMs > this.maxAgeMs)
+      ) {
         this.store.delete(sessionId);
         removed++;
       }
@@ -168,6 +204,7 @@ export class SessionCacheFactory {
    */
   static async build(): Promise<SessionCache> {
     const backend = (process.env.SESSION_CACHE_BACKEND ?? "memory").trim().toLowerCase();
+    const maxAgeSeconds = Number(process.env.SESSION_KEY_MAX_AGE_SECONDS ?? "0");
 
     if (backend === "redis") {
       const { RedisSessionCache } = await import("./session-redis.js");
@@ -176,11 +213,11 @@ export class SessionCacheFactory {
       const ttlSeconds = Number(
         process.env.SESSION_CACHE_TTL ?? process.env.STLS_SESSION_TTL ?? "3600",
       );
-      return RedisSessionCache.connect({ url, prefix, ttlSeconds });
+      return RedisSessionCache.connect({ url, prefix, ttlSeconds, maxAgeSeconds });
     }
 
     if (backend === "memory") {
-      return new InMemorySessionCache();
+      return new InMemorySessionCache({ maxAgeSeconds });
     }
 
     throw new Error(

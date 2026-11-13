@@ -26,12 +26,14 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Awaitable, Callable, Optional
 
 import httpx
 
 from stls_core import HEADER_SESSION_ID
 from stls_core.stls_core_crypto import StlsTransport
+
+from .stls_mcp_constants import ERR_SESSION_EXPIRED
 
 # perform_client_handshake(), perform_pqc_client_handshake() and
 # StlsHandshakeFailed moved to stls-core (stls_core_client_handshake.py)
@@ -65,6 +67,20 @@ class StlsHttpxTransport(httpx.AsyncBaseTransport):
                        actually perform the HTTP request after
                        (de)encryption. If None, a default
                        httpx.AsyncHTTPTransport is created.
+        rehandshake:    optional zero-argument async callable that performs
+                       a brand new handshake and returns (session_id,
+                       transport), used to recover from session expiry
+                       (idle-TTL or the absolute max-age added in issue
+                       #6) with a single automatic retry — same
+                       retry-once contract as stls-a2a's
+                       STLSHttpxTransport. None (default): no change from
+                       before this existed — an expired session is
+                       returned to the caller as a plain 401, same as any
+                       other error. The caller builds this closure because
+                       only it knows which handshake function and
+                       credentials apply (perform_client_handshake() needs
+                       a pre-shared session_key; perform_pqc_client_handshake()
+                       needs none) — this class stays provider-agnostic.
     """
 
     def __init__(
@@ -74,18 +90,22 @@ class StlsHttpxTransport(httpx.AsyncBaseTransport):
         *,
         stls_path: str = "/mcp-stls",
         inner_transport: httpx.AsyncBaseTransport | None = None,
+        rehandshake: Optional[Callable[[], Awaitable[tuple[str, StlsTransport]]]] = None,
     ) -> None:
         self._session_id = session_id
         self._transport = transport
         self._stls_path = stls_path
         self._inner = inner_transport or httpx.AsyncHTTPTransport()
+        self._rehandshake = rehandshake
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         if request.url.path != self._stls_path or request.method != "POST":
             # Pass-through for any request not aimed at the STLS path
             # (e.g. GET for an SSE stream, requests to other endpoints).
             return await self._inner.handle_async_request(request)
+        return await self._handle_stls_request(request, _retried=False)
 
+    async def _handle_stls_request(self, request: httpx.Request, *, _retried: bool) -> httpx.Response:
         # ── Encrypt the outgoing body ───────────────────────────────────────────
         try:
             plaintext_payload = json.loads(request.content)
@@ -115,6 +135,21 @@ class StlsHttpxTransport(httpx.AsyncBaseTransport):
         # server-side (see StlsMcpMiddleware._send_json_error) — never try
         # to decrypt them.
         if response.status_code >= 400:
+            if (
+                response.status_code == 401
+                and not _retried
+                and self._rehandshake is not None
+            ):
+                await response.aread()
+                if _looks_like_session_expired(response):
+                    logger.info(
+                        "StlsHttpxTransport: session expired, re-handshaking and retrying"
+                    )
+                    # Not caught here: a rehandshake failure propagates
+                    # immediately, with no retry — same fail-fast contract
+                    # as stls-a2a's STLSHttpxTransport.
+                    self._session_id, self._transport = await self._rehandshake()
+                    return await self._handle_stls_request(request, _retried=True)
             return response
 
         # ── Decrypt the inbound body ───────────────────────────────────────
@@ -142,10 +177,48 @@ class StlsHttpxTransport(httpx.AsyncBaseTransport):
         await self._inner.aclose()
 
 
-def stls_httpx_factory(session_id: str, transport: StlsTransport, *, stls_path: str = "/mcp-stls"):
+def _looks_like_session_expired(response: httpx.Response) -> bool:
+    """
+    Recognizes a 401 response as ERR_SESSION_EXPIRED (-32004) rather than
+    an authentication 401 (e.g. an invalid API key) — only the former
+    justifies an automatic retry after re-handshake. Mirrors stls-a2a's
+    helper of the same name (stls_a2a_secure_remote.py).
+    """
+    try:
+        body = response.json()
+    except Exception:
+        return False
+    error = body.get("error") if isinstance(body, dict) else None
+    return isinstance(error, dict) and error.get("code") == ERR_SESSION_EXPIRED
+
+
+def stls_httpx_factory(
+    session_id: str,
+    transport: StlsTransport,
+    *,
+    stls_path: str = "/mcp-stls",
+    rehandshake: Optional[Callable[[], Awaitable[tuple[str, StlsTransport]]]] = None,
+):
     """
     Builds a factory compatible with
     mcp.client.streamable_http.streamablehttp_client(httpx_client_factory=...).
+
+    Args:
+        rehandshake: see StlsHttpxTransport's docstring. Typical closure,
+                     for the base/arqit_py provider (needs the pre-shared
+                     session_key the caller already resolved):
+
+                         async def _rehandshake():
+                             return await perform_client_handshake(
+                                 base_url, session_key, client_id="my-client",
+                             )
+
+                     or, for pqc (no pre-shared key needed):
+
+                         async def _rehandshake():
+                             return await perform_pqc_client_handshake(
+                                 base_url, client_id="my-client",
+                             )
 
     Typical usage:
 
@@ -153,7 +226,12 @@ def stls_httpx_factory(session_id: str, transport: StlsTransport, *, stls_path: 
             base_url, session_key, client_id="my-client",
         )
 
-        factory = stls_httpx_factory(session_id, transport)
+        factory = stls_httpx_factory(
+            session_id, transport,
+            rehandshake=lambda: perform_client_handshake(
+                base_url, session_key, client_id="my-client",
+            ),
+        )
 
         async with streamablehttp_client(
             url=f"{base_url}/mcp-stls",
@@ -169,7 +247,9 @@ def stls_httpx_factory(session_id: str, transport: StlsTransport, *, stls_path: 
         timeout: Any = None,
         auth: httpx.Auth | None = None,
     ) -> httpx.AsyncClient:
-        stls_transport = StlsHttpxTransport(session_id, transport, stls_path=stls_path)
+        stls_transport = StlsHttpxTransport(
+            session_id, transport, stls_path=stls_path, rehandshake=rehandshake,
+        )
         kwargs: dict[str, Any] = {"transport": stls_transport, "follow_redirects": True}
         if headers is not None:
             kwargs["headers"] = headers

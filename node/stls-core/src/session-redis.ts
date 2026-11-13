@@ -21,6 +21,11 @@
  * correct default (single shared key for both directions).
  *
  * The TTL is sliding (renewed on every get() via GETEX), same as Python.
+ *
+ * created_at also drives the max-age check (SESSION_KEY_MAX_AGE_SECONDS,
+ * see session.ts and issue #6) when enabled: every instance in a
+ * multi-replica deployment reads the same shared record, so no
+ * cross-instance coordination is needed for this check.
  */
 
 import { createClient, type RedisClientType } from "redis";
@@ -39,12 +44,19 @@ export class RedisSessionCache implements SessionCache {
     private readonly client: RedisClientType,
     private readonly prefix: string,
     private readonly ttlSeconds: number,
+    /**
+     * Absolute key-rotation max-age, in seconds. 0 (default, from an
+     * unset or <=0 env var/option) disables the check entirely — no
+     * behavior change from before this existed. See issue #6.
+     */
+    private readonly maxAgeSeconds: number = 0,
   ) {}
 
   static async connect(options: {
     url?: string;
     prefix?: string;
     ttlSeconds?: number;
+    maxAgeSeconds?: number;
   } = {}): Promise<RedisSessionCache> {
     const client: RedisClientType = createClient({
       url: options.url ?? "redis://localhost:6379",
@@ -54,6 +66,7 @@ export class RedisSessionCache implements SessionCache {
       client,
       options.prefix ?? "stls:sc",
       options.ttlSeconds ?? 3600,
+      options.maxAgeSeconds ?? 0,
     );
   }
 
@@ -93,13 +106,23 @@ export class RedisSessionCache implements SessionCache {
       return undefined;
     }
 
+    let data: RedisSessionPayload;
     try {
-      const data = JSON.parse(raw) as RedisSessionPayload;
-      const sessionKey = Buffer.from(data.session_key, "base64");
-      return new StlsTransport(sessionKey, sessionId, data.direction);
+      data = JSON.parse(raw) as RedisSessionPayload;
     } catch {
       return undefined;
     }
+
+    if (this.maxAgeSeconds > 0) {
+      const age = data.created_at !== undefined ? Date.now() / 1000 - data.created_at : 0;
+      if (age > this.maxAgeSeconds) {
+        await this.client.del(this.key(sessionId));
+        return undefined;
+      }
+    }
+
+    const sessionKey = Buffer.from(data.session_key, "base64");
+    return new StlsTransport(sessionKey, sessionId, data.direction);
   }
 
   async remove(sessionId: string): Promise<boolean> {

@@ -1,6 +1,6 @@
 {
   "name": "stls-core",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Core cryptographic transport layer for STLS — protocol-agnostic symmetric encryption, quantum-safe key providers and API key auth (Node.js port of python/stls-core)",
   "license": "(AGPL-3.0-or-later OR LicenseRef-Commercial)",
   "repository": {
@@ -24,6 +24,7 @@
     "build": "tsc -p tsconfig.json",
     "test:auth-smoke": "tsx tests/auth.smoke.ts",
     "test:crypto-smoke": "tsx tests/crypto.smoke.ts",
+    "test:session-smoke": "tsx tests/session.smoke.ts",
     "test:provider-factory-smoke": "tsx tests/interop/provider-factory.smoke.ts",
     "test:crypto-interop": "tsx tests/interop/crypto.smoke.ts",
     "test:pqc-interop-step1": "tsx tests/interop/pqc-step1-node-keygen.ts",
@@ -33,6 +34,7 @@
     "test:arqit-sidecar-smoke": "tsx tests/interop/arqit-sidecar.smoke.ts",
     "test:arqit-sidecar-guard-smoke": "tsx tests/interop/arqit-sidecar-guard.smoke.ts",
     "test:arqit-sidecar-real-live": "tsx tests/interop/arqit-sidecar-real.live.ts",
+    "test:arqit-sidecar-throughput-live": "tsx tests/interop/arqit-sidecar-throughput.live.ts",
     "test:provider-factory-arqit-real-live": "tsx tests/interop/provider-factory-arqit-real.live.ts",
     "test:background-refresher-live": "tsx tests/background-refresher.live.ts",
     "test:postgres-loader-smoke": "tsx tests/postgres-loader.smoke.ts",

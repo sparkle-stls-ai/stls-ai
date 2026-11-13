@@ -1,6 +1,6 @@
 {
   "name": "stls-mcp",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "STLS extension of the Model Context Protocol — transparent application-layer symmetric encryption over Streamable HTTP, sharing the stls-core crypto/session/handshake/provider/auth layer with stls-a2a (Node.js port of python/stls-mcp)",
   "license": "(AGPL-3.0-or-later OR LicenseRef-Commercial)",
   "repository": {
@@ -21,7 +21,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test:transport-retry-smoke": "tsx tests/transport-retry.smoke.ts"
   },
   "dependencies": {
     "stls-core": "file:../stls-core",
