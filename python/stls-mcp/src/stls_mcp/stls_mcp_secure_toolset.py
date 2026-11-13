@@ -73,6 +73,7 @@ from typing import Any, Callable, Optional
 import httpx
 
 from stls_core import establish_session
+from stls_core.stls_core_crypto import StlsTransport
 
 from .stls_mcp_transport import StlsHandshakeFailed, stls_httpx_factory
 from .stls_mcp_constants import MCP_STLS_PATH
@@ -260,7 +261,31 @@ async def create_stls_mcp_toolset(
         provider, session_id, base_url, stls_path,
     )
 
-    factory = stls_httpx_factory(session_id, transport, stls_path=stls_path)
+    async def _rehandshake() -> tuple[str, StlsTransport]:
+        """
+        Redoes establish_session() with the exact same arguments as the
+        initial call above, to recover from session expiry (idle-TTL or
+        the absolute max-age added in issue #6) with a single automatic
+        retry inside stls_httpx_factory()/StlsHttpxTransport — this
+        toolset never has to notice or react, SecureToolsetManager's own
+        invalidate() stays reserved for errors this one retry doesn't
+        cover.
+        """
+        new_session_id, _new_kid, new_transport = await establish_session(
+            provider_name=provider,
+            base_url=base_url,
+            client_id=client_id,
+            config_path=config_path,
+            host=host,
+            port=port,
+            handshake_path=handshake_path,
+            httpx_client=handshake_httpx_client,
+        )
+        return new_session_id, new_transport
+
+    factory = stls_httpx_factory(
+        session_id, transport, stls_path=stls_path, rehandshake=_rehandshake,
+    )
 
     # Lazy import — same reason as STLSMCPToolset.__new__ (see the module
     # docstring): this function can only be called if the caller chose

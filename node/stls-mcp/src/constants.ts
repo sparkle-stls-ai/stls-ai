@@ -45,3 +45,14 @@ export const STLS_EXTENSION_KEY = "stls";
 
 /** Unique extension URI, consistent with the one already used in stls-a2a. */
 export const STLS_EXTENSION_URI = "https://stls-ai.com/extensions/mcp-secure-transport/v1";
+
+/**
+ * Same numeric value and meaning as stls_a2a's ERR_SESSION_EXPIRED: raised
+ * by encryptedHandler (middleware.ts) with status 401 when the session
+ * cache has no entry for the given session_id — idle-TTL or absolute
+ * max-age expiry (issue #6). Lets a client distinguish this from any
+ * other 401 (e.g. an auth-layer API-key rejection), so only this code
+ * justifies an automatic retry after re-handshake — see transport.ts's
+ * rehandshake option.
+ */
+export const ERR_SESSION_EXPIRED = -32004;

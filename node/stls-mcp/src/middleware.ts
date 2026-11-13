@@ -36,13 +36,20 @@
 import { HEADER_SESSION_ID } from "stls-core";
 import type { SessionCache, StlsEnvelopeDict } from "stls-core";
 
-import { MCP_PLAIN_PATH } from "./constants.js";
+import { ERR_SESSION_EXPIRED, MCP_PLAIN_PATH } from "./constants.js";
 import type { RequestHandler } from "./auth.js";
 
 export class StlsMcpError extends Error {
   constructor(
     message: string,
     public readonly statusCode: number = 400,
+    /**
+     * Optional JSON-RPC error code override. undefined (default) keeps
+     * sendJsonError()'s generic status-based code (-32600/-32603) — only
+     * the expired-session case below sets this explicitly, to
+     * ERR_SESSION_EXPIRED.
+     */
+    public readonly code?: number,
   ) {
     super(message);
     this.name = "StlsMcpError";
@@ -58,10 +65,10 @@ export interface EncryptedHandlerOptions {
   plainPath?: string;
 }
 
-function sendJsonError(statusCode: number, message: string): Response {
+function sendJsonError(statusCode: number, message: string, code?: number): Response {
   const body = JSON.stringify({
     jsonrpc: "2.0",
-    error: { code: statusCode < 500 ? -32600 : -32603, message },
+    error: { code: code ?? (statusCode < 500 ? -32600 : -32603), message },
     id: null,
   });
   return new Response(body, { status: statusCode, headers: { "content-type": "application/json" } });
@@ -79,7 +86,7 @@ export function encryptedHandler(
       return await handle(request);
     } catch (exc) {
       if (exc instanceof StlsMcpError) {
-        return sendJsonError(exc.statusCode, exc.message);
+        return sendJsonError(exc.statusCode, exc.message, exc.code);
       }
       return sendJsonError(500, `Internal STLS-MCP error: ${(exc as Error).message}`);
     }
@@ -105,7 +112,11 @@ export function encryptedHandler(
 
     const transport = await sessionCache.get(sessionId);
     if (!transport) {
-      throw new StlsMcpError("Unknown or expired STLS session — repeat the handshake.", 401);
+      throw new StlsMcpError(
+        "Unknown or expired STLS session — repeat the handshake.",
+        401,
+        ERR_SESSION_EXPIRED,
+      );
     }
 
     // ── 1. Read and decrypt the inbound body ──────────────────────────────

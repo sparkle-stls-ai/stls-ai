@@ -7,6 +7,46 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.7] — 2026-11-13
+
+Adds the server-authoritative absolute key-rotation check to
+`SessionCacheBase` (issue #6, first increment: the shared server-side
+check only — client-side retry for stls-mcp and the proactive SSE/
+`arqit_py` scheduler piece are separate, later increments). Additive —
+no existing caller needed to change; disabled by default.
+
+### Added
+
+- **`SESSION_KEY_MAX_AGE_SECONDS`** environment variable, both
+  `InMemorySessionCache` and `RedisSessionCache`. Unset or `<=0`
+  (default): no behavior change — only the existing idle TTL applies.
+  `>0`: `get()` also expires a session once its AGE since creation
+  (not since last access) exceeds this value, on top of, not instead
+  of, the idle TTL. Server-side only, never client-settable — the
+  server is the trust boundary.
+  - `InMemorySessionCache`: `created_at` (new, `time.monotonic()`-based)
+    is tracked per entry, set once at first insertion and never
+    refreshed by `get()`/an update `put()` — unlike the sliding
+    `last_access`.
+  - `RedisSessionCache`: reuses the `created_at` field already written
+    into every session's JSON payload (previously serialized but never
+    read back). Because every instance in a multi-replica deployment
+    reads the same shared Redis record, the expiry decision is
+    consistent across instances with no new coordination — verified by
+    a dedicated test (two independent `RedisSessionCache` objects on
+    the same Redis, no lock between them, same expiry outcome).
+  - Both backends: an expired-by-max-age session is deleted immediately
+    and treated exactly like "not found" — the same path already used
+    for idle-TTL expiry, so the existing `stls-a2a` invalidate+retry-once
+    picks it up transparently with no changes on that side.
+
+### Known gap carried forward unchanged
+
+- Client-side retry-on-expiry only exists in `stls-a2a`
+  (`stls_a2a_secure_remote.py`). `stls-mcp` (Python and Node) still has
+  no retry on session expiry at all — next increment of issue #6, not
+  part of this one.
+
 ## [0.1.6] — 2026-11-12
 
 Hardens `StlsTransport` (issues #10, #12) and extends its correctness

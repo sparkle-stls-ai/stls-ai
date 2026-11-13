@@ -19,6 +19,10 @@ Copertura:
   M10 — purge_expired rimuove solo le sessioni scadute
   M11 — __len__ e __contains__ corretti
   M12 — kid conservato e recuperabile tramite accesso interno
+  M13 — max_age=0 (default): no absolute expiry
+  M14 — max-age expired: get returns None
+  M15 — an update put() does not reset the max-age clock
+  M16 — max-age does not renew on access (unlike the idle TTL)
 
   RedisSessionCache  (fakeredis — nessun Redis reale richiesto)
   ──────────────────────────────────────────────────────────────
@@ -37,6 +41,12 @@ Copertura:
   R13 — no collisione tra sessioni diverse sullo stesso Redis
   R14 — no collisione tra SessionCache e KeyStore sullo stesso Redis
          (prefissi stls:sc:* e stls:ks:* sono separati)
+  R15 — max_age=0 (default): no absolute expiry
+  R16 — max-age expired: get returns None and removes the entry from Redis
+  R17 — max-age does not renew on access (unlike GETEX)
+  R18 — no cross-instance coordination needed: two separate
+         RedisSessionCache instances on the same Redis agree on max-age
+         expiry by reading the same shared created_at (issue #6)
 
   SessionCacheFactory
   ─────────────────────
@@ -48,6 +58,9 @@ Copertura:
   F06 — TTL letto da SESSION_CACHE_TTL
   F07 — TTL letto da STLS_SESSION_TTL (alias backward compat)
   F08 — entrambe le implementazioni rispettano SessionCacheBase ABC
+  F09 — SESSION_KEY_MAX_AGE_SECONDS unset → max_age=0
+  F10 — SESSION_KEY_MAX_AGE_SECONDS read correctly (memory backend)
+  F11 — SESSION_KEY_MAX_AGE_SECONDS read correctly (redis backend)
 """
 
 from __future__ import annotations
@@ -93,12 +106,14 @@ def make_redis_cache(
     server,
     prefix: str = "stls:sc",
     ttl_seconds: int = 300,
+    max_age_seconds: int = 0,
 ) -> RedisSessionCache:
     """Costruisce un RedisSessionCache collegato a un fakeredis server."""
     cache = RedisSessionCache.__new__(RedisSessionCache)
     cache._r = fakeredis.FakeRedis(server=server, decode_responses=True)
     cache._prefix = prefix
     cache._ttl = ttl_seconds
+    cache._max_age = max_age_seconds
     return cache
 
 
@@ -239,8 +254,42 @@ class TestInMemorySessionCache:
         """M12 — kid conservato nella struttura interna."""
         mem_cache.put(SID1, KID1, KEY1)
         # Accede alla struttura interna per verificare che kid sia salvato
-        _transport, kid_stored, _ts = mem_cache._store[SID1]
+        _transport, kid_stored, _last_access, _created_at = mem_cache._store[SID1]
         assert kid_stored == KID1
+
+    def test_m13_max_age_disabled_by_default(self, mem_cache):
+        """M13 — max_age=0 (default): no absolute expiry, idle TTL only."""
+        assert mem_cache._max_age == 0
+        mem_cache.put(SID1, KID1, KEY1)
+        assert mem_cache.get(SID1) is not None
+
+    def test_m14_max_age_expiry(self):
+        """M14 — max-age expired: get returns None even with a generous idle TTL."""
+        cache = InMemorySessionCache(max_size=10, ttl_seconds=60, max_age_seconds=1)
+        cache.put(SID1, KID1, KEY1)
+        assert cache.get(SID1) is not None
+        time.sleep(1.1)
+        assert cache.get(SID1) is None
+
+    def test_m15_max_age_not_reset_by_put_update(self):
+        """M15 — an update put() does NOT reset the max-age clock."""
+        cache = InMemorySessionCache(max_size=10, ttl_seconds=60, max_age_seconds=1)
+        cache.put(SID1, KID1, KEY1)
+        time.sleep(0.6)
+        cache.put(SID1, KID2, KEY2)  # idempotent "update", same session_id
+        time.sleep(0.6)
+        # ~1.2s since the original creation, > max_age=1s
+        assert cache.get(SID1) is None
+
+    def test_m16_max_age_not_reset_by_get(self):
+        """M16 — unlike the idle TTL, max-age does not renew on access."""
+        cache = InMemorySessionCache(max_size=10, ttl_seconds=60, max_age_seconds=1)
+        cache.put(SID1, KID1, KEY1)
+        for _ in range(3):
+            time.sleep(0.4)
+            cache.get(SID1)  # repeated access, mirroring test M06 for the idle TTL
+        # ~1.2s since creation, despite the frequent access
+        assert cache.get(SID1) is None
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +422,55 @@ class TestRedisSessionCache:
         assert len(sc_keys) == 1
         assert len(ks_keys) == 1
 
+    def test_r15_max_age_disabled_by_default(self, rcache):
+        """R15 — max_age=0 (default): no absolute expiry, idle TTL only."""
+        assert rcache._max_age == 0
+        rcache.put(SID1, KID1, KEY1)
+        assert rcache.get(SID1) is not None
+
+    def test_r16_max_age_expiry(self, rserver):
+        """R16 — max-age expired: get returns None even with a generous idle TTL."""
+        cache = make_redis_cache(rserver, ttl_seconds=300, max_age_seconds=1)
+        cache.put(SID1, KID1, KEY1)
+        assert cache.get(SID1) is not None
+        time.sleep(1.1)
+        assert cache.get(SID1) is None
+        # Must also have removed the entry from Redis, not just ignored it
+        assert not cache._r.exists(cache._key(SID1))
+
+    def test_r17_max_age_not_reset_by_get(self, rserver):
+        """R17 — unlike the idle TTL (GETEX), max-age does not renew on access."""
+        cache = make_redis_cache(rserver, ttl_seconds=300, max_age_seconds=1)
+        cache.put(SID1, KID1, KEY1)
+        for _ in range(3):
+            time.sleep(0.4)
+            cache.get(SID1)
+        assert cache.get(SID1) is None
+
+    def test_r18_max_age_no_cross_instance_coordination_needed(self, rserver):
+        """
+        R18 — proves the "N instances, no lock needed" claim instead of just
+        asserting it: two separate RedisSessionCache instances (same Redis,
+        simulating two stateless replicas), no lock between them. put()
+        from the first, get() from the second after the max-age window:
+        both must agree on the expiry, because they read the same shared
+        created_at from the one Redis record.
+        """
+        instance_a = make_redis_cache(rserver, ttl_seconds=300, max_age_seconds=1)
+        instance_b = make_redis_cache(rserver, ttl_seconds=300, max_age_seconds=1)
+
+        instance_a.put(SID1, KID1, KEY1)
+        # Both instances see the session as valid before expiry.
+        assert instance_a.get(SID1) is not None
+        assert instance_b.get(SID1) is not None
+
+        time.sleep(1.1)
+
+        # Both instances, independently, see it as expired — no explicit
+        # coordination between instance_a and instance_b.
+        assert instance_b.get(SID1) is None
+        assert instance_a.get(SID1) is None
+
 
 # ---------------------------------------------------------------------------
 # F — SessionCacheFactory
@@ -460,3 +558,28 @@ class TestSessionCacheFactory:
             with patch("redis.Redis.from_url"):
                 redis_cache = SessionCacheFactory.build()
         assert isinstance(redis_cache, SessionCacheBase)
+
+    def test_f09_max_age_disabled_when_unset(self):
+        """F09 — SESSION_KEY_MAX_AGE_SECONDS unset → max_age=0 (no behavior change)."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SESSION_KEY_MAX_AGE_SECONDS", None)
+            cache = SessionCacheFactory.build()
+        assert cache._max_age == 0
+
+    def test_f10_max_age_from_env_memory_backend(self):
+        """F10 — SESSION_KEY_MAX_AGE_SECONDS read correctly (memory backend)."""
+        with patch.dict(os.environ, {"SESSION_KEY_MAX_AGE_SECONDS": "86400"}):
+            cache = SessionCacheFactory.build()
+        assert cache._max_age == 86400
+
+    def test_f11_max_age_from_env_redis_backend(self):
+        """F11 — SESSION_KEY_MAX_AGE_SECONDS read correctly (redis backend)."""
+        env = {
+            "SESSION_CACHE_BACKEND": "redis",
+            "SESSION_CACHE_REDIS_URL": "redis://localhost:6379",
+            "SESSION_KEY_MAX_AGE_SECONDS": "86400",
+        }
+        with patch.dict(os.environ, env):
+            with patch("redis.Redis.from_url"):
+                cache = SessionCacheFactory.build()
+        assert cache._max_age == 86400

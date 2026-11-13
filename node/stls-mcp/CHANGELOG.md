@@ -7,6 +7,50 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.5] — 2026-11-13
+
+Adds client-side retry-on-expiry (issue #6, second increment), mirroring
+[`python/stls-mcp` 0.1.5](../../python/stls-mcp/CHANGELOG.md). The first
+increment (server-side absolute max-age) needed no change here — it's
+shared transparently via `stls-core` 0.1.7's `SessionCacheFactory`.
+Additive — every existing caller of `createStlsFetch()` without the new
+`rehandshake` option keeps today's exact behavior.
+
+### Added
+
+- **`createStlsFetch(..., { rehandshake })`** — optional zero-argument
+  async callback that performs a brand new handshake and returns
+  `{sessionId, transport}`. On a `401` response whose body carries the
+  new `ERR_SESSION_EXPIRED` code and no prior retry has happened yet,
+  the returned `fetch` calls it, swaps its internal session state for
+  the lifetime of that closure, and retries the original request
+  exactly once — same retry-once, fail-fast contract as the Python
+  side (a rehandshake failure, or the retried request also coming back
+  expired, propagates/returns immediately, no loop).
+- **`ERR_SESSION_EXPIRED = -32004`** (`constants.ts`, same numeric value
+  and meaning as the Python side's constant). `encryptedHandler` now
+  raises it explicitly (still `401`) when the session cache has no
+  entry for the given session_id, instead of the generic `-32600`
+  every other `4xx` `StlsMcpError` still uses. `StlsMcpError` gained an
+  optional `code` constructor parameter to carry this through.
+- **`looksLikeSessionExpired()`** (`transport.ts`, exported) —
+  distinguishes the above from an unrelated `401` (e.g. an auth-layer
+  rejection), so only the former triggers the automatic retry.
+- **`tests/transport-retry.smoke.ts`** (`npm run test:transport-retry-smoke`)
+  — calls `encryptedHandler`'s returned function directly as
+  `createStlsFetch`'s `fetch` option (no real HTTP server/port needed,
+  same "just a function call" architecture `middleware.ts` already
+  uses), proving the client and server sides actually agree on the
+  wire format, not a hand-crafted mock of it.
+
+### Note
+
+- `node/stls-mcp` has no `SecureToolsetManager`/`create_stls_mcp_toolset()`
+  equivalent (no ADK-toolset convenience layer exists on this side) —
+  `rehandshake` must be passed explicitly by whoever calls
+  `createStlsFetch()` directly (see `tests/vault-client.ts` for the
+  pattern). `node/stls-a2a` still doesn't exist as a package.
+
 ## [0.1.4] — 2026-11-12
 
 Tracks [`stls-core`](../../node/stls-core/CHANGELOG.md) 0.1.5 (issue #5,

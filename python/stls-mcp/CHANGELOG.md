@@ -7,6 +7,55 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.5] — 2026-11-13
+
+Adds client-side retry-on-expiry (issue #6, second increment — the
+first added the server-side absolute max-age check shared transparently
+via `stls-core` 0.1.7, no code change needed here for that part).
+Previously stls-mcp had no automatic recovery at all on session expiry
+(idle-TTL or the new max-age), unlike stls-a2a's
+`STLSHttpxTransport`/`SecureSessionManager`. Additive — every existing
+caller (`stls_httpx_factory()` without the new `rehandshake` argument,
+`SecureToolsetManager`) keeps today's exact behavior; retry only
+activates where explicitly wired, as done below for
+`create_stls_mcp_toolset()`.
+
+### Added
+
+- **`StlsHttpxTransport(..., rehandshake=...)` / `stls_httpx_factory(..., rehandshake=...)`**
+  — optional zero-argument async callable that performs a brand new
+  handshake and returns `(session_id, transport)`. On a `401` response
+  whose body carries the new `ERR_SESSION_EXPIRED` code (see below) and
+  no prior retry has happened yet, `StlsHttpxTransport` calls it, swaps
+  its internal session state, and retries the original request exactly
+  once — same retry-once, fail-fast contract as `stls-a2a`'s
+  `STLSHttpxTransport` (a rehandshake failure, or the retried request
+  also coming back expired, propagates/returns immediately, no loop).
+  Kept provider-agnostic on purpose: the caller builds the closure,
+  since only it knows which handshake function and credentials apply
+  (`perform_client_handshake()` needs a pre-shared `session_key`;
+  `perform_pqc_client_handshake()` needs none).
+- **`create_stls_mcp_toolset()` now wires this automatically** — its
+  `rehandshake` closure re-runs `establish_session()` with the exact
+  same arguments as the initial call. `SecureToolsetManager`'s own
+  `invalidate()`/rebuild-on-next-`get_toolset()` path is unchanged and
+  stays reserved for failures this one in-transport retry doesn't cover.
+- **`ERR_SESSION_EXPIRED = -32004`** (`stls_mcp_constants.py`, same
+  numeric value and meaning as `stls_a2a`'s constant of the same name).
+  `StlsMcpMiddleware` now raises it explicitly (still `401`) when the
+  session cache has no entry for the given `session_id`, instead of the
+  generic `-32600` every other `4xx` `StlsMcpError` still uses — lets a
+  client distinguish "repeat the handshake" from an unrelated `401`
+  (e.g. an auth-layer API-key rejection), so only the former triggers
+  the automatic retry above. `StlsMcpError` gained an optional `code`
+  parameter to carry this through.
+- **`tests/test_stls_mcp_transport_retry.py`** — previously no pytest
+  unit coverage existed for `stls_mcp_transport.py`/`stls_mcp_middleware.py`
+  at all (only manual integration scripts in `tests/`). Runs the REAL
+  middleware against the REAL client transport via `httpx.ASGITransport`
+  (not a hand-crafted mock of the wire format), proving the two sides
+  actually agree on it.
+
 ## [0.1.4] — 2026-11-12
 
 Tracks [`stls_core`](../stls-core/CHANGELOG.md) 0.1.5 (issue #5,

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stls_mcp"
-version = "0.1.4"
+version = "0.1.5"
 description = "STLS extension of the Model Context Protocol — transparent application-layer symmetric encryption over Streamable HTTP, sharing the stls-core crypto/session/handshake/provider/auth layer with stls-a2a"
 readme = "README.md"
 requires-python = ">=3.12"

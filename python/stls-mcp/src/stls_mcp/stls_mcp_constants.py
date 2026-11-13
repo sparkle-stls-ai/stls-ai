@@ -82,3 +82,19 @@ A client unaware of the extension simply ignores it (it's under
 
 STLS_EXTENSION_URI: str = "https://stls-ai.com/extensions/mcp-secure-transport/v1"
 """Unique URI of the extension, consistent with the one already used in stls-a2a."""
+
+
+# ---------------------------------------------------------------------------
+# JSON-RPC error codes
+# ---------------------------------------------------------------------------
+
+ERR_SESSION_EXPIRED: int = -32004
+"""
+Same numeric value and meaning as stls_a2a's ERR_SESSION_EXPIRED
+(stls_a2a_adapters_model.py): raised by StlsMcpMiddleware (status 401)
+when the session cache has no entry for the given session_id — idle-TTL
+or absolute max-age expiry (issue #6). Lets a client distinguish this
+from any other 401 (e.g. an auth-layer API-key rejection), so only this
+code justifies an automatic retry after re-handshake — see
+StlsHttpxTransport's rehandshake parameter in stls_mcp_transport.py.
+"""

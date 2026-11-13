@@ -9,6 +9,53 @@ of which this package is the TypeScript port.
 
 ---
 
+## [0.1.7] — 2026-11-13
+
+Adds the server-authoritative absolute key-rotation check to the
+`SessionCache` backends (issue #6, first increment: the shared
+server-side check only — client-side retry for node/stls-mcp and the
+proactive SSE/`arqit_py` scheduler piece are separate, later
+increments), mirroring
+[`python/stls-core` 0.1.7](../../python/stls-core/CHANGELOG.md).
+Additive — no existing caller needed to change; disabled by default.
+
+### Added
+
+- **`SESSION_KEY_MAX_AGE_SECONDS`** environment variable (also
+  `InMemorySessionCache`'s `maxAgeSeconds` constructor option and
+  `RedisSessionCache.connect()`'s `maxAgeSeconds` option), both
+  backends. Unset or `<=0` (default): no behavior change — only the
+  existing idle TTL applies. `>0`: `get()` also expires a session once
+  its AGE since creation (not since last access) exceeds this value,
+  on top of, not instead of, the idle TTL. Server-side only, never
+  client-settable.
+  - `InMemorySessionCache`: `createdAtMs` (new) is tracked per entry,
+    set once at first insertion and never refreshed by `get()`/an
+    update `put()` — unlike the sliding `lastAccessMs`.
+  - `RedisSessionCache`: reuses the `created_at` field already written
+    into every session's JSON payload (previously serialized but never
+    read back). Because every instance in a multi-replica deployment
+    reads the same shared Redis record, the expiry decision is
+    consistent across instances with no new coordination — see the new
+    `tests/session.smoke.ts` (R18) for a dedicated two-instance check.
+  - Both backends: an expired-by-max-age session is deleted immediately
+    and treated exactly like "not found" — the same path already used
+    for idle-TTL expiry.
+- **`tests/session.smoke.ts`** (`npm run test:session-smoke`) —
+  previously no Node unit coverage existed for `session.ts`/
+  `session-redis.ts` at all; this adds coverage for the new max-age
+  behavior specifically (mirrors the Python suite's M13-M16/R15-R18).
+  The Redis cases need a real Redis (`TEST_REDIS_URL`, default
+  `redis://localhost:6399`), same convention as the existing
+  `tests/interop/redis-step*.ts` scripts.
+
+### Known gap carried forward unchanged
+
+- Client-side retry-on-expiry has no Node equivalent today (`node/stls-mcp`'s
+  `transport.ts` has no retry on session expiry at all, and
+  `node/stls-a2a` doesn't exist as a package) — next increment of issue
+  #6, not part of this one.
+
 ## [0.1.6] — 2026-11-12
 
 Hardens `StlsTransport` (issues #10, #12) and extends its correctness

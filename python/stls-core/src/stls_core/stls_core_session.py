@@ -18,11 +18,25 @@ Environment variables:
   SESSION_CACHE_TTL             idle TTL in seconds (default 3600)
   STLS_SESSION_CACHE_MAX        max sessions in the memory cache (default 256)
   STLS_SESSION_TTL              alias of SESSION_CACHE_TTL for compatibility
+  SESSION_KEY_MAX_AGE_SECONDS   absolute key-rotation max-age in seconds.
+                                 Unset or <=0 (default): disabled, behavior
+                                 unchanged from before this existed. >0:
+                                 get() also expires a session once its AGE
+                                 (since creation, not since last access)
+                                 exceeds this value, regardless of how
+                                 recently it was used — on top of, not
+                                 instead of, the idle TTL above. Per-process
+                                 config (server-side only, never client
+                                 settable) — see issue #6.
 
 Redis layout:
   {prefix}:{session_id}  →  JSON {"session_key": "<base64>", "kid": "<kid>",
                                    "created_at": <timestamp>}
                              TTL = SESSION_CACHE_TTL (idle timeout, renewed on get)
+                             created_at also drives the max-age check above
+                             when SESSION_KEY_MAX_AGE_SECONDS is set — every
+                             instance reads the same shared record, so no
+                             cross-instance coordination is needed.
 
   The default prefix "stls:sc" cleanly separates sessions from the
   keystore entries ("stls:ks:...") — no collision even on a Redis
@@ -161,13 +175,18 @@ class InMemorySessionCache(SessionCacheBase):
     For multi-replica Cloud Run use RedisSessionCache instead.
 
     Internal structure:
-      OrderedDict[session_id → (StlsTransport, kid, last_access_float)]
+      OrderedDict[session_id → (StlsTransport, kid, last_access_float, created_at_float)]
+
+    created_at is set once, at first insertion, and never refreshed by
+    get()/put()-on-update — unlike last_access, which slides. Both clocks
+    use time.monotonic(), immune to wall-clock adjustments.
     """
 
     def __init__(
         self,
         max_size: Optional[int] = None,
         ttl_seconds: Optional[int] = None,
+        max_age_seconds: Optional[int] = None,
     ) -> None:
         self._max_size: int = max_size or int(
             os.getenv("STLS_SESSION_CACHE_MAX", "256")
@@ -176,19 +195,28 @@ class InMemorySessionCache(SessionCacheBase):
             os.getenv("SESSION_CACHE_TTL",
                 os.getenv("STLS_SESSION_TTL", "3600"))
         )
-        self._store: OrderedDict[str, tuple[StlsTransport, str, float]] = OrderedDict()
+        self._max_age: int = (
+            max_age_seconds if max_age_seconds is not None
+            else int(os.getenv("SESSION_KEY_MAX_AGE_SECONDS", "0"))
+        )
+        self._store: OrderedDict[str, tuple[StlsTransport, str, float, float]] = OrderedDict()
         logger.debug(
-            "InMemorySessionCache inizializzata: max=%d ttl=%ds",
-            self._max_size, self._ttl,
+            "InMemorySessionCache inizializzata: max=%d ttl=%ds max_age=%ds",
+            self._max_size, self._ttl, self._max_age,
         )
 
     def put(self, session_id: str, kid: str, session_key: bytes) -> None:
         now = time.monotonic()
         transport = StlsTransport(session_key=session_key, session_id=session_id)
 
-        if session_id in self._store:
+        existing = self._store.get(session_id)
+        if existing is not None:
+            # Preserves the original created_at — a put() on an already
+            # known session_id is a redundant/idempotent re-registration,
+            # not a brand new session, so its max-age clock must not reset.
+            _, __, ___, created_at = existing
             self._store.move_to_end(session_id)
-            self._store[session_id] = (transport, kid, now)
+            self._store[session_id] = (transport, kid, now, created_at)
             logger.debug("InMemorySessionCache.put: aggiornata %s", session_id)
             return
 
@@ -199,7 +227,7 @@ class InMemorySessionCache(SessionCacheBase):
                 evicted_id, self._max_size,
             )
 
-        self._store[session_id] = (transport, kid, now)
+        self._store[session_id] = (transport, kid, now, now)
         self._store.move_to_end(session_id)
         logger.debug("InMemorySessionCache.put: nuova sessione %s kid=%s", session_id, kid)
 
@@ -208,7 +236,7 @@ class InMemorySessionCache(SessionCacheBase):
         if entry is None:
             return None
 
-        transport, kid, last_access = entry
+        transport, kid, last_access, created_at = entry
         now = time.monotonic()
 
         if now - last_access > self._ttl:
@@ -219,9 +247,17 @@ class InMemorySessionCache(SessionCacheBase):
             )
             return None
 
-        # LRU refresh + sliding TTL
+        if self._max_age > 0 and now - created_at > self._max_age:
+            del self._store[session_id]
+            logger.info(
+                "InMemorySessionCache: sessione %s scaduta per max-age (max_age=%ds, eta'=%.0fs)",
+                session_id, self._max_age, now - created_at,
+            )
+            return None
+
+        # LRU refresh + sliding TTL (created_at is NOT refreshed here)
         self._store.move_to_end(session_id)
-        self._store[session_id] = (transport, kid, now)
+        self._store[session_id] = (transport, kid, now, created_at)
         return transport
 
     def remove(self, session_id: str) -> bool:
@@ -234,8 +270,9 @@ class InMemorySessionCache(SessionCacheBase):
     def purge_expired(self) -> int:
         now = time.monotonic()
         expired = [
-            sid for sid, (_, __, last) in self._store.items()
+            sid for sid, (_, __, last, created_at) in self._store.items()
             if now - last > self._ttl
+            or (self._max_age > 0 and now - created_at > self._max_age)
         ]
         for sid in expired:
             del self._store[sid]
@@ -255,7 +292,7 @@ class InMemorySessionCache(SessionCacheBase):
     def __repr__(self) -> str:
         return (
             f"InMemorySessionCache(size={len(self._store)}, "
-            f"max={self._max_size}, ttl={self._ttl}s)"
+            f"max={self._max_size}, ttl={self._ttl}s, max_age={self._max_age}s)"
         )
 
 
@@ -274,11 +311,19 @@ class RedisSessionCache(SessionCacheBase):
       {
         "session_key": "<base64(32 bytes)>",  ← raw key for reconstruction
         "kid":         "<kid>",               ← audit and correlation with stls:ks:*
-        "created_at":  <unix timestamp float>  ← diagnostic metadata
+        "created_at":  <unix timestamp float>  ← absolute creation time (wall
+                                                  clock); drives the max-age
+                                                  check below when enabled.
       }
 
     The TTL is sliding (renewed on every get() via GETEX) — a session
-    expires only after SESSION_CACHE_TTL seconds of inactivity.
+    expires only after SESSION_CACHE_TTL seconds of inactivity. On top of
+    that, if max_age_seconds > 0, get() also expires a session once
+    time.time() - created_at exceeds it, regardless of how recently it was
+    used. created_at lives in the one shared Redis record, so every
+    instance in a multi-replica deployment computes the same expiry
+    decision from the same data — no cross-instance coordination needed
+    for this check (see issue #6).
 
     No collision with the keystore (stls:ks:...) nor with other sessions:
       - session_id is a UUID4 (uniqueness guaranteed by the server)
@@ -292,6 +337,7 @@ class RedisSessionCache(SessionCacheBase):
         redis_url: str = "redis://localhost:6379",
         prefix: str = "stls:sc",
         ttl_seconds: int = 3600,
+        max_age_seconds: int = 0,
     ) -> None:
         try:
             import redis as redis_lib
@@ -304,10 +350,11 @@ class RedisSessionCache(SessionCacheBase):
         self._r = redis_lib.Redis.from_url(redis_url, decode_responses=True)
         self._prefix = prefix
         self._ttl = ttl_seconds
+        self._max_age = max_age_seconds
 
         logger.info(
-            "RedisSessionCache inizializzata: prefix=%s url=%s ttl=%ds",
-            prefix, redis_url, ttl_seconds,
+            "RedisSessionCache inizializzata: prefix=%s url=%s ttl=%ds max_age=%ds",
+            prefix, redis_url, ttl_seconds, max_age_seconds,
         )
 
     def _key(self, session_id: str) -> str:
@@ -335,13 +382,25 @@ class RedisSessionCache(SessionCacheBase):
         try:
             data = json.loads(raw)
             session_key = base64.b64decode(data["session_key"])
-            return StlsTransport(session_key=session_key, session_id=session_id)
         except Exception as exc:
             logger.error(
                 "RedisSessionCache.get: errore deserializzazione session_id=%s: %s",
                 session_id, exc,
             )
             return None
+
+        if self._max_age > 0:
+            created_at = data.get("created_at")
+            age = time.time() - created_at if created_at is not None else 0.0
+            if age > self._max_age:
+                self._r.delete(self._key(session_id))
+                logger.info(
+                    "RedisSessionCache: sessione %s scaduta per max-age (max_age=%ds, eta'=%.0fs)",
+                    session_id, self._max_age, age,
+                )
+                return None
+
+        return StlsTransport(session_key=session_key, session_id=session_id)
 
     def remove(self, session_id: str) -> bool:
         deleted = self._r.delete(self._key(session_id))
@@ -363,7 +422,8 @@ class RedisSessionCache(SessionCacheBase):
 
     def __repr__(self) -> str:
         return (
-            f"RedisSessionCache(prefix={self._prefix!r}, ttl={self._ttl}s)"
+            f"RedisSessionCache(prefix={self._prefix!r}, ttl={self._ttl}s, "
+            f"max_age={self._max_age}s)"
         )
 
 
@@ -381,6 +441,9 @@ class SessionCacheFactory:
       SESSION_CACHE_REDIS_NAMESPACE stls:sc  (Redis key prefix)
       SESSION_CACHE_TTL             idle TTL in seconds (default 3600)
       STLS_SESSION_CACHE_MAX        max sessions (memory only, default 256)
+      SESSION_KEY_MAX_AGE_SECONDS   absolute key-rotation max-age in seconds,
+                                     both backends. Unset or <=0: disabled
+                                     (default, no behavior change).
     """
 
     @staticmethod
@@ -392,17 +455,20 @@ class SessionCacheFactory:
             InMemorySessionCache if SESSION_CACHE_BACKEND=memory (default).
             RedisSessionCache    if SESSION_CACHE_BACKEND=redis.
         """
-        backend = os.getenv("SESSION_CACHE_BACKEND", "memory").strip().lower()
+        backend  = os.getenv("SESSION_CACHE_BACKEND", "memory").strip().lower()
+        max_age  = int(os.getenv("SESSION_KEY_MAX_AGE_SECONDS", "0"))
 
         if backend == "redis":
             url    = os.getenv("SESSION_CACHE_REDIS_URL", "redis://localhost:6379")
             prefix = os.getenv("SESSION_CACHE_REDIS_NAMESPACE", "stls:sc")
             ttl    = int(os.getenv("SESSION_CACHE_TTL",
                          os.getenv("STLS_SESSION_TTL", "3600")))
-            return RedisSessionCache(redis_url=url, prefix=prefix, ttl_seconds=ttl)
+            return RedisSessionCache(
+                redis_url=url, prefix=prefix, ttl_seconds=ttl, max_age_seconds=max_age,
+            )
 
         if backend == "memory":
-            return InMemorySessionCache()
+            return InMemorySessionCache(max_age_seconds=max_age)
 
         raise ValueError(
             f"SESSION_CACHE_BACKEND='{backend}' non riconosciuto. "

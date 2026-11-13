@@ -31,7 +31,7 @@ import {
 } from "stls-core";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 
-import { MCP_STLS_PATH } from "./constants.js";
+import { ERR_SESSION_EXPIRED, MCP_STLS_PATH } from "./constants.js";
 
 // performClientHandshake(), performPqcClientHandshake() and
 // StlsHandshakeFailed moved to stls-core (client-handshake.ts) as part
@@ -59,6 +59,38 @@ export interface CreateStlsFetchOptions {
   stlsPath?: string;
   /** Underlying fetch to actually perform the (now encrypted) HTTP request. Defaults to the global fetch. */
   fetch?: FetchLike;
+  /**
+   * Zero-argument async callback that performs a brand new handshake and
+   * returns {sessionId, transport}, used to recover from session expiry
+   * (idle-TTL or the absolute max-age added in issue #6) with a single
+   * automatic retry — same retry-once contract as the Python side's
+   * StlsHttpxTransport. undefined (default): no change from before this
+   * existed — an expired session is returned to the caller as a plain
+   * 401, same as any other error. The caller builds this closure because
+   * only it knows which handshake function and credentials apply
+   * (performClientHandshake() needs a pre-shared sessionKey;
+   * performPqcClientHandshake() needs none) — this function stays
+   * provider-agnostic.
+   */
+  rehandshake?: () => Promise<{ sessionId: string; transport: StlsTransport }>;
+}
+
+/**
+ * Recognizes a 401 response as ERR_SESSION_EXPIRED rather than an
+ * authentication 401 (e.g. an invalid API key) — only the former
+ * justifies an automatic retry after re-handshake. Mirrors the Python
+ * side's _looks_like_session_expired() (stls_mcp_transport.py). Exported
+ * for direct unit testing (see tests/transport-retry.smoke.ts) — not a
+ * raw-key-material concern (issue #5), just a pure predicate over an
+ * already-public error shape.
+ */
+export async function looksLikeSessionExpired(response: Response): Promise<boolean> {
+  try {
+    const body = (await response.clone().json()) as { error?: { code?: unknown } } | null;
+    return typeof body === "object" && body !== null && body.error?.code === ERR_SESSION_EXPIRED;
+  } catch {
+    return false;
+  }
 }
 
 async function requestBodyToText(body: string | Uint8Array | null | undefined): Promise<string> {
@@ -75,7 +107,9 @@ async function requestBodyToText(body: string | Uint8Array | null | undefined): 
  *
  * Usage:
  *   const { sessionId, transport } = await performClientHandshake(baseUrl, sessionKey, { clientId });
- *   const stlsFetch = createStlsFetch(sessionId, transport);
+ *   const stlsFetch = createStlsFetch(sessionId, transport, {
+ *     rehandshake: () => performClientHandshake(baseUrl, sessionKey, { clientId }),
+ *   });
  *   const client = new Client(...);
  *   const httpTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp-stls`), { fetch: stlsFetch });
  *   await client.connect(httpTransport);
@@ -87,8 +121,21 @@ export function createStlsFetch(
 ): FetchLike {
   const stlsPath = options.stlsPath ?? MCP_STLS_PATH;
   const innerFetch = options.fetch ?? globalThis.fetch;
+  const rehandshake = options.rehandshake;
 
-  return async (url: string | URL, init?: RequestInit): Promise<Response> => {
+  // Mutable: a successful rehandshake (below) swaps these for the
+  // lifetime of this fetch closure, so every later call — not just the
+  // retried one — uses the new session.
+  let currentSessionId = sessionId;
+  let currentTransport = transport;
+
+  return (url: string | URL, init?: RequestInit): Promise<Response> => doFetch(url, init, false);
+
+  async function doFetch(
+    url: string | URL,
+    init: RequestInit | undefined,
+    retried: boolean,
+  ): Promise<Response> {
     const targetUrl = url instanceof URL ? url : new URL(url);
     const method = (init?.method ?? "GET").toUpperCase();
 
@@ -106,13 +153,13 @@ export function createStlsFetch(
     } catch (exc) {
       throw new Error(`STLS encryption error (request body): ${(exc as Error).message}`);
     }
-    const envelope = transport.encryptJson(plaintextPayload);
+    const envelope = currentTransport.encryptJson(plaintextPayload);
     const encryptedBody = JSON.stringify(envelope);
 
     // Native MCP headers (mcp-session-id, accept, etc.) are preserved; we
     // only add the STLS session header and fix up content-length.
     const headers = new Headers(init?.headers);
-    headers.set(HEADER_SESSION_ID, sessionId);
+    headers.set(HEADER_SESSION_ID, currentSessionId);
     headers.set("content-length", String(Buffer.byteLength(encryptedBody)));
 
     const response = await innerFetch(url, { ...init, headers, body: encryptedBody });
@@ -120,6 +167,14 @@ export function createStlsFetch(
     // Error responses (4xx/5xx) are always sent in plaintext server-side
     // (see middleware.ts) — never try to decrypt them.
     if (response.status >= 400) {
+      if (response.status === 401 && !retried && rehandshake !== undefined && (await looksLikeSessionExpired(response))) {
+        // Not caught here: a rehandshake failure propagates immediately,
+        // with no retry — same fail-fast contract as the Python side.
+        const next = await rehandshake();
+        currentSessionId = next.sessionId;
+        currentTransport = next.transport;
+        return doFetch(url, init, true);
+      }
       return response;
     }
 
@@ -127,7 +182,7 @@ export function createStlsFetch(
     let plaintextResponse: unknown;
     try {
       const responseEnvelope = (await response.json()) as StlsEnvelopeDict;
-      plaintextResponse = transport.decryptJson(responseEnvelope);
+      plaintextResponse = currentTransport.decryptJson(responseEnvelope);
     } catch (exc) {
       throw new Error(`STLS decryption error (response): ${(exc as Error).message}`);
     }
@@ -143,5 +198,5 @@ export function createStlsFetch(
       statusText: response.statusText,
       headers: outHeaders,
     });
-  };
+  }
 }
