@@ -116,3 +116,6 @@ Thumbs.db
 
 # Claude Code local state (worktrees spawned for background agents, etc.)
 .claude/
+
+# Previous versions of sofia-client-secure
+samples/client/sofia-client-secure_015/
