@@ -60,6 +60,20 @@ for existing deployments that don't set the new env var.
   entries already in Redis simply age out via their existing TTL, no
   migration step needed.
 
+### Rollout & known limitations
+
+- **Mixed-version rollout**: during a multi-replica rolling deploy, an
+  old-code replica reading a new-code replica's entry (or vice versa)
+  hits a missing/unexpected field, caught by the existing
+  deserialization error handling in `get()`, and is treated as a cache
+  miss — same fail-safe path already used for TTL/max-age expiry and
+  corrupted entries. No crash; the affected session just re-handshakes.
+- **No KEK rotation/versioning**: `STLS_CORE_ATREST_KEY` is a single
+  static key — rotating it makes every existing Redis entry fail
+  `open()` (caught, same fail-safe cache-miss path as above) until it
+  ages out via TTL. There is no key-ID/versioning scheme to decrypt
+  under the old KEK while encrypting under the new one.
+
 ---
 
 ## [0.1.7] — 2026-11-13

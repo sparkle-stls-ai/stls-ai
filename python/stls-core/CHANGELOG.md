@@ -48,6 +48,24 @@ the new env var.
   `SET` and opens it after `GET` when `STLS_CORE_ATREST_KEY` is set;
   unchanged (plaintext bytes) when it isn't.
 
+### Rollout & known limitations
+
+- **Mixed-version rollout**: unlike 0.1.6 (whose note here said "no
+  impact on data at rest: cached sessions store the raw `session_key`"
+  — no longer true as of this release), the Redis JSON schema itself
+  changed. During a multi-replica rolling deploy, an old-code replica
+  reading a new-code replica's entry (or vice versa) hits a missing/
+  unexpected field, caught by the existing deserialization error
+  handling in `get()`, and is treated as a cache miss — same fail-safe
+  path already used for TTL/max-age expiry and corrupted entries. No
+  crash, no manual Redis flush needed; the affected session just
+  re-handshakes.
+- **No KEK rotation/versioning**: `STLS_CORE_ATREST_KEY` is a single
+  static key — rotating it makes every existing Redis entry fail
+  `open()` (caught, same fail-safe cache-miss path as above) until it
+  ages out via TTL. There is no key-ID/versioning scheme to decrypt
+  under the old KEK while encrypting under the new one.
+
 ---
 
 ## [0.1.7] — 2026-11-13

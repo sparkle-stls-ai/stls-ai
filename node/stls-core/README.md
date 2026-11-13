@@ -347,6 +347,9 @@ STLS_SESSION_CACHE_MAX=256
 # Unset (default): falls back to storing the payload in the clear, as
 # before this existed — a warning is logged once at connect().
 # Generate with: openssl rand -base64 32
+# No rotation/versioning: changing this value makes every existing
+# Redis entry unreadable (fails closed as a cache miss, not a crash)
+# until it ages out via its own TTL.
 STLS_CORE_ATREST_KEY=
 
 # Auth

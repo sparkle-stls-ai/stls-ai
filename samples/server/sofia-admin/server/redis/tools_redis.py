@@ -215,10 +215,24 @@ def get_tasks_stats() -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # Namespace: SESSION_CACHE_REDIS_NAMESPACE (default "stls:sc")
-# Structure of each entry: {"session_key": "<base64>", "kid": "<kid>", "created_at": <ts>}
+# Structure of each entry, as of stls_core 0.1.8 (issue #20 — no longer
+# a raw "session_key" field; the cache now persists only the already-
+# derived AES/HMAC keys, which these tools never read anyway):
+#   {"enc_aes_key": "<base64>", "dec_aes_key": "<base64>",
+#    "enc_hmac_key": "<base64>", "dec_hmac_key": "<base64>",
+#    "kid": "<kid>", "created_at": <ts>}
 # TTL: sliding (GETEX), default 3600s (SESSION_CACHE_TTL)
 #
-# The 'session_key' field is NEVER returned by these tools, for security.
+# No raw key material is ever returned by these tools, for security —
+# only 'kid' and 'created_at' below.
+#
+# If STLS_CORE_ATREST_KEY is set on the stls_core side, the whole entry
+# is instead an opaque AES-256-GCM blob, not JSON: _safe_json() then
+# returns {"raw": raw}, so 'kid'/'created_at' below silently come back
+# empty/None (provider hint falls through to "other") rather than
+# erroring. This module has no access to that KEK and makes no attempt
+# to decrypt — introspecting sealed sessions isn't supported here.
+#
 # The 'kid' lets us estimate the provider:
 #   UUID format    → pqc   (every PQC handshake generates a fresh UUID)
 #   base-session-* → base
