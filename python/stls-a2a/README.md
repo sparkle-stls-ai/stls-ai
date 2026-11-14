@@ -38,7 +38,7 @@ Over time, the module evolved from a simple secure transport implementation into
 - file passing support in the adapters
 - generation and enrichment of agent cards
 - built-in plain A2A client (`A2AClient`) for discovery, JSON-RPC calls, and SSE streaming
-- A2A-standard task lifecycle (`messages/send`, `messages/sendStream`, `tasks/get`, `tasks/cancel`, `tasks/list`, `tasks/subscribe`)
+- A2A-standard task lifecycle (`messages/send`, `messages/sendStream`, `tasks/get`, `tasks/cancel`, `tasks/list`, `tasks/subscribe`), accepting both the A2A 0.3 method names and the A2A 1.0 PascalCase equivalents (`SendMessage`, `GetTask`, ...)
 - pluggable `TaskStore` backends (`memory` and `redis`) with typed message parts and artifacts
 - single-agent, multi-agent, multi-card, and multi-backend auth scenarios
 
@@ -667,14 +667,20 @@ async for event in client.stream(
 
 The adapters now route the standard A2A method set before delegating to the framework-specific implementation. Supported methods:
 
-| Method | Description |
-|---|---|
-| `messages/send` (alias `message/send`) | creates a Task, invokes the agent, returns the completed Task |
-| `messages/sendStream` (aliases `message/sendStream`, `message/stream`) | streams task updates via SSE |
-| `tasks/subscribe` (alias `task/subscribe`) | subscribes to an existing task and streams status/artifact updates |
-| `tasks/get` (alias `task/get`) | retrieves a task by `taskId` |
-| `tasks/cancel` (alias `task/cancel`) | cancels a task |
-| `tasks/list` (alias `task/list`) | lists tasks with optional `limit` and `cursor` |
+| Method | A2A 1.0 name (spec §9.4) | Description |
+|---|---|---|
+| `messages/send` (alias `message/send`) | `SendMessage` | creates a Task, invokes the agent, returns the completed Task |
+| `messages/sendStream` (aliases `message/sendStream`, `message/stream`) | `SendStreamingMessage` | streams task updates via SSE |
+| `tasks/subscribe` (alias `task/subscribe`) | `SubscribeToTask` | subscribes to an existing task and streams status/artifact updates |
+| `tasks/get` (alias `task/get`) | `GetTask` | retrieves a task by `taskId` |
+| `tasks/cancel` (alias `task/cancel`) | `CancelTask` | cancels a task |
+| `tasks/list` (alias `task/list`) | `ListTasks` | lists tasks with optional `limit` and `cursor` |
+| `tasks/pushNotificationConfig/set` (alias `task/...`) | `CreateTaskPushNotificationConfig` | not implemented — returns `ERR_PUSH_NOTIFICATION_NOT_SUPPORTED` (-32003) |
+| `tasks/pushNotificationConfig/get` (alias `task/...`) | `GetTaskPushNotificationConfig` | not implemented — same error |
+| `tasks/pushNotificationConfig/list` (alias `task/...`) | `ListTaskPushNotificationConfigs` | not implemented — same error |
+| `tasks/pushNotificationConfig/delete` (alias `task/...`) | `DeleteTaskPushNotificationConfig` | not implemented — same error |
+
+A2A 1.0 moved the JSON-RPC binding to PascalCase method names shared with the gRPC/REST bindings, breaking from 0.3's slash-style names. Both are accepted: the 1.0 name in the right column is normalized to its 0.3 equivalent (left column) at the single entry point `a2a_to_agent_request()` in `stls_a2a_adapters.py` — a client may use either spelling and gets identical behavior. See issue #14 and `CHANGELOG.md` 0.1.8.
 
 Calling `messages/send` with the standard message structure:
 
@@ -872,7 +878,7 @@ At the moment, the module covers:
 - server-side authorization via `AuthConfig` or loader-based API key management (`StaticLoader`, `FileLoader`, `PostgresLoader`, via `stls_core.auth`)
 - `ApiKeyManager.from_loader(...)`, `ApiKeyManagerGroup`, default audit hooks, and Redis-backed key caching with namespace isolation
 - optional PostgreSQL `AgentRegistry` with heartbeat/liveness tracking for agent fleets
-- A2A-standard task lifecycle: `messages/send`, `messages/sendStream`, `tasks/get`, `tasks/cancel`, `tasks/list`, `tasks/subscribe`
+- A2A-standard task lifecycle: `messages/send`, `messages/sendStream`, `tasks/get`, `tasks/cancel`, `tasks/list`, `tasks/subscribe` — both A2A 0.3 and A2A 1.0 (spec §9.4) method names accepted, see [Using Standard A2A Methods](#using-standard-a2a-methods)
 - pluggable `TaskStore` backend (`memory` / `redis`) with typed parts (`TextPart`, `FilePart`, `DataPart`) and `Artifact` tracking
 - automatic `TaskStore` cleanup via `start_task_store_cleanup` (memory backend) and native Redis TTL expiration (redis backend)
 - `AgentResponse` as the standard return type for custom adapters

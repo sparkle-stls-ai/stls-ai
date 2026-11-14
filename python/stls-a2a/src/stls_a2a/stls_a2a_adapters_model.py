@@ -139,12 +139,16 @@ async def _collect_history(
 
 # A2A methods that use the SSE channel (must not arrive on the sync endpoint)
 _SSE_METHODS = {"messages/sendStream", "tasks/subscribe"}
-# Standard A2A methods handled by handle_request (all others → legacy invoke)
+# Standard A2A methods handled by handle_request (all others → legacy invoke).
+# Documentation only — not used to gate the elif chain below, which matches
+# on literal tuples; kept in sync with it by hand.
 _A2A_METHODS = {
     "messages/send", "messages/sendStream",
-    "tasks/get", "tasks/cancel", "tasks/list",
+    "tasks/get", "tasks/cancel", "tasks/list", "tasks/subscribe",
     "tasks/pushNotificationConfig/set",
     "tasks/pushNotificationConfig/get",
+    "tasks/pushNotificationConfig/list",
+    "tasks/pushNotificationConfig/delete",
 }
 
 class AgentRequest(BaseModel):
@@ -507,8 +511,10 @@ class AgentAdapter(ABC):
                 )
 
             # ── push notification (not implemented) ─────────────────────────
-            elif method in ("tasks/pushNotificationConfig/set", "task/pushNotificationConfig/set",
-                            "tasks/pushNotificationConfig/get", "task/pushNotificationConfig/get"):
+            elif method in ("tasks/pushNotificationConfig/set",    "task/pushNotificationConfig/set",
+                            "tasks/pushNotificationConfig/get",    "task/pushNotificationConfig/get",
+                            "tasks/pushNotificationConfig/list",   "task/pushNotificationConfig/list",
+                            "tasks/pushNotificationConfig/delete", "task/pushNotificationConfig/delete"):
                 return self._error(rpc_id, ERR_PUSH_NOTIFICATION_NOT_SUPPORTED,
                                    "Push notifications are not supported by this agent")
 

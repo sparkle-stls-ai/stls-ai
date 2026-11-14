@@ -70,6 +70,13 @@ SSE_STREAM_METHODS: frozenset[str] = frozenset({
     "message/stream",
     "tasks/subscribe",
     "task/subscribe",
+    # A2A 1.0 (spec §9.4) PascalCase names — see _A2A_1_0_METHOD_ALIASES
+    # in stls_a2a_adapters.py for the matching normalization on the
+    # non-SSE path. These two are checked directly against the raw
+    # method string (before a2a_to_agent_request runs), so they need
+    # their own entry here rather than relying on that alias map.
+    "SendStreamingMessage",
+    "SubscribeToTask",
 })
 """All A2A methods that produce an SSE response (not a single JSON)."""
 
@@ -77,12 +84,14 @@ SSE_SEND_METHODS: frozenset[str] = frozenset({
     "messages/sendStream",
     "message/sendStream",
     "message/stream",
+    "SendStreamingMessage",   # A2A 1.0 name — see SSE_STREAM_METHODS note
 })
 """Subset: methods that create a new Task and invoke the adapter."""
 
 SSE_SUBSCRIBE_METHODS: frozenset[str] = frozenset({
     "tasks/subscribe",
     "task/subscribe",
+    "SubscribeToTask",        # A2A 1.0 name — see SSE_STREAM_METHODS note
 })
 """Subset: methods that attach to an existing Task in the TaskStore."""
 

@@ -7,6 +7,37 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.8] — 2026-11-14
+
+Part of the A2A protocol conformance assessment (issue #14). First of
+several incremental fixes — this one covers the JSON-RPC method-naming
+gap only; AgentCard schema and capability-flag gaps remain open.
+
+### Added
+
+- **A2A 1.0 JSON-RPC method names** (spec §9.4) — `SendMessage`,
+  `SendStreamingMessage`, `GetTask`, `ListTasks`, `CancelTask`,
+  `SubscribeToTask`, `Create/Get/List/DeleteTaskPushNotificationConfig`.
+  1.0 moved the JSON-RPC binding to PascalCase names shared with
+  gRPC/REST, breaking from 0.3's slash-style names
+  (`messages/send`, `tasks/get`, ...) — which every dispatch point in
+  this package still matches on internally. The 1.0 names are
+  normalized to their 0.3 equivalent in a single place
+  (`_A2A_1_0_METHOD_ALIASES` in `stls_a2a_adapters.py`); SSE methods
+  are recognized directly in `SSE_STREAM_METHODS`/`SSE_SEND_METHODS`/
+  `SSE_SUBSCRIBE_METHODS` (`stls_a2a_integration.py`). Purely additive:
+  0.3 clients are unaffected.
+- `tasks/pushNotificationConfig/list` and `.../delete` (and their 1.0
+  names) now resolve to the same `ERR_PUSH_NOTIFICATION_NOT_SUPPORTED`
+  response as `set`/`get`, instead of falling through to "method not
+  found" — push notifications aren't implemented yet, but the method
+  names are now all recognized consistently.
+- `tests/a2a_protocol_conformance_test.py` — regression suite asserting
+  0.3 names are unchanged and 1.0 names produce identical outcomes,
+  in-process via `httpx.ASGITransport` (no server process needed).
+
+---
+
 ## [0.1.7] — 2026-11-12
 
 Tracks [`stls_core`](../stls-core/CHANGELOG.md) 0.1.5 (issue #5,
