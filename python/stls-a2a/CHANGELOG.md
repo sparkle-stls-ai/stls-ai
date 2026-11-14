@@ -9,9 +9,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.8] — 2026-11-14
 
-Part of the A2A protocol conformance assessment (issue #14). First of
-several incremental fixes — this one covers the JSON-RPC method-naming
-gap only; AgentCard schema and capability-flag gaps remain open.
+Part of the A2A protocol conformance assessment (issue #14), covering
+two of its four gaps: JSON-RPC method naming and the AgentCard schema.
+The capability-flag bug and the cosmetic agent-name fallback remain open.
 
 ### Added
 
@@ -32,9 +32,43 @@ gap only; AgentCard schema and capability-flag gaps remain open.
   response as `set`/`get`, instead of falling through to "method not
   found" — push notifications aren't implemented yet, but the method
   names are now all recognized consistently.
+- **A2A 1.0 AgentCard fields** (spec §4.4.1) — `AgentCard.supportedInterfaces`
+  (`stls_a2a_card_model.py`'s new `AgentInterface` model: `url`,
+  `protocolBinding`, `protocolVersion`) and `securitySchemes` (a map,
+  vs. the existing singular `securityScheme`). Both are auto-derived
+  from the pre-existing `url` and `securityScheme` fields via a
+  `model_validator`, so every `_card_from_*()` builder in
+  `stls_a2a_utils.py` produces spec-conformant output with no changes
+  of its own.
 - `tests/a2a_protocol_conformance_test.py` — regression suite asserting
-  0.3 names are unchanged and 1.0 names produce identical outcomes,
-  in-process via `httpx.ASGITransport` (no server process needed).
+  0.3 names/pre-existing card fields are unchanged and 1.0 names/card
+  fields produce the spec-conformant shape, in-process via
+  `httpx.ASGITransport` (no server process needed).
+
+### Changed
+
+- Replaced the old `supportedInterfaces` shape — a `{jsonRpc, grpc,
+  rest}` boolean-flag object that happened to reuse the A2A 1.0 field
+  name (`supportedInterfaces`) for an unrelated, non-conformant type.
+  Any strict 1.0 AgentCard validator rejected that shape outright, and
+  nothing in this codebase read those booleans (grep-verified before
+  removing the `SupportedInterfaces` class), so there was no real
+  consumer to preserve.
+- Kept, unchanged, everything that *is* actually read today: the
+  singular `securityScheme` field (read by `stls_a2a_client.py` and
+  rendered by the `sofia-client-secure` debug UI) and the `url`/
+  `secureUrl` fields (read by `stls_a2a_client.py`'s `_resolve_paths()`).
+  `securitySchemes`/`supportedInterfaces` are additive siblings, not
+  replacements.
+
+### Known partial gap
+
+- `securitySchemes`' values stay in the flatter `{"type": "apiKey", ...}`
+  shape already used by `security_scheme`, rather than the A2A 1.0
+  proto's nested oneof wrapper (e.g. `{"apiKeySecurityScheme": {...}}`).
+  The map container itself — the larger structural defect — is now
+  correct and keyed by scheme name; revisit the inner shape if a
+  strict 1.0 validator flags it.
 
 ---
 

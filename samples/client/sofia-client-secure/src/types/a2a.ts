@@ -56,7 +56,10 @@ export interface AgentCard {
   defaultInputModes?: string[];
   defaultOutputModes?: string[];
   securityScheme?: Record<string, unknown>;
-  supportedInterfaces?: Record<string, unknown>;
+  /** A2A 1.0 (spec §4.4.1): named map of security schemes, alongside the legacy singular securityScheme above. */
+  securitySchemes?: Record<string, unknown>;
+  /** A2A 1.0 (spec §4.4.1): array of {url, protocolBinding, protocolVersion}, not the legacy boolean-flag shape. */
+  supportedInterfaces?: unknown[];
   extensions?: unknown[];
   // catch-all for any extra fields returned by the agent
   [key: string]: unknown;

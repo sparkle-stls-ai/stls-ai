@@ -808,6 +808,17 @@ legitimate for interoperability; only the Arqit product branding
 ("Sparkle SKA") was removed from descriptions and from the scheme name
 itself.
 
+**A2A 1.0 card fields.** Generated cards also carry `supportedInterfaces`
+(array of `{url, protocolBinding, protocolVersion}`, A2A 1.0 spec §4.4.1)
+and `securitySchemes` (a map, keyed by scheme type) alongside the
+pre-existing `url`/`secureUrl` and singular `securityScheme` fields —
+both pairs are populated automatically from the same values, so no
+caller needs to set the new fields explicitly. `securitySchemes`' values
+currently keep the flatter `{"type": "apiKey", ...}` shape rather than
+1.0's nested oneof wrapper (`{"apiKeySecurityScheme": {...}}`); see
+`CHANGELOG.md` 0.1.8 for that known partial gap and issue #14 for the
+full conformance assessment.
+
 **Tool names for raw-function ADK tools.** `to_a2a(...)` on a Google ADK
 agent whose `tools=[...]` list contains a raw Python function (not yet
 wrapped by ADK into a `FunctionTool`, which depends on the ADK version)

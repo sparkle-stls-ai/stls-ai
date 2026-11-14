@@ -1,24 +1,35 @@
 """
 a2a_protocol_conformance_test.py
 ---------------------------------
-Regression suite for A2A JSON-RPC method-name conformance (issue #14).
+Regression suite for the A2A protocol conformance gaps tracked in
+issue #14. Grows incrementally as each gap is addressed; currently
+covers:
 
-A2A 1.0 (spec §9.4) renamed the JSON-RPC methods to PascalCase
-(SendMessage, GetTask, CancelTask, ListTasks, SubscribeToTask,
-Create/Get/List/DeleteTaskPushNotificationConfig, SendStreamingMessage),
-replacing 0.3's slash-style names (messages/send, tasks/get, ...).
-stls_a2a_adapters.py normalizes the 1.0 names into their 0.3 equivalents
-at a2a_to_agent_request() (sync path) and stls_a2a_integration.py's
-SSE_STREAM_METHODS/SSE_SEND_METHODS/SSE_SUBSCRIBE_METHODS recognize both
-spellings directly (SSE path).
+Gap #1 — JSON-RPC method names
+  A2A 1.0 (spec §9.4) renamed the JSON-RPC methods to PascalCase
+  (SendMessage, GetTask, CancelTask, ListTasks, SubscribeToTask,
+  Create/Get/List/DeleteTaskPushNotificationConfig, SendStreamingMessage),
+  replacing 0.3's slash-style names (messages/send, tasks/get, ...).
+  stls_a2a_adapters.py normalizes the 1.0 names into their 0.3
+  equivalents at a2a_to_agent_request() (sync path) and
+  stls_a2a_integration.py's SSE_STREAM_METHODS/SSE_SEND_METHODS/
+  SSE_SUBSCRIBE_METHODS recognize both spellings directly (SSE path).
 
-This suite verifies both ends of that contract against a real
-FastAPI app wired exactly as create_secure_a2a_endpoint() builds it,
-in-process via httpx.ASGITransport (no server process, no network):
+Gap #2 — AgentCard schema
+  AgentCard.supported_interfaces/security_schemes (stls_a2a_card_model.py)
+  now hold the A2A 1.0-shaped array/map (spec §4.4.1), auto-derived from
+  the pre-existing url/security_scheme fields via a model_validator so
+  no _card_from_*() builder needs to change. The old fields (url,
+  secureUrl, securityScheme) are kept exactly as before.
 
-  1. 0.3 names still behave exactly as before (backward-compat guard —
-     this suite exists specifically because this must never regress).
-  2. 1.0 names produce the same outcome as their 0.3 equivalent.
+This suite verifies both ends of each gap's fix against a real FastAPI
+app wired exactly as create_secure_a2a_endpoint() builds it, in-process
+via httpx.ASGITransport (no server process, no network):
+
+  1. 0.3 names / pre-existing card fields still behave exactly as
+     before (backward-compat guard — this suite exists specifically
+     because this must never regress).
+  2. 1.0 names / card fields produce the spec-conformant shape.
   3. An unrecognized method name still gets -32601 (the alias map must
      not swallow real errors).
 
@@ -279,9 +290,59 @@ async def test_unknown_method_still_rejected() -> bool:
         return False
 
 
+# ── Test 5: AgentCard — old fields unchanged, new 1.0 fields correct ──────
+
+async def test_agent_card_schema() -> bool:
+    print("\n── Test 5: AgentCard schema (gap #2) ─────────────────────────────")
+    app = _build_app()
+    ok = True
+    async with _client(app) as client:
+        resp = await client.get("/.well-known/agent-card.json")
+        resp.raise_for_status()
+        card = resp.json()
+
+        # Backward compat: pre-existing fields untouched.
+        if card.get("url") and card.get("secureUrl"):
+            _ok("url / secureUrl", "unchanged")
+        else:
+            _fail("url / secureUrl", json.dumps(card))
+            ok = False
+
+        old_scheme = card.get("securityScheme")
+        if isinstance(old_scheme, dict) and "type" in old_scheme:
+            _ok("securityScheme (singular)", f"unchanged, type={old_scheme['type']!r}")
+        else:
+            _fail("securityScheme (singular)", json.dumps(card))
+            ok = False
+
+        # New A2A 1.0 fields: present, correctly shaped, and derived from
+        # the same values as the fields above (not independently wrong).
+        interfaces = card.get("supportedInterfaces")
+        if (
+            isinstance(interfaces, list) and interfaces
+            and interfaces[0].get("url") == card.get("url")
+            and interfaces[0].get("protocolBinding") == "JSONRPC"
+        ):
+            _ok("supportedInterfaces", f"array, derived from url: {interfaces}")
+        else:
+            _fail("supportedInterfaces", json.dumps(card))
+            ok = False
+
+        schemes = card.get("securitySchemes")
+        if (
+            isinstance(schemes, dict) and old_scheme
+            and schemes.get(old_scheme["type"]) == old_scheme
+        ):
+            _ok("securitySchemes", f"map, derived from securityScheme: {list(schemes.keys())}")
+        else:
+            _fail("securitySchemes", json.dumps(card))
+            ok = False
+    return ok
+
+
 async def main() -> None:
     print("\n" + "=" * 70)
-    print("A2A Protocol Method-Name Conformance (issue #14)")
+    print("A2A Protocol Conformance (issue #14)")
     print("=" * 70)
 
     results: dict[str, bool] = {}
@@ -289,6 +350,7 @@ async def main() -> None:
     results["2 — 1.0 names == 0.3 outcome"] = await test_1_0_names_match_0_3()
     results["3 — 1.0 SSE names"]            = await test_1_0_sse_names()
     results["4 — unknown method guard"]     = await test_unknown_method_still_rejected()
+    results["5 — AgentCard schema"]         = await test_agent_card_schema()
 
     print("\n" + "=" * 70)
     print("Summary")

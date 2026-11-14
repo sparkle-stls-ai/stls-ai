@@ -11,7 +11,7 @@ interface Props {
 const KNOWN_KEYS = new Set([
   'name','description','url','secureUrl','version','skills',
   'capabilities','defaultInputModes','defaultOutputModes',
-  'securityScheme','supportedInterfaces','extensions',
+  'securityScheme','securitySchemes','supportedInterfaces','extensions',
 ]);
 
 function JsonTree({ value }: { value: unknown }) {
@@ -107,6 +107,13 @@ export function AgentCard({ card, onDisconnect, headerless }: Props) {
         <div className="card-section">
           <span className="card-section-label">Security Scheme</span>
           <JsonTree value={card.securityScheme} />
+        </div>
+      )}
+
+      {card.securitySchemes && (
+        <div className="card-section">
+          <span className="card-section-label">Security Schemes (A2A 1.0)</span>
+          <JsonTree value={card.securitySchemes} />
         </div>
       )}
 
