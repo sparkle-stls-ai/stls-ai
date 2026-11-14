@@ -29,6 +29,13 @@ Gap #3 — capability flag vs. actual behavior
   everything else via the base AgentAdapter.stream() fallback). Now
   True for all three, matching what messages/sendStream actually does.
 
+Gap #4 — generic card name
+  _card_generic() (stls_a2a_utils.py) fell back to
+  type(agent).__name__ for agents without a .name attribute (e.g. a
+  plain function handler) — literally the string "function" for
+  every such agent. Now tries the function's own __name__ first, same
+  fallback chain _tool_identity() already used for tools.
+
 This suite verifies both ends of each gap's fix against a real FastAPI
 app wired exactly as create_secure_a2a_endpoint() builds it, in-process
 via httpx.ASGITransport (no server process, no network):
@@ -386,6 +393,29 @@ async def test_streaming_capability_matches_reality() -> bool:
     return ok
 
 
+# ── Test 7: generic card name isn't the useless "function" (gap #4) ──────
+
+async def test_card_name_not_generic() -> bool:
+    """
+    _card_generic() used to report type(agent).__name__ as a last
+    resort, which for a plain function handler (this test app's
+    calculator_handler, same as multi_agent_server.py's) is literally
+    the string "function" for every such agent — not a useful or even
+    distinguishing identifier. Now falls back to the function's own
+    __name__ first.
+    """
+    print("\n── Test 7: generic card name (gap #4) ────────────────────────────")
+    app = _build_app()
+    async with _client(app) as client:
+        card = (await client.get("/.well-known/agent-card.json")).json()
+        name = card.get("name")
+        if name and name != "function":
+            _ok("AgentCard.name", f"{name!r} (not the generic 'function')")
+            return True
+        _fail("AgentCard.name", f"got {name!r}")
+        return False
+
+
 async def main() -> None:
     print("\n" + "=" * 70)
     print("A2A Protocol Conformance (issue #14)")
@@ -398,6 +428,7 @@ async def main() -> None:
     results["4 — unknown method guard"]     = await test_unknown_method_still_rejected()
     results["5 — AgentCard schema"]         = await test_agent_card_schema()
     results["6 — streaming capability"]     = await test_streaming_capability_matches_reality()
+    results["7 — generic card name"]        = await test_card_name_not_generic()
 
     print("\n" + "=" * 70)
     print("Summary")

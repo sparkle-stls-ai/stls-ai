@@ -206,8 +206,17 @@ def _card_from_langgraph(agent: Any, url: str | None = None,
 
 def _card_generic(agent: Any, url: str | None = None,
                   secure_url: str | None = None, description: str | None = None) -> AgentCard:
-    """Generic fallback: best-effort introspection."""
-    name = getattr(agent, "name", type(agent).__name__)
+    """
+    Generic fallback: best-effort introspection.
+
+    Used for the 'custom' framework, where `agent` is often a plain
+    Python function (e.g. the calculator_handler wrapper in
+    multi_agent_server.py), not an object with a `.name` attribute.
+    Same fallback chain as _tool_identity() above, for the same reason:
+    `type(agent).__name__` alone would report the generic "function"
+    for every such agent, rather than that function's own name.
+    """
+    name = getattr(agent, "name", None) or getattr(agent, "__name__", None) or type(agent).__name__
     return AgentCard(
         name=name,
         description=description or getattr(agent, "description", f"Agent: {name}"),

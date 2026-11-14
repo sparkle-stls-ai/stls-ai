@@ -839,6 +839,16 @@ like `<function send_report at 0x7f...>` in the public card — not a
 stable identifier (the memory address changes every process) and useless
 to any client reading the card.
 
+**Agent name for the `custom` framework.** The same kind of fallback
+applies one level up: `to_a2a(...)` on a plain Python function used
+directly as the agent (the `custom` framework's typical shape, e.g. the
+`calculator_handler` wrapper in `multi_agent_server.py`) now resolves
+the card's `name` via `.name` first, then the function's own
+`__name__`. Previously it fell through to `type(agent).__name__`,
+which for *any* function is literally the class `function` — every
+such agent's card reported the same useless, non-distinguishing name.
+See issue #14 and `CHANGELOG.md` 0.1.8.
+
 Practical examples:
 
 - [tests/multi_agent_server.py](./tests/multi_agent_server.py)

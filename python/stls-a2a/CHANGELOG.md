@@ -9,10 +9,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.8] — 2026-11-14
 
-Part of the A2A protocol conformance assessment (issue #14), covering
-three of its four gaps: JSON-RPC method naming, the AgentCard schema,
-and the streaming capability-flag bug. Only the cosmetic agent-name
-fallback remains open.
+Part of the A2A protocol conformance assessment (issue #14) — closes
+all four gaps it identified: JSON-RPC method naming, the AgentCard
+schema, the streaming capability-flag bug, and the cosmetic
+generic-card-name fallback.
 
 ### Added
 
@@ -46,7 +46,8 @@ fallback remains open.
   fields produce the spec-conformant shape, in-process via
   `httpx.ASGITransport` (no server process needed). Extended with a 6th
   group that re-exercises the SSE path and checks the result matches
-  what `capabilities.streaming` claims (see Fixed, below).
+  what `capabilities.streaming` claims, and a 7th asserting the card's
+  generic-agent name isn't the useless `"function"` (see Fixed, below).
 - `samples/client/sofia-client-secure`: the debug `AgentCard` viewer
   now has its own "Security Schemes (A2A 1.0)" section for the new
   `securitySchemes` field (previously it would've landed in the
@@ -67,6 +68,19 @@ fallback remains open.
   claim about it was wrong. Clients that honored the (incorrect) flag
   by skipping streaming now get to use it; nothing that worked before
   stops working.
+- **Generic agent cards no longer report the name `"function"`.**
+  `_card_generic()`'s name fallback was `getattr(agent, "name",
+  type(agent).__name__)` — for a plain Python function with no `.name`
+  attribute (the `'custom'` framework's typical shape, e.g. the
+  `calculator_handler` wrapper in `multi_agent_server.py`), `type(x)`
+  of any function is literally the class `function`, so every such
+  agent's card reported the same useless, non-distinguishing name.
+  Now tries the function's own `__name__` first — same fallback chain
+  `_tool_identity()` already used for tools, applied here for the same
+  reason. `samples/server/4_custom_financial_agent` already worked
+  around this independently (by passing a class instance with `.name`
+  set instead of a bare function) — unaffected by this fix, since
+  `.name` was already set there and takes priority either way.
 
 ### Changed
 
