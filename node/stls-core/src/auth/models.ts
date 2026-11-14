@@ -8,6 +8,17 @@
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
+// Linear trailing-slash trim (mirrors Python's str.rstrip("/")). A regex
+// like /\/+$/ is unanchored at the start, so the engine retries the greedy
+// match at every position; on attacker-controlled input such as a long run
+// of slashes followed by a non-slash character, that backtracking is
+// quadratic in the input length (CodeQL: polynomial ReDoS).
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end);
+}
+
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
@@ -79,9 +90,9 @@ export class KeyRecord {
    */
   allowsEndpoint(endpoint: string): boolean {
     if (this.endpoints.length === 0) return true;
-    const norm = endpoint.replace(/\/+$/, "");
+    const norm = stripTrailingSlashes(endpoint);
     return this.endpoints.some((e) => {
-      const ne = e.replace(/\/+$/, "");
+      const ne = stripTrailingSlashes(e);
       return norm === ne || norm.startsWith(`${ne}/`);
     });
   }

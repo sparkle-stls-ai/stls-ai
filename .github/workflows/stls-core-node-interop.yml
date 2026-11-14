@@ -19,6 +19,9 @@ on:
       - "python/stls-core/**"
       - ".github/workflows/stls-core-node-interop.yml"
 
+permissions:
+  contents: read
+
 jobs:
   stls-core-interop:
     runs-on: ubuntu-latest

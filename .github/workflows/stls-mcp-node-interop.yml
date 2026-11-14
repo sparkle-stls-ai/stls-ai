@@ -31,6 +31,9 @@ on:
       - "python/stls-core/**"
       - ".github/workflows/stls-mcp-node-interop.yml"
 
+permissions:
+  contents: read
+
 jobs:
   stls-mcp-interop:
     runs-on: ubuntu-latest

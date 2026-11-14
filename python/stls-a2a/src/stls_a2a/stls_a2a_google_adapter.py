@@ -1,11 +1,29 @@
 from typing import Dict, Any, Optional, List,AsyncIterator
 from .stls_a2a_task import TextPart, FilePart, DataPart, Part, FileInline, FileReference
 import asyncio
+from urllib.parse import urlparse
 
 from .stls_a2a_adapters_model import AgentAdapter,AgentRequest,AgentResponse
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+def _is_youtube_url(uri: str) -> bool:
+    """
+    True only if uri's host is youtube.com or a subdomain of it.
+
+    A plain substring check (`"youtube.com" in uri`) can be spoofed by any
+    URL that merely contains that text somewhere, e.g.
+    "https://evil.example/youtube.com" or "https://youtube.com.evil.example/x" —
+    both would wrongly be routed to Gemini's direct from_uri path instead of
+    being downloaded (and thus validated) by our own httpx client.
+    """
+    try:
+        host = (urlparse(uri).hostname or "").lower()
+    except ValueError:
+        return False
+    return host == "youtube.com" or host.endswith(".youtube.com")
 
 
 # ============================================================================
@@ -171,7 +189,7 @@ class GoogleADKAdapter(AgentAdapter):
                         )
                 elif isinstance(part.file, FileReference):
                     uri = part.file.uri
-                    if uri.startswith("gs://") or "youtube.com" in uri:
+                    if uri.startswith("gs://") or _is_youtube_url(uri):
                         genai_parts.append(
                             types.Part.from_uri(file_uri=uri, mime_type=part.file.mimeType)
                         )
