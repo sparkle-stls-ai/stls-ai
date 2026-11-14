@@ -10,8 +10,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.1.8] — 2026-11-14
 
 Part of the A2A protocol conformance assessment (issue #14), covering
-two of its four gaps: JSON-RPC method naming and the AgentCard schema.
-The capability-flag bug and the cosmetic agent-name fallback remain open.
+three of its four gaps: JSON-RPC method naming, the AgentCard schema,
+and the streaming capability-flag bug. Only the cosmetic agent-name
+fallback remains open.
 
 ### Added
 
@@ -43,7 +44,29 @@ The capability-flag bug and the cosmetic agent-name fallback remain open.
 - `tests/a2a_protocol_conformance_test.py` — regression suite asserting
   0.3 names/pre-existing card fields are unchanged and 1.0 names/card
   fields produce the spec-conformant shape, in-process via
-  `httpx.ASGITransport` (no server process needed).
+  `httpx.ASGITransport` (no server process needed). Extended with a 6th
+  group that re-exercises the SSE path and checks the result matches
+  what `capabilities.streaming` claims (see Fixed, below).
+- `samples/client/sofia-client-secure`: the debug `AgentCard` viewer
+  now has its own "Security Schemes (A2A 1.0)" section for the new
+  `securitySchemes` field (previously it would've landed in the
+  generic "Extra fields" catch-all). Purely additive — nothing removed
+  or renamed; `tsc --noEmit` clean.
+
+### Fixed
+
+- **`capabilities.streaming` now reflects actual behavior.**
+  `_card_from_adk`, `_card_from_langgraph`, and `_card_generic`
+  (`stls_a2a_utils.py`) hardcoded `streaming=False` regardless of the
+  framework, even though `GoogleADKAdapter` streams natively and every
+  other adapter inherits a genuinely-working SSE fallback from the
+  base `AgentAdapter.stream()` (`stls_a2a_adapters_model.py`). Verified
+  live before and after: `messages/sendStream`/`SendStreamingMessage`
+  produced an identical, correct SSE lifecycle
+  (`submitted`→`working`→`completed`) in both cases — only the card's
+  claim about it was wrong. Clients that honored the (incorrect) flag
+  by skipping streaming now get to use it; nothing that worked before
+  stops working.
 
 ### Changed
 

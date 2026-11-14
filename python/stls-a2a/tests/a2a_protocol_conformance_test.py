@@ -22,6 +22,13 @@ Gap #2 — AgentCard schema
   no _card_from_*() builder needs to change. The old fields (url,
   secureUrl, securityScheme) are kept exactly as before.
 
+Gap #3 — capability flag vs. actual behavior
+  _card_from_adk/_card_from_langgraph/_card_generic (stls_a2a_utils.py)
+  hardcoded capabilities.streaming=False even though every adapter
+  genuinely supports SSE streaming (GoogleADKAdapter natively,
+  everything else via the base AgentAdapter.stream() fallback). Now
+  True for all three, matching what messages/sendStream actually does.
+
 This suite verifies both ends of each gap's fix against a real FastAPI
 app wired exactly as create_secure_a2a_endpoint() builds it, in-process
 via httpx.ASGITransport (no server process, no network):
@@ -340,6 +347,45 @@ async def test_agent_card_schema() -> bool:
     return ok
 
 
+# ── Test 6: capability flag matches actual behavior (gap #3) ─────────────
+
+async def test_streaming_capability_matches_reality() -> bool:
+    """
+    _card_from_adk/_card_from_langgraph/_card_generic used to hardcode
+    capabilities.streaming=False even though every adapter (native
+    override in GoogleADKAdapter, or the base AgentAdapter.stream()
+    fallback for everything else) genuinely supports SSE streaming.
+    This doesn't just check the flag's value — it re-exercises the
+    SSE path (same as test_1_0_sse_names) and confirms the card's
+    claim and the actual behavior agree, for the 'custom' framework
+    this test app uses (_card_generic's code path).
+    """
+    print("\n── Test 6: streaming capability flag matches reality (gap #3) ───")
+    app = _build_app()
+    ok = True
+    async with _client(app) as client:
+        card = (await client.get("/.well-known/agent-card.json")).json()
+        declared_streaming = card.get("capabilities", {}).get("streaming")
+        if declared_streaming is True:
+            _ok("capabilities.streaming", "declared True")
+        else:
+            _fail("capabilities.streaming", f"declared {declared_streaming!r}, expected True")
+            ok = False
+
+        events = await _sse_events(
+            client, "messages/sendStream",
+            {"message": {"parts": [{"type": "text", "text": "add(2,3)"}]}, "expression": "add(2,3)"},
+        )
+        states = [e["result"]["status"]["state"] for e in events if e["result"]["kind"] == "status-update"]
+        actually_streams = states == ["submitted", "working", "completed"]
+        if actually_streams:
+            _ok("SSE lifecycle", f"matches declared capability: {states}")
+        else:
+            _fail("SSE lifecycle", f"declared streaming=True but got lifecycle={states}")
+            ok = False
+    return ok
+
+
 async def main() -> None:
     print("\n" + "=" * 70)
     print("A2A Protocol Conformance (issue #14)")
@@ -351,6 +397,7 @@ async def main() -> None:
     results["3 — 1.0 SSE names"]            = await test_1_0_sse_names()
     results["4 — unknown method guard"]     = await test_unknown_method_still_rejected()
     results["5 — AgentCard schema"]         = await test_agent_card_schema()
+    results["6 — streaming capability"]     = await test_streaming_capability_matches_reality()
 
     print("\n" + "=" * 70)
     print("Summary")

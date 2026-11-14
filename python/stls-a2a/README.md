@@ -819,6 +819,16 @@ currently keep the flatter `{"type": "apiKey", ...}` shape rather than
 `CHANGELOG.md` 0.1.8 for that known partial gap and issue #14 for the
 full conformance assessment.
 
+**`capabilities.streaming` reflects actual support.** Every agent card
+now declares `streaming: true` for the ADK, LangChain/LangGraph, and
+custom frameworks, matching how `messages/sendStream` (and its A2A 1.0
+name, `SendStreamingMessage`) actually behaves: `GoogleADKAdapter`
+streams natively, and every other adapter inherits a working (if
+single-chunk) SSE fallback from the base `AgentAdapter.stream()`
+(`stls_a2a_adapters_model.py`). Earlier versions hardcoded `false` for
+these frameworks despite streaming genuinely working — see issue #14
+and `CHANGELOG.md` 0.1.8.
+
 **Tool names for raw-function ADK tools.** `to_a2a(...)` on a Google ADK
 agent whose `tools=[...]` list contains a raw Python function (not yet
 wrapped by ADK into a `FunctionTool`, which depends on the ADK version)
