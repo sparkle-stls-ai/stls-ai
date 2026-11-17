@@ -31,9 +31,12 @@ handshake's HTTP POST, not just for tests.
   distinct AES and HMAC keys from the session key (domain separation).
 - **Proof-of-possession handshake**: the session key never travels over
   the wire. Client and server mutually prove they hold the same key via
-  an HMAC challenge on a random nonce, with no cryptographic material
-  ever transmitted. Dedicated endpoints `/stls/handshake` (standard) and
-  `/stls/pqc/handshake` (PQC).
+  an HMAC challenge on a random nonce, keyed by a dedicated HKDF-derived
+  proof key and binding `session_id`/`kid`/`protocol`/the declared
+  algorithm fields too — not just the nonce — so none of them can be
+  altered in transit without invalidating the proof (issue #36). No
+  cryptographic material ever transmitted. Dedicated endpoints
+  `/stls/handshake` (standard) and `/stls/pqc/handshake` (PQC).
 - **LRU+TTL session cache**: in-memory backend (default) or Redis-backed
   for multi-instance deployments. Configurable via `SESSION_CACHE_BACKEND`.
 - **Interchangeable key providers**: three options with a common

@@ -20,8 +20,8 @@ check that they match byte-for-byte.
 | `stls_core_crypto.py`                        | `src/crypto.ts`                    | ✅ | real cross-language vectors |
 | `stls_core_session.py` (memory)              | `src/session.ts`                   | ✅ | — |
 | `stls_core_session.py` (redis)               | `src/session-redis.ts`             | ✅ | real redis-server, bidirectional read/write |
-| `stls_core_handshake.py`                     | `src/handshake.ts`                 | ✅ | — |
-| `stls_core_handshake_pqc.py`                 | `src/handshake-pqc.ts`             | ✅ | — |
+| `stls_core_handshake.py`                     | `src/handshake.ts`                 | ✅ | `computeHandshakeProof()`/`compute_handshake_proof()` verified byte-identical for the same inputs (issue #36) |
+| `stls_core_handshake_pqc.py`                 | `src/handshake-pqc.ts`             | ✅ | shares the same `computeHandshakeProof()` as above |
 | `providers/..._base.py`                      | `src/providers/base.ts`            | ✅ | — |
 | `providers/..._pqc.py`                       | `src/providers/pqc.ts`             | ✅ | real liboqs-python + pyca/cryptography |
 | `providers/..._arqit_py.py`                  | `src/providers/arqit-sidecar.ts`   | ✅ | RPC mechanics verified with the `base` provider; real Arqit SKA-Platform™ peering verified through two separate sidecar processes (one per role — see [below](#6-the-arqit-provider-via-the-sidecar)), including the role guard and 3 sequential clients against one long-running SERVER |
@@ -620,7 +620,7 @@ correct two-processes pattern.
 ## Keeping in sync with the Python version
 
 The version number in `package.json` follows
-`python/stls-core/pyproject.toml` (currently `0.1.8`). Changes to the
+`python/stls-core/pyproject.toml` (currently `0.1.9`). Changes to the
 wire format or the cryptography on the Python side must be mirrored
 here — the cross-language interoperability tests in `tests/interop/`,
 automated in CI (see above), are the main verification mechanism. Not

@@ -15,12 +15,18 @@ Copertura:
   H09 — provider che restituisce None → HandshakeError
   H10 — due handshake producono session_id diversi
   H11 — transport in cache decifra correttamente dopo handshake
+  H12-H17 — manomissione di session_id/kid/protocol/encryption/hmac/
+            key_derivation nella risposta invalida la proof (#36)
+  H18 — la proof non è HMAC-SHA256(session_key_grezza, nonce): usa una
+        chiave dedicata derivata via HKDF (#36)
 """
 
 import asyncio
 import base64
+import hmac as _hmac
 import os
 import uuid
+from hashlib import sha256
 
 import pytest
 
@@ -221,3 +227,51 @@ def test_H11_transport_encrypt_decrypt(base_provider_session_server):
     envelope = transport.encrypt(plaintext)
     recovered = transport.decrypt(envelope)
     assert recovered == plaintext
+
+
+# ---------------------------------------------------------------------------
+# H12-H17 — manomissione dei campi legati alla proof → verifica fallisce (#36)
+# ---------------------------------------------------------------------------
+
+def _valid_handshake(base_provider_session_server):
+    cache = make_cache()
+    req = HandshakeRequest.generate(client_id="test-client")
+    resp = run(perform_handshake(req, base_provider_session_server, cache))
+    from stls_core.providers.stls_core_providers_base import _BASE_KEY_DATA
+    return req, resp, _BASE_KEY_DATA
+
+
+@pytest.mark.parametrize(
+    "field,tampered_value",
+    [
+        ("session_id", str(uuid.uuid4())),
+        ("kid", "attacker-chosen-kid"),
+        ("protocol", "9.9"),
+        ("encryption", "AES-128-CBC"),
+        ("hmac", "HMAC-SHA1"),
+        ("key_derivation", "none"),
+    ],
+)
+def test_H12_tampered_field_invalidates_proof(base_provider_session_server, field, tampered_value):
+    req, resp, session_key = _valid_handshake(base_provider_session_server)
+
+    # La proof è valida prima della manomissione.
+    assert verify_handshake_proof(session_key=session_key, nonce=req.nonce, response=resp) is True
+
+    setattr(resp, field, tampered_value)
+
+    assert verify_handshake_proof(session_key=session_key, nonce=req.nonce, response=resp) is False
+
+
+# ---------------------------------------------------------------------------
+# H18 — la proof non è più HMAC-SHA256(session_key grezza, nonce) (#36)
+# ---------------------------------------------------------------------------
+
+def test_H18_proof_uses_dedicated_derived_key_not_raw_session_key(base_provider_session_server):
+    req, resp, session_key = _valid_handshake(base_provider_session_server)
+
+    nonce_bytes = base64.b64decode(req.nonce)
+    naive_proof = _hmac.new(session_key, nonce_bytes, sha256).digest()
+    received_proof = base64.b64decode(resp.proof)
+
+    assert naive_proof != received_proof

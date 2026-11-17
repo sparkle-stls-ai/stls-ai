@@ -6,11 +6,15 @@
  * STLS handshake with proof-of-key-possession via an HMAC
  * challenge/response. The key never travels over the wire — see the
  * diagram in the Python module for the full flow.
+ *
+ * The proof binds session_id, kid, protocol and the declared algorithm
+ * fields (not just the nonce), keyed by a dedicated HKDF-derived proof
+ * key — see computeHandshakeProof() in crypto.ts and issue #36.
  */
 
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { STLS_VERSION } from "./constants.js";
-import type { StlsDirection } from "./crypto.js";
+import { computeHandshakeProof, type StlsDirection } from "./crypto.js";
 import type { KeySessionProvider } from "./providers/base.js";
 import type { SessionCache } from "./session.js";
 
@@ -47,7 +51,12 @@ export function generateHandshakeRequest(clientId: string, kid?: string): Handsh
 export interface HandshakeResponse {
   session_id: string;
   kid: string;
-  /** HMAC-SHA256(session_key, nonce), base64-encoded. */
+  /**
+   * HMAC-SHA256(proof_key, session_id‖kid‖protocol‖encryption‖hmac‖
+   * key_derivation‖nonce), base64-encoded, where proof_key is itself
+   * HKDF-derived from session_key (see computeHandshakeProof(), issue
+   * #36) — binds every field above, not just the nonce.
+   */
   proof: string;
   protocol: string;
   encryption: string;
@@ -127,7 +136,25 @@ export async function performHandshake(
     throw new HandshakeError("Empty session key");
   }
 
-  const proof = createHmac("sha256", sessionKey).update(nonce).digest("base64");
+  // Built without `proof` first so computeHandshakeProof() binds exactly
+  // what this response declares (session_id, kid, protocol, encryption,
+  // hmac, key_derivation) — not just the nonce (issue #36).
+  const response: HandshakeResponse = {
+    session_id: sessionId,
+    kid,
+    proof: "",
+    protocol: STLS_VERSION,
+    encryption: "AES-256-GCM",
+    hmac: "HMAC-SHA256",
+    key_derivation: "HKDF-Expand-SHA256",
+  };
+  const proofBytes = computeHandshakeProof(
+    sessionKey,
+    response.session_id, response.kid, response.protocol,
+    response.encryption, response.hmac, response.key_derivation,
+    nonce,
+  );
+  response.proof = proofBytes.toString("base64");
 
   try {
     await sessionCache.put(sessionId, kid, sessionKey, direction);
@@ -137,15 +164,7 @@ export async function performHandshake(
     );
   }
 
-  return {
-    session_id: sessionId,
-    kid,
-    proof,
-    protocol: STLS_VERSION,
-    encryption: "AES-256-GCM",
-    hmac: "HMAC-SHA256",
-    key_derivation: "HKDF-Expand-SHA256",
-  };
+  return response;
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +173,11 @@ export async function performHandshake(
 
 /**
  * Verifies, on the client side, that the server holds the same key —
- * without the key ever having crossed the wire.
+ * without the key ever having crossed the wire — AND that session_id,
+ * kid, protocol and the declared algorithm fields were not altered in
+ * transit (issue #36). Recomputes the proof over the fields actually
+ * present on the received `response`, via the same
+ * computeHandshakeProof() the server used.
  */
 export function verifyHandshakeProof(
   sessionKey: Buffer,
@@ -162,7 +185,12 @@ export function verifyHandshakeProof(
   response: HandshakeResponse,
 ): boolean {
   const nonceBytes = Buffer.from(nonce, "base64");
-  const expectedProof = createHmac("sha256", sessionKey).update(nonceBytes).digest();
+  const expectedProof = computeHandshakeProof(
+    sessionKey,
+    response.session_id, response.kid, response.protocol,
+    response.encryption, response.hmac, response.key_derivation,
+    nonceBytes,
+  );
   const receivedProof = Buffer.from(response.proof, "base64");
 
   if (expectedProof.length !== receivedProof.length) {

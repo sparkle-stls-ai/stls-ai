@@ -7,6 +7,21 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.9] — 2026-11-17
+
+No code changes in this package. Raises the `stls_core` dependency
+floor for the widened handshake proof fix (issue #36, see
+[`python/stls-core` 0.1.9](../stls-core/CHANGELOG.md)) — a breaking
+wire change affecting the PQC handshake
+(`PQCHandshakeRequest`/`PQCHandshakeResponse`/`perform_pqc_handshake`)
+this package imports from `stls_core`.
+
+### Security
+
+- Raised the `stls_core` dependency floor to `>=0.1.9` (was `>=0.1.5`).
+
+---
+
 ## [0.1.8] — 2026-11-14
 
 Part of the A2A protocol conformance assessment (issue #14) — closes

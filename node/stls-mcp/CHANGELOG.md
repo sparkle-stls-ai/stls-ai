@@ -7,6 +7,34 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.6] — 2026-11-17
+
+No code changes in `src/` — two unrelated updates bundled in this
+release:
+
+- Picks up the widened handshake proof via its `stls-core` dependency
+  (issue #36, see
+  [`node/stls-core` 0.1.9](../stls-core/CHANGELOG.md)) — a breaking
+  wire change, published together so an install never pairs a pre-fix
+  `stls-core` with this package.
+- Bumps the transitive `@hono/node-server` dependency (pulled in by
+  `@modelcontextprotocol/sdk`, not used directly by this package's own
+  code) from 2.1.5 to 2.1.9, resolving two moderate advisories: an
+  unhandled `ECONNRESET` on a WebSocket upgrade crashing the process
+  ([GHSA-qv5m-9pm6-hqp3](https://github.com/advisories/GHSA-qv5m-9pm6-hqp3))
+  and a backslash-as-path-separator bypass of reverse-proxy path-based
+  access control
+  ([GHSA-jpvv-r467-5p4w](https://github.com/advisories/GHSA-jpvv-r467-5p4w)).
+
+### Security
+
+- `stls-core` picked up at its newly-published, widened-handshake-proof
+  version.
+- `@hono/node-server` 2.1.5 → 2.1.9 (transitive) — two moderate CVEs
+  fixed, `npm audit fix` with no breaking change.
+
+---
+
 ## [0.1.5] — 2026-11-13
 
 Adds client-side retry-on-expiry (issue #6, second increment), mirroring

@@ -7,6 +7,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.6] — 2026-11-17
+
+No code changes in this package. Raises the `stls_core` dependency
+floor for the widened handshake proof fix (issue #36, see
+[`python/stls-core` 0.1.9](../stls-core/CHANGELOG.md)) — a breaking
+wire change. `POST /stls/handshake`/`POST /stls/pqc/handshake` route
+directly into `stls_core.perform_handshake()`/`perform_pqc_handshake()`,
+so this floor keeps a published install of this package from pairing
+with a pre-fix `stls_core`.
+
+### Security
+
+- Raised the `stls_core` dependency floor to `>=0.1.9` (was `>=0.1.5`).
+
+---
+
 ## [0.1.5] — 2026-11-13
 
 Adds client-side retry-on-expiry (issue #6, second increment — the

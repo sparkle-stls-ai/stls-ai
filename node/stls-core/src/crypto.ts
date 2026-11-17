@@ -36,6 +36,7 @@ import {
   HKDF_INFO_HMAC,
   HKDF_INFO_HMAC_C2S,
   HKDF_INFO_HMAC_S2C,
+  HKDF_INFO_PROOF,
   STLS_VERSION,
 } from "./constants.js";
 
@@ -313,4 +314,50 @@ function constantTimeEqual(a: Buffer, b: Buffer): boolean {
     return false;
   }
   return timingSafeEqual(a, b);
+}
+
+// ---------------------------------------------------------------------------
+// Handshake proof (see issue #36)
+// ---------------------------------------------------------------------------
+
+/**
+ * Computes the STLS handshake proof: HMAC-SHA256, keyed by a dedicated
+ * HKDF-derived proof key (never the raw session_key), over a
+ * self-delimiting, length-prefixed concatenation of the handshake
+ * response's own identity/algorithm fields and the nonce.
+ *
+ * Binding these fields (rather than just the nonce) means a party in a
+ * position to tamper with the response in transit can no longer alter
+ * session_id, kid, protocol or the declared algorithms without
+ * invalidating the proof — closing the gap described in issue #36.
+ *
+ * Shared verbatim by both the standard and PQC handshake flows, on both
+ * the server and client side, so a single implementation is the source
+ * of truth for what the proof actually binds. Must stay byte-compatible
+ * with the Python counterpart (compute_handshake_proof).
+ */
+export function computeHandshakeProof(
+  sessionKey: Buffer,
+  sessionId: string,
+  kid: string,
+  protocol: string,
+  encryption: string,
+  hmacAlgorithm: string,
+  keyDerivation: string,
+  nonce: Buffer,
+): Buffer {
+  const proofKey = hkdfExpand(sessionKey, HKDF_INFO_PROOF, 32);
+
+  const fields = [sessionId, kid, protocol, encryption, hmacAlgorithm, keyDerivation];
+  const parts: Buffer[] = [];
+  for (const field of fields) {
+    const fieldBytes = Buffer.from(field, "utf-8");
+    const len = Buffer.alloc(2);
+    len.writeUInt16BE(fieldBytes.length);
+    parts.push(len, fieldBytes);
+  }
+  parts.push(nonce);
+  const input = Buffer.concat(parts);
+
+  return createHmac("sha256", proofKey).update(input).digest();
 }

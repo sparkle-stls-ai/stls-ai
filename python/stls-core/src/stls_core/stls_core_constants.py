@@ -88,6 +88,9 @@ HKDF_INFO_HMAC_C2S: bytes = b"stls-hmac-sha256-c2s"
 HKDF_INFO_HMAC_S2C: bytes = b"stls-hmac-sha256-s2c"
 """Info label for the server->client HMAC key, used only when StlsTransport is given a direction."""
 
+HKDF_INFO_PROOF: bytes = b"stls-proof-sha256"
+"""Info label for deriving the dedicated handshake proof key via HKDF-Expand (see issue #36) — never the raw session_key directly, and never shared with the AES/HMAC transport keys. Shared by the standard and PQC handshake flows."""
+
 
 # ---------------------------------------------------------------------------
 # Environment variables

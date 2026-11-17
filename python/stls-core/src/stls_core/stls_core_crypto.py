@@ -45,6 +45,7 @@ from .stls_core_constants import (
     HKDF_INFO_HMAC,
     HKDF_INFO_HMAC_C2S,
     HKDF_INFO_HMAC_S2C,
+    HKDF_INFO_PROOF,
     STLS_VERSION,
 )
 
@@ -503,3 +504,46 @@ class StlsTransport:
     def _constant_time_equal(a: bytes, b: bytes) -> bool:
         """Timing-safe comparison between two byte strings."""
         return _hmac.compare_digest(a, b)
+
+
+# ---------------------------------------------------------------------------
+# Handshake proof (see issue #36)
+# ---------------------------------------------------------------------------
+
+def compute_handshake_proof(
+    session_key: bytes,
+    session_id: str,
+    kid: str,
+    protocol: str,
+    encryption: str,
+    hmac_algorithm: str,
+    key_derivation: str,
+    nonce: bytes,
+) -> bytes:
+    """
+    Computes the STLS handshake proof: HMAC-SHA256, keyed by a dedicated
+    HKDF-derived proof key (never the raw session_key), over a
+    self-delimiting, length-prefixed concatenation of the handshake
+    response's own identity/algorithm fields and the nonce.
+
+    Binding these fields (rather than just the nonce) means a party
+    in a position to tamper with the response in transit can no longer
+    alter session_id, kid, protocol or the declared algorithms without
+    invalidating the proof — closing the gap described in issue #36.
+
+    Shared verbatim by both the standard and PQC handshake flows, on
+    both the server and client side, so a single implementation is the
+    source of truth for what the proof actually binds.
+    """
+    proof_key = StlsTransport._derive(session_key, HKDF_INFO_PROOF)
+
+    buf = bytearray()
+    for field in (session_id, kid, protocol, encryption, hmac_algorithm, key_derivation):
+        field_b = field.encode("utf-8")
+        buf += len(field_b).to_bytes(2, "big")
+        buf += field_b
+    buf += nonce
+
+    h = hmac.HMAC(proof_key, hashes.SHA256())
+    h.update(bytes(buf))
+    return h.finalize()
