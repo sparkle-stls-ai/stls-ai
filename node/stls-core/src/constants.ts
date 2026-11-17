@@ -36,6 +36,10 @@ export const HKDF_INFO_AES_C2S = Buffer.from("stls-aes-256-gcm-c2s", "utf-8");
 export const HKDF_INFO_AES_S2C = Buffer.from("stls-aes-256-gcm-s2c", "utf-8");
 export const HKDF_INFO_HMAC_C2S = Buffer.from("stls-hmac-sha256-c2s", "utf-8");
 export const HKDF_INFO_HMAC_S2C = Buffer.from("stls-hmac-sha256-s2c", "utf-8");
+// Dedicated handshake proof key (see issue #36) — never the raw session_key
+// directly, and never shared with the AES/HMAC transport keys. Shared by
+// the standard and PQC handshake flows.
+export const HKDF_INFO_PROOF = Buffer.from("stls-proof-sha256", "utf-8");
 
 // Environment variables
 export const ENV_KEY_PROVIDER_NAME = "KEY_PROVIDER_NAME";

@@ -12,13 +12,15 @@ The key never travels over the channel. The flow is:
       │                                   │  kid  = provider.getSessionKeyIdentifier()
       │                                   │  key  = provider.getSessionKeyData(kid)
       │                                   │  sid  = uuid4()               ← server generates it
-      │                                   │  proof= HMAC-SHA256(key, nonce)
+      │                                   │  proof= HMAC-SHA256(proof_key, sid‖kid‖alg‖nonce)
       │                                   │  SessionCache.put(sid, transport)
       │  ◄─────────────────────────────   │
       │  { session_id, kid, proof }       │
       │                                   │
-      │  own_proof = HMAC(own_key, nonce) │
-      │  assert own_proof == proof        │ ← mutual proof of possession
+      │  own_proof = HMAC(proof_key, ...) │
+      │  assert own_proof == proof        │ ← mutual proof of possession,
+      │                                   │   binds session_id/kid/protocol/
+      │                                   │   algorithm fields too (#36)
       │                                   │
       │  POST /stls/a2a (encrypted)       │
       │  X-STLS-Session-ID: sid ────────► │  SessionCache.get(sid) → transport
@@ -42,13 +44,12 @@ import inspect
 import logging
 import os
 import uuid
-from hashlib import sha256
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
 from .stls_core_constants import STLS_VERSION, HANDSHAKE_PATH
-from .stls_core_crypto import StlsTransport
+from .stls_core_crypto import StlsTransport, compute_handshake_proof
 from .stls_core_session import SessionCache, SessionCacheBase
 
 logger = logging.getLogger(__name__)
@@ -112,8 +113,13 @@ class HandshakeResponse(BaseModel):
                         The client uses it in X-STLS-Session-ID on every request.
         kid:            Key identifier assigned by the provider.
                         The client uses it in X-STLS-Kid for correlation/debugging.
-        proof:          HMAC-SHA256(session_key, nonce) base64-encoded.
-                        The client verifies that the server possesses the same key.
+        proof:          HMAC-SHA256(proof_key, session_id‖kid‖protocol‖
+                        encryption‖hmac‖key_derivation‖nonce) base64-encoded,
+                        where proof_key is itself HKDF-derived from
+                        session_key (see compute_handshake_proof(), issue
+                        #36). The client verifies that the server possesses
+                        the same key AND that none of these fields were
+                        altered in transit.
         protocol:       Protocol version confirmed by the server.
         encryption:     Encryption algorithm in use.
         hmac:           HMAC algorithm in use.
@@ -121,7 +127,7 @@ class HandshakeResponse(BaseModel):
     """
     session_id: str
     kid: str
-    proof: str = Field(..., description="HMAC-SHA256(key, nonce) base64-encoded")
+    proof: str = Field(..., description="HMAC-SHA256(proof_key, fields‖nonce) base64-encoded")
     protocol: str = Field(default=STLS_VERSION)
     encryption: str = Field(default="AES-256-GCM")
     hmac: str = Field(default="HMAC-SHA256")
@@ -166,7 +172,9 @@ async def perform_handshake(
         2. Gets the kid from the provider.
         3. Gets the session_key from the provider via the kid.
         4. Generates the session_id (uuid4 — server-side).
-        5. Computes proof = HMAC-SHA256(session_key, nonce).
+        5. Computes proof = HMAC-SHA256(proof_key, session_id‖kid‖protocol‖
+           encryption‖hmac‖key_derivation‖nonce), proof_key itself
+           HKDF-derived from session_key (see compute_handshake_proof()).
         6. Builds the StlsTransport and registers it in SessionCache.
         7. Returns the HandshakeResponse with session_id, kid, proof.
 
@@ -250,9 +258,18 @@ async def perform_handshake(
     if not session_key:
         raise HandshakeError("Empty session key")
 
-    # ── 4. Compute proof = HMAC-SHA256(session_key, nonce) ───────────────────
-    proof_bytes = _hmac.new(session_key, nonce, sha256).digest()
-    proof = base64.b64encode(proof_bytes).decode("utf-8")
+    # ── 4. Build the response fields, then compute the proof over them ───────
+    # Built without `proof` first so compute_handshake_proof() binds
+    # exactly what this response declares (session_id, kid, protocol,
+    # encryption, hmac, key_derivation) — not just the nonce (issue #36).
+    response = HandshakeResponse(session_id=session_id, kid=kid, proof="")
+    proof_bytes = compute_handshake_proof(
+        session_key,
+        response.session_id, response.kid, response.protocol,
+        response.encryption, response.hmac, response.key_derivation,
+        nonce,
+    )
+    response.proof = base64.b64encode(proof_bytes).decode("utf-8")
 
     # ── 5. Build the transport and register it in the cache ──────────────────
     # session_cache.put() receives the raw data (session_id, kid, session_key)
@@ -272,11 +289,7 @@ async def perform_handshake(
         len(session_key), len(session_cache),
     )
 
-    return HandshakeResponse(
-        session_id=session_id,
-        kid=kid,
-        proof=proof,
-    )
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -289,12 +302,16 @@ def verify_handshake_proof(
     response: HandshakeResponse,
 ) -> bool:
     """
-    Verifies, on the client side, that the server possesses the same key.
+    Verifies, on the client side, that the server possesses the same key
+    AND that session_id, kid, protocol and the declared algorithm fields
+    were not altered in transit.
 
-    The client computes HMAC-SHA256(own_key, nonce) and compares it
-    against the proof received in the HandshakeResponse. If they match,
-    the server and client have the same session_key — proof of possession
-    without the key ever being transmitted.
+    The client recomputes the proof over the fields actually present on
+    the received `response` (not over its own expectations), via the
+    same compute_handshake_proof() the server used. If the server's
+    proof matches, the server holds the same session_key AND every one
+    of those fields is exactly what the server originally signed —
+    tampering with any of them invalidates the proof (issue #36).
 
     Args:
         session_key: Client's session key (from the local provider).
@@ -308,7 +325,12 @@ def verify_handshake_proof(
         ValueError: If nonce or proof are not valid base64.
     """
     nonce_bytes = base64.b64decode(nonce)
-    expected_proof = _hmac.new(session_key, nonce_bytes, sha256).digest()
+    expected_proof = compute_handshake_proof(
+        session_key,
+        response.session_id, response.kid, response.protocol,
+        response.encryption, response.hmac, response.key_derivation,
+        nonce_bytes,
+    )
     received_proof = base64.b64decode(response.proof)
 
     # Timing-safe comparison

@@ -9,6 +9,47 @@ of which this package is the TypeScript port.
 
 ---
 
+## [0.1.9] — 2026-11-17
+
+Widens the STLS handshake proof (issue #36), mirroring
+[`python/stls-core` 0.1.9](../../python/stls-core/CHANGELOG.md).
+Previously `HMAC-SHA256(session_key, nonce)` only, which left
+`session_id`, `kid`, `protocol` and the response's own declared
+algorithm fields unauthenticated. Applies identically to the standard
+and PQC handshake flows. Breaking wire change: client and server must
+upgrade together.
+
+### Security
+
+- **Handshake proof now binds `session_id`, `kid`, `protocol` and the
+  declared algorithm fields, not just the nonce.** Computed via the new
+  `computeHandshakeProof()` (`crypto.ts`), shared verbatim by
+  `handshake.ts` and `handshake-pqc.ts`, on both the server and client
+  side.
+- **Dedicated proof key**: `hkdfExpand(sessionKey, HKDF_INFO_PROOF, 32)`
+  — a new domain separator (`stls-proof-sha256`) — never the raw
+  `sessionKey` directly.
+
+### Added
+
+- **`HKDF_INFO_PROOF`** constant (`constants.ts`).
+- **`computeHandshakeProof()`** (`crypto.ts`) — HMAC-SHA256, keyed by
+  the dedicated proof key, over a length-prefixed, self-delimiting
+  concatenation of
+  `sessionId‖kid‖protocol‖encryption‖hmac‖keyDerivation‖nonce` (same
+  technique as `buildAad()`). Verified byte-identical to the Python
+  counterpart for the same inputs.
+- **`tests/handshake.smoke.ts`** — no dedicated unit test previously
+  existed for `handshake.ts`/`handshake-pqc.ts`.
+
+### Changed
+
+- `HandshakeResponse`/`PQCHandshakeResponse` are now built with
+  `proof: ""` first, then the proof is computed over the response's own
+  fields.
+
+---
+
 ## [0.1.8] — 2026-11-13
 
 Encrypts the Redis-backed session cache at rest and stops persisting

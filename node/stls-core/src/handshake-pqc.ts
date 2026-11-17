@@ -9,9 +9,9 @@
  * the Python module for the full client/server flow.
  */
 
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { STLS_VERSION } from "./constants.js";
-import type { StlsDirection } from "./crypto.js";
+import { computeHandshakeProof, type StlsDirection } from "./crypto.js";
 import type { SessionCache } from "./session.js";
 import {
   deriveHybridKey,
@@ -53,7 +53,11 @@ export function generatePqcHandshakeRequest(
 export interface PQCHandshakeResponse {
   session_id: string;
   kid: string;
-  /** HMAC-SHA256(session_key, nonce), base64. */
+  /**
+   * HMAC-SHA256(proof_key, session_id‖kid‖protocol‖encryption‖hmac‖
+   * key_derivation‖nonce), base64, proof_key itself HKDF-derived from
+   * session_key (see computeHandshakeProof(), issue #36).
+   */
   proof: string;
   /** Server's X25519 public key, 32 bytes base64. */
   server_x25519_public_key: string;
@@ -157,7 +161,30 @@ export async function performPqcHandshake(
     throw new PQCHandshakeError(`HKDF derivation failed: ${(exc as Error).message}`);
   }
 
-  const proof = createHmac("sha256", sessionKey).update(nonce).digest("base64");
+  // Built without `proof` first so computeHandshakeProof() binds exactly
+  // what this response declares — not just the nonce (#36).
+  // server_x25519_public_key/mlkem_ciphertext don't need to be in the
+  // proof input: tampering with either already makes the client derive
+  // a different session_key via its own KEM computation, which the
+  // proof check catches regardless.
+  const response: PQCHandshakeResponse = {
+    session_id: sessionId,
+    kid,
+    proof: "",
+    server_x25519_public_key: serverX25519Pub.toString("base64"),
+    mlkem_ciphertext: mlkemCiphertext.toString("base64"),
+    protocol: STLS_VERSION,
+    encryption: "AES-256-GCM",
+    hmac: "HMAC-SHA256",
+    key_derivation: "HKDF-SHA256+X25519+ML-KEM-768",
+  };
+  const proofBytes = computeHandshakeProof(
+    sessionKey,
+    response.session_id, response.kid, response.protocol,
+    response.encryption, response.hmac, response.key_derivation,
+    nonce,
+  );
+  response.proof = proofBytes.toString("base64");
 
   try {
     await sessionCache.put(sessionId, kid, sessionKey, direction);
@@ -167,17 +194,7 @@ export async function performPqcHandshake(
     );
   }
 
-  return {
-    session_id: sessionId,
-    kid,
-    proof,
-    server_x25519_public_key: serverX25519Pub.toString("base64"),
-    mlkem_ciphertext: mlkemCiphertext.toString("base64"),
-    protocol: STLS_VERSION,
-    encryption: "AES-256-GCM",
-    hmac: "HMAC-SHA256",
-    key_derivation: "HKDF-SHA256+X25519+ML-KEM-768",
-  };
+  return response;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,13 +217,23 @@ export function deriveSessionKeyClient(
   return deriveHybridKey(x25519Secret, mlkemSecret, nonceBytes);
 }
 
+/**
+ * Verifies, on the client side, that the server derived the same
+ * session_key AND that session_id, kid, protocol and the declared
+ * algorithm fields were not altered in transit (issue #36).
+ */
 export function verifyPqcHandshakeProof(
   sessionKey: Buffer,
   nonce: string,
   response: PQCHandshakeResponse,
 ): boolean {
   const nonceBytes = Buffer.from(nonce, "base64");
-  const expected = createHmac("sha256", sessionKey).update(nonceBytes).digest();
+  const expected = computeHandshakeProof(
+    sessionKey,
+    response.session_id, response.kid, response.protocol,
+    response.encryption, response.hmac, response.key_derivation,
+    nonceBytes,
+  );
   const received = Buffer.from(response.proof, "base64");
   if (expected.length !== received.length) {
     return false;

@@ -7,6 +7,50 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.9] — 2026-11-17
+
+Widens the STLS handshake proof (issue #36): previously
+`HMAC-SHA256(session_key, nonce)` only, which left `session_id`, `kid`,
+`protocol` and the response's own declared algorithm fields
+(`encryption`, `hmac`, `key_derivation`) unauthenticated — a party able
+to tamper with the handshake response in transit could rewrite any of
+them without invalidating the proof. Applies identically to the
+standard and PQC handshake flows. Breaking wire change: client and
+server must upgrade together (`stls_mcp`/`stls_a2a` bump their
+`stls_core` floor accordingly in this same release).
+
+### Security
+
+- **Handshake proof now binds `session_id`, `kid`, `protocol` and the
+  declared algorithm fields, not just the nonce** — tampering with any
+  of them in transit now invalidates the proof. Computed via the new
+  `compute_handshake_proof()` (`stls_core_crypto.py`), shared verbatim
+  by `stls_core_handshake.py` and `stls_core_handshake_pqc.py`, on both
+  the server and client side.
+- **Dedicated proof key**: the proof's HMAC key is now
+  `HKDF-Expand(session_key, info=HKDF_INFO_PROOF)` — a new domain
+  separator (`stls-proof-sha256`) — never the raw `session_key`
+  directly, mirroring the derivation already used for the AES/HMAC
+  transport keys.
+
+### Added
+
+- **`HKDF_INFO_PROOF`** constant (`stls_core_constants.py`).
+- **`compute_handshake_proof()`** (`stls_core_crypto.py`) — HMAC-SHA256,
+  keyed by the dedicated proof key, over a length-prefixed,
+  self-delimiting concatenation of
+  `session_id‖kid‖protocol‖encryption‖hmac‖key_derivation‖nonce` (same
+  self-delimiting technique as `_build_aad()`).
+
+### Changed
+
+- `HandshakeResponse`/`PQCHandshakeResponse` are now built with
+  `proof=""` first, then the proof is computed over the response's own
+  fields — a structural guarantee that the proof always covers exactly
+  what's returned, not a separately-maintained copy of the same values.
+
+---
+
 ## [0.1.8] — 2026-11-13
 
 Encrypts the Redis-backed caches at rest and stops persisting raw key

@@ -28,6 +28,7 @@ import base64
 import os
 import time
 import threading
+import uuid
 from typing import Optional
 
 import pytest
@@ -81,7 +82,7 @@ from stls_core.stls_core_handshake_pqc import (
     verify_pqc_handshake_proof,
 )
 from stls_core.stls_core_session import InMemorySessionCache
-from stls_core.stls_core_crypto import StlsTransport
+from stls_core.stls_core_crypto import StlsTransport, compute_handshake_proof
 
 # Import condizionali (solo se liboqs disponibile)
 if liboqs_available:
@@ -622,6 +623,77 @@ class TestPQCHandshakeModels:
             mlkem_ciphertext=base64.b64encode(os.urandom(100)).decode(),
         )
         assert resp.key_derivation == "HKDF-SHA256+X25519+ML-KEM-768"
+
+
+# ===========================================================================
+# TestPQCProofTampering — widened proof binding (#36), no liboqs required
+# ===========================================================================
+#
+# compute_handshake_proof()/verify_pqc_handshake_proof() never touch the
+# KEM machinery directly, so these exercise the proof binding itself
+# (session_id/kid/protocol/encryption/hmac/key_derivation) without needing
+# a real X25519/ML-KEM exchange — session_key here is just a stand-in
+# 32-byte secret, exactly like TestRoundTrip would derive via the KEM.
+
+class TestPQCProofTampering:
+    """Manomissione dei campi legati alla proof PQC → verifica fallisce."""
+
+    def _valid_response_and_key(self):
+        session_key = os.urandom(32)
+        nonce = base64.b64encode(os.urandom(32)).decode()
+        resp = PQCHandshakeResponse(
+            session_id=str(uuid.uuid4()),
+            kid=str(uuid.uuid4()),
+            proof="",
+            server_x25519_public_key=base64.b64encode(os.urandom(32)).decode(),
+            mlkem_ciphertext=base64.b64encode(os.urandom(100)).decode(),
+        )
+        proof_bytes = compute_handshake_proof(
+            session_key,
+            resp.session_id, resp.kid, resp.protocol,
+            resp.encryption, resp.hmac, resp.key_derivation,
+            base64.b64decode(nonce),
+        )
+        resp.proof = base64.b64encode(proof_bytes).decode()
+        return session_key, nonce, resp
+
+    def test_proof_valid_before_tampering(self) -> None:
+        session_key, nonce, resp = self._valid_response_and_key()
+        assert verify_pqc_handshake_proof(session_key, nonce, resp) is True
+
+    @pytest.mark.parametrize(
+        "field,tampered_value",
+        [
+            ("session_id", "attacker-chosen-session-id"),
+            ("kid", "attacker-chosen-kid"),
+            ("protocol", "9.9"),
+            ("encryption", "AES-128-CBC"),
+            ("hmac", "HMAC-SHA1"),
+            ("key_derivation", "none"),
+        ],
+    )
+    def test_tampered_field_invalidates_proof(self, field, tampered_value) -> None:
+        session_key, nonce, resp = self._valid_response_and_key()
+        setattr(resp, field, tampered_value)
+        assert verify_pqc_handshake_proof(session_key, nonce, resp) is False
+
+    def test_proof_does_not_use_raw_session_key_directly(self) -> None:
+        import hmac as _hmac
+        from hashlib import sha256
+
+        session_key, nonce, resp = self._valid_response_and_key()
+        naive_proof = _hmac.new(session_key, base64.b64decode(nonce), sha256).digest()
+        assert naive_proof != base64.b64decode(resp.proof)
+
+    def test_kem_fields_not_required_for_proof_validity(self) -> None:
+        # server_x25519_public_key/mlkem_ciphertext are NOT part of the
+        # proof input (see issue #36) — tampering with them must not
+        # affect proof verification itself (the KEM mismatch they'd
+        # cause is caught elsewhere, by session_key derivation differing).
+        session_key, nonce, resp = self._valid_response_and_key()
+        resp.server_x25519_public_key = base64.b64encode(os.urandom(32)).decode()
+        resp.mlkem_ciphertext = base64.b64encode(os.urandom(100)).decode()
+        assert verify_pqc_handshake_proof(session_key, nonce, resp) is True
 
 
 # ===========================================================================
