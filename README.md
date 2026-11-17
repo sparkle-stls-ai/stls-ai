@@ -93,19 +93,22 @@ stls-ai/
 │   └── stls-mcp/          # TypeScript port of python/stls-mcp
 └── samples/
     ├── client/             # example A2A/MCP clients (plain SDK, secure React chat client)
-    └── server/             # example agent servers across frameworks and providers
+    ├── server/             # example agent servers across frameworks and providers
+    ├── peer/               # peer-to-peer (no client/server split) stls-core usage
+    ├── game/               # multi-agent, multi-framework use cases over secure A2A
+    └── adk_tests/          # standalone Google ADK experiments
 ```
 
 ## Packages
 
 | Package | Language | Version | What it provides |
 |---|---|---|---|
-| [`stls-core`](python/stls-core) | Python ≥3.12 | 0.1.2 | Protocol-agnostic crypto, session cache, handshake, key providers, API-key auth. The common foundation. |
+| [`stls-core`](python/stls-core) | Python ≥3.12 | 0.1.8 | Protocol-agnostic crypto, session cache, handshake, key providers, API-key auth. The common foundation. |
 | [`stls-identity`](python/stls-identity) | Python ≥3.12 | 0.1.0 | DID documents, Identity/Operational Verifiable Credentials, delegation, revocation, Trust Anchor Registry, Sentinel verifier. |
-| [`stls-a2a`](python/stls-a2a) | Python ≥3.12 | 0.1.5 | Secure A2A transport, framework adapters (Google ADK, LangChain, Semantic Kernel, custom), task lifecycle, agent cards, agent registry. |
-| [`stls-mcp`](python/stls-mcp) | Python ≥3.12 | 0.1.2 | Encrypted MCP endpoint (`/mcp-stls`) alongside a 100%-standard MCP endpoint (`/mcp`), built on the official MCP SDK. |
-| [`stls-core`](node/stls-core) | Node.js ≥20 / TS | 0.1.2 | TypeScript port of `python/stls-core` — bit-compatible wire format, cross-language tested. |
-| [`stls-mcp`](node/stls-mcp) | Node.js ≥20 / TS | 0.1.2 | TypeScript port of `python/stls-mcp` — same dual-endpoint design, verified against the Python server/client. |
+| [`stls-a2a`](python/stls-a2a) | Python ≥3.12 | 0.1.8 | Secure A2A transport, framework adapters (Google ADK, LangChain, Semantic Kernel, custom), task lifecycle, agent cards, agent registry. |
+| [`stls-mcp`](python/stls-mcp) | Python ≥3.12 | 0.1.5 | Encrypted MCP endpoint (`/mcp-stls`) alongside a 100%-standard MCP endpoint (`/mcp`), built on the official MCP SDK. |
+| [`stls-core`](node/stls-core) | Node.js ≥20 / TS | 0.1.8 | TypeScript port of `python/stls-core` — bit-compatible wire format, cross-language tested. |
+| [`stls-mcp`](node/stls-mcp) | Node.js ≥20 / TS | 0.1.5 | TypeScript port of `python/stls-mcp` — same dual-endpoint design, verified against the Python server/client. |
 
 Each package README documents its own installation, configuration, and
 internals in depth — this document stays at the level of the whole
@@ -163,15 +166,20 @@ for the exact dependency wiring and environment variables.
 [`samples/`](samples) holds example clients and servers exercising the
 packages above against real agent frameworks and deployment targets:
 
-- [`samples/client/a2a_sdk`](samples/client/a2a_sdk) — plain A2A SDK client.
+- [`samples/client/a2a_sdk`](samples/client/a2a_sdk) — plain A2A SDK client, A2A 0.3.
+- [`samples/client/a2a_sdk_1_0`](samples/client/a2a_sdk_1_0) — official `a2a-sdk` 1.x client, A2A 1.0 wire format, against `samples/server/4_custom_financial_agent`.
 - [`samples/client/sofia-client-secure`](samples/client/sofia-client-secure) — React + TypeScript chat client routed through a secure transport proxy.
 - [`samples/client/10_client_ms`](samples/client/10_client_ms) / [`samples/server/10_server_ms`](samples/server/10_server_ms) — multi-server/multi-session `arqit_py` client+server test pair for `stls_a2a.SecureSessionManager`.
 - [`samples/client/11_client_mcp_ms`](samples/client/11_client_mcp_ms) / [`samples/server/11_server_mcp_ms`](samples/server/11_server_mcp_ms) — the MCP analogue of the pair above, for `stls_mcp.SecureToolsetManager`.
 - [`samples/client/12_client_mcp_ms`](samples/client/12_client_mcp_ms) / [`samples/server/12_server_mcp_ms`](samples/server/12_server_mcp_ms) — Node/TypeScript port of the `11_*_mcp_ms` pair.
+- [`samples/client/13_client_core`](samples/client/13_client_core) / [`samples/server/13_server_core`](samples/server/13_server_core) — minimal 2-node bidirectional sample using only `node/stls-core` (no `stls-a2a`/`stls-mcp`), direction-labeled transport.
+- [`samples/peer/14_peer_a_core`](samples/peer/14_peer_a_core) / [`14_peer_b_core`](samples/peer/14_peer_b_core) — two independent channels, symmetric peers (a different bidirectionality shape than `13_*_core`).
+- [`samples/game/15_impostor`](samples/game/15_impostor) — three agent frameworks (Google ADK, Semantic Kernel, LangChain/LangGraph) playing a social deduction game entirely over secure A2A, including genuine peer-to-peer dialogue between players.
 - [`samples/server/2_sk_financial_agent`](samples/server/2_sk_financial_agent) — Semantic Kernel financial agent.
 - [`samples/server/5_adk_doc_gen`](samples/server/5_adk_doc_gen) — Google ADK document-generation agent.
 - [`samples/server/sofia-admin`](samples/server/sofia-admin) — admin/management server with cloud deployment scaffolding.
-- `samples/server/server1`, `server3`, `server4`, `server6`–`server9` — smaller example servers exercising different framework and key-provider combinations.
+- `samples/server/1_lc_financial_agent`, `3_adk_financial_agent`, `4_custom_financial_agent`, `server1`, `server3`, `server4`, `server6`–`server9` — smaller example servers exercising different framework and key-provider combinations.
+- [`samples/adk_tests`](samples/adk_tests) — standalone Google ADK experiments outside the client/server pattern above.
 
 Samples are for demonstration and are **not** covered by the dual
 licensing described below — see [Licensing](#licensing).

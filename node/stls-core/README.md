@@ -52,6 +52,7 @@ Runtime dependencies installed automatically:
 | `@noble/curves` | X25519 (the `pqc` provider) — same author as `@noble/post-quantum`, raw-bytes API |
 | `redis` | Redis backend for `SessionCache` and `RedisKeyCache` (auth) |
 | `yaml` (optional) | `FileLoader` reads `.yaml`/`.yml` files. If not installed, `FileLoader` falls back to JSON — the same behavior as the Python side when PyYAML is missing. |
+| `pg` (optional) | `PostgresLoader` (`auth/loaders-postgres.ts`) — only needed if `AUTH_LOADER_BACKEND=postgres`. |
 
 None of these are needed for the `base` transport alone (crypto +
 handshake + in-memory session cache): if you don't use PQC, Redis or
@@ -619,7 +620,7 @@ correct two-processes pattern.
 ## Keeping in sync with the Python version
 
 The version number in `package.json` follows
-`python/stls-core/pyproject.toml` (currently `0.1.1`). Changes to the
+`python/stls-core/pyproject.toml` (currently `0.1.8`). Changes to the
 wire format or the cryptography on the Python side must be mirrored
 here — the cross-language interoperability tests in `tests/interop/`,
 automated in CI (see above), are the main verification mechanism. Not

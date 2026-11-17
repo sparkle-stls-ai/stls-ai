@@ -121,7 +121,7 @@ uv pip install -e ".[dev]"
 
 | Extra | Contents | When to install it |
 |---|---|---|
-| *(base)* | stls-core, mcp, starlette, uvicorn, httpx | always |
+| *(base)* | stls-core, mcp, starlette, uvicorn, httpx, python-dotenv | always |
 | `redis` | `stls_core[redis]` | `SESSION_CACHE_BACKEND=redis` (multi-replica) |
 | `postgres` | `stls_core[postgres]` → `asyncpg` | `AUTH_LOADER_BACKEND=postgres` (see "API key protection") |
 | `arqit_py` | `stls_core[arqit_py]` | `KEY_PROVIDER_NAME=arqit_py` |
