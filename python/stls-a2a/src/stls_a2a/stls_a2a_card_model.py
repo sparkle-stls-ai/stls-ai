@@ -1,7 +1,7 @@
 import os
 from typing import Literal,Annotated
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field,ConfigDict
+from pydantic import BaseModel, Field,ConfigDict, model_validator
 from pydantic.alias_generators import to_camel
 
 import logging
@@ -81,6 +81,11 @@ SecurityScheme = (
     | StlsKeyExchangeSecurityScheme
 )
 
+# The only "type" values the A2A spec (0.3 and 1.0 alike) actually
+# recognizes for SecurityScheme — a closed set, no custom/extension
+# variant in either version. See AgentCard._populate_spec_fields().
+_OFFICIAL_SECURITY_SCHEME_TYPES = frozenset({"apiKey", "http", "oauth2", "openIdConnect", "mutualTLS"})
+
 
 class SecureTransport(BaseModel):
     enabled: bool = True
@@ -95,14 +100,24 @@ class AgentCapabilities(BaseModel):
     push_notifications: bool = False          # serialized as pushNotifications
     state_transition_history: bool = False    # serialized as stateTransitionHistory
   
-class SupportedInterfaces(BaseModel):
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
-    json_rpc: bool = False   # serialized as jsonRpc
-    grpc: bool = False
-    rest: bool = False
+class AgentInterface(BaseModel):
+    """
+    A2A 1.0 AgentInterface (spec §4.4.6) — declares a URL + transport
+    binding this agent is reachable at. AgentCard.supportedInterfaces is
+    a REQUIRED array of these; the first entry is the preferred one.
+
+    Replaces the old SupportedInterfaces shape (a {jsonRpc, grpc, rest}
+    boolean flag object) that happened to reuse the spec's field name
+    (supportedInterfaces) with an unrelated, non-conformant type — any
+    strict 1.0 AgentCard validator would reject that shape outright.
+    Nothing in this codebase read those booleans (grep-verified before
+    removing it), so there was no real consumer to stay compatible with.
+    """
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    url: str
+    protocol_binding: str          # open string; spec's officially-supported values: JSONRPC, GRPC, HTTP+JSON
+    protocol_version: str = "1.0"
+    tenant: str | None = None
 
 class AgentExtension(BaseModel):
     model_config = ConfigDict(
@@ -138,11 +153,61 @@ class AgentCard(BaseModel):
     default_output_modes: list[str] = Field(default_factory=lambda: ["text"])  # → defaultOutputModes
     skills: list[AgentSkill] = Field(default_factory=list)
     capabilities: AgentCapabilities = Field(default_factory=AgentCapabilities)
+    # Kept for backward compatibility (read by stls_a2a_client.py,
+    # rendered by the sofia-client-secure debug UI): the single scheme
+    # this agent actually uses. security_schemes (below) is the new,
+    # spec-shaped field — both are populated from the same value, see
+    # _populate_spec_fields().
     security_scheme: SecuritySchemeType = Field(
         default_factory=lambda: HTTPSecurityScheme(scheme="bearer")
     )
-    supported_interfaces: SupportedInterfaces = Field(default_factory=lambda: SupportedInterfaces(json_rpc=True))
-    extensions: list[AgentExtension] = Field(default_factory=list)    
+    # A2A 1.0 field (spec §4.4.1, field 8): a MAP of named security
+    # schemes, vs. security_scheme's single object. Auto-populated from
+    # security_scheme (keyed by its `type`) when not given explicitly,
+    # so every existing _card_from_*() builder gets this for free.
+    #
+    # Known partial gap: the spec's proto wraps each scheme in a oneof
+    # (e.g. {"apiKeySecurityScheme": {...}}); the values here stay in
+    # the flatter {"type": "apiKey", ...} shape SecuritySchemeType
+    # already used for security_scheme, rather than that nested form.
+    # Revisit if a strict 1.0 validator flags it — no real consumer in
+    # this codebase depends on the exact inner shape today.
+    security_schemes: dict[str, SecuritySchemeType] = Field(default_factory=dict)
+    # A2A 1.0 REQUIRED field (spec §4.4.1, field 3): an ordered array of
+    # AgentInterface{url, protocolBinding, protocolVersion}. Auto-populated
+    # from `url` (above) when not given explicitly, so every existing
+    # _card_from_*() builder gets this for free — see AgentInterface's
+    # docstring for why this replaces the old SupportedInterfaces shape.
+    supported_interfaces: list[AgentInterface] = Field(default_factory=list)
+    extensions: list[AgentExtension] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _populate_spec_fields(self) -> "AgentCard":
+        """
+        Derives the A2A 1.0-shaped fields from their pre-existing,
+        still-supported equivalents when the caller didn't set them
+        explicitly — additive only, so no _card_from_*() builder needs
+        to change to get spec-conformant output.
+        """
+        if not self.supported_interfaces and self.url:
+            self.supported_interfaces = [
+                AgentInterface(url=self.url, protocol_binding="JSONRPC", protocol_version="1.0")
+            ]
+        # securitySchemes' values are a CLOSED union in both the 0.3 and
+        # 1.0 spec (apiKey/http/oauth2/openIdConnect/mutualTLS — no
+        # "custom" variant in either). Our own StlsKeyExchangeSecurityScheme
+        # (type "stls_key_exchange") has no conformant representation in
+        # that union, and emitting it anyway isn't a soft violation: the
+        # official a2a-sdk 0.3.26 client's AgentCard model validates this
+        # strictly and HARD-FAILS card resolution entirely — confirmed
+        # against a real client, not assumed (issue #14). securitySchemes
+        # is optional in both spec versions, so only populate it for
+        # schemes that are actually one of the 5 official types; for our
+        # own extension type, omitting the field is the spec-legal choice,
+        # unlike emitting something that breaks every real client.
+        if not self.security_schemes and self.security_scheme and self.security_scheme.type in _OFFICIAL_SECURITY_SCHEME_TYPES:
+            self.security_schemes = {self.security_scheme.type: self.security_scheme}
+        return self
 
     def to_dict(self) -> dict:
         return self.model_dump(mode="json", exclude_none=True, by_alias=True)

@@ -38,7 +38,7 @@ Over time, the module evolved from a simple secure transport implementation into
 - file passing support in the adapters
 - generation and enrichment of agent cards
 - built-in plain A2A client (`A2AClient`) for discovery, JSON-RPC calls, and SSE streaming
-- A2A-standard task lifecycle (`messages/send`, `messages/sendStream`, `tasks/get`, `tasks/cancel`, `tasks/list`, `tasks/subscribe`)
+- A2A-standard task lifecycle (`messages/send`, `messages/sendStream`, `tasks/get`, `tasks/cancel`, `tasks/list`, `tasks/subscribe`), accepting both the A2A 0.3 method names and the A2A 1.0 PascalCase equivalents (`SendMessage`, `GetTask`, ...)
 - pluggable `TaskStore` backends (`memory` and `redis`) with typed message parts and artifacts
 - single-agent, multi-agent, multi-card, and multi-backend auth scenarios
 
@@ -349,10 +349,11 @@ If you are using `uv` instead (recommended for the monorepo layout):
 uv pip install -e .
 ```
 
-With the Redis-backed auth cache, the Arqit `arqit_py` provider, or the PQC provider:
+With the Redis-backed auth cache, the Postgres-backed `AgentRegistry`, the Arqit `arqit_py` provider, or the PQC provider:
 
 ```bash
 uv pip install -e ".[redis]"
+uv pip install -e ".[postgres]"   # asyncpg, for AgentRegistry — psycopg2-binary is already a base dependency
 uv pip install -e ".[pqc]"   # X25519 + ML-KEM-768, requires liboqs-python
 uv pip install -e ".[arqit_py]" \
   --find-links arqit_wheels/arqit-skaplatform-common/ \
@@ -667,14 +668,20 @@ async for event in client.stream(
 
 The adapters now route the standard A2A method set before delegating to the framework-specific implementation. Supported methods:
 
-| Method | Description |
-|---|---|
-| `messages/send` (alias `message/send`) | creates a Task, invokes the agent, returns the completed Task |
-| `messages/sendStream` (aliases `message/sendStream`, `message/stream`) | streams task updates via SSE |
-| `tasks/subscribe` (alias `task/subscribe`) | subscribes to an existing task and streams status/artifact updates |
-| `tasks/get` (alias `task/get`) | retrieves a task by `taskId` |
-| `tasks/cancel` (alias `task/cancel`) | cancels a task |
-| `tasks/list` (alias `task/list`) | lists tasks with optional `limit` and `cursor` |
+| Method | A2A 1.0 name (spec §9.4) | Description |
+|---|---|---|
+| `messages/send` (alias `message/send`) | `SendMessage` | creates a Task, invokes the agent, returns the completed Task |
+| `messages/sendStream` (aliases `message/sendStream`, `message/stream`) | `SendStreamingMessage` | streams task updates via SSE |
+| `tasks/subscribe` (alias `task/subscribe`) | `SubscribeToTask` | subscribes to an existing task and streams status/artifact updates (A2A 1.0 param name: `id`, also accepted) |
+| `tasks/get` (alias `task/get`) | `GetTask` | retrieves a task by `taskId` (A2A 1.0 param name: `id`, also accepted) |
+| `tasks/cancel` (alias `task/cancel`) | `CancelTask` | cancels a task (A2A 1.0 param name: `id`, also accepted) |
+| `tasks/list` (alias `task/list`) | `ListTasks` | lists tasks with `limit`/`cursor` or `pageSize`/`pageToken` — result is `{"tasks": [...], "pageSize": ...}` (spec §9.4.4), not a bare array |
+| `tasks/pushNotificationConfig/set` (alias `task/...`) | `CreateTaskPushNotificationConfig` | not implemented — returns `ERR_PUSH_NOTIFICATION_NOT_SUPPORTED` (-32003) |
+| `tasks/pushNotificationConfig/get` (alias `task/...`) | `GetTaskPushNotificationConfig` | not implemented — same error |
+| `tasks/pushNotificationConfig/list` (alias `task/...`) | `ListTaskPushNotificationConfigs` | not implemented — same error |
+| `tasks/pushNotificationConfig/delete` (alias `task/...`) | `DeleteTaskPushNotificationConfig` | not implemented — same error |
+
+A2A 1.0 moved the JSON-RPC binding to PascalCase method names shared with the gRPC/REST bindings, breaking from 0.3's slash-style names. Both are accepted: the 1.0 name in the right column is normalized to its 0.3 equivalent (left column) at the single entry point `a2a_to_agent_request()` in `stls_a2a_adapters.py` — a client may use either spelling and gets identical behavior. See issue #14 and `CHANGELOG.md` 0.1.8.
 
 Calling `messages/send` with the standard message structure:
 
@@ -692,7 +699,11 @@ response = await adapter.send_secure_message({
 })
 ```
 
-The response `result` is a `Task` object with `id` (alias `taskId`), `contextId`, `status` (object with `state`), `history`, and `artifacts`. Client-side helpers exported from the package:
+The response `result` is a `Task` object with `id` (alias `taskId`), `contextId`, `status` (object with `state`), `history`, and `artifacts`. Those fields are also nested under a `"task"` key (`result.task.id`, etc.) — A2A 1.0 spec §9.4.1 defines `SendMessageResponse` as a `oneof {task, message}`, and a strict proto-JSON client expects that wrapper; both shapes carry identical data, so existing code reading the flat fields is unaffected. Inside that `"task"` key specifically, `status.state` and `history[].role` use the A2A 1.0 proto enum names (`TASK_STATE_COMPLETED`, `ROLE_USER`/`ROLE_AGENT`) rather than the flat fields' lowercase values — the only reliable signal a strict client has for task completion and message attribution, since the 1.0 proto has no separate `"final"` field at all. See issue #14 and `CHANGELOG.md` 0.1.8.
+
+Incoming message parts are also accepted without any `"type"`/`"kind"` key at all — just the bare field — which is what A2A 1.0's real proto-JSON mapping actually sends (the `oneof`'s selected field name is the only discriminator there): `{"text": "..."}`, `{"data": {...}}`, or, for files, `{"raw": "<base64>", "filename": "...", "mediaType": "..."}` (inline) / `{"url": "...", "filename": "...", "mediaType": "..."}` (reference) — A2A 1.0's `Part` proto has **no `"file"` wrapper at all**; `FileInline`/`FileReference`'s fields sit directly on `Part`. The parts your adapter/agent receives are always normalized to carry both `"type"` and `"kind"` plus the nested `"file"` sub-object, regardless of what the client sent, so your own code only ever needs to check one of them. Outgoing `FilePart`s (e.g. in `Task.history`) carry the flat `raw`/`url`/`filename`/`mediaType` fields too, alongside the nested `"file"` shape, so a strict 1.0 client can parse them back.
+
+Client-side helpers exported from the package:
 
 ```python
 from stls_a2a import extract_a2a_text, extract_a2a_artifacts, extract_a2a_result
@@ -783,6 +794,8 @@ params = {
 
 A real example is available in [tests/task_test.py](./tests/task_test.py), where the client sends a PDF to the `invoices-classifier` agent.
 
+A2A 1.0 clients send files in a different, flatter shape — `{"raw": base64, "filename": ..., "mediaType": ...}` or `{"url": ..., "filename": ..., "mediaType": ...}`, no `"file"` wrapper at all — which is also accepted (see "Using Standard A2A Methods" above). `FilePart`s are echoed back (e.g. in `Task.history`) carrying both shapes at once, so either kind of client can read them.
+
 ## Agent Cards and Discovery
 
 For card generation you can use:
@@ -802,6 +815,38 @@ legitimate for interoperability; only the Arqit product branding
 ("Sparkle SKA") was removed from descriptions and from the scheme name
 itself.
 
+**A2A 1.0 card fields.** Generated cards also carry `supportedInterfaces`
+(array of `{url, protocolBinding, protocolVersion}`, A2A 1.0 spec §4.4.1)
+and `securitySchemes` (a map, keyed by scheme type) alongside the
+pre-existing `url`/`secureUrl` and singular `securityScheme` fields —
+both pairs are populated automatically from the same values, so no
+caller needs to set the new fields explicitly. `securitySchemes`'s values
+keep the flatter `{"type": "apiKey", ...}` shape rather than 1.0's nested
+oneof wrapper (`{"apiKeySecurityScheme": {...}}`) — a known partial gap,
+see `CHANGELOG.md` 0.1.8.
+
+**`securitySchemes` is only populated for officially-recognized scheme
+types** (`apiKey`/`http`/`oauth2`/`openIdConnect`/`mutualTLS` — a closed
+union in both 0.3 and 1.0, no custom variant). This project's own default
+scheme (`stls_key_exchange`, see "Security scheme naming" above) isn't
+one of them, so `securitySchemes` is correctly **omitted** when that's
+the active scheme — a real `a2a-sdk` 0.3.26 client hard-fails card
+resolution entirely if it sees an unrecognized type there, which is
+exactly what happened before this fix (confirmed against a real client,
+not assumed; see `CHANGELOG.md` 0.1.8 and issue #14). The singular
+`securityScheme` field is unaffected either way — it always carries the
+active scheme, standard or not.
+
+**`capabilities.streaming` reflects actual support.** Every agent card
+now declares `streaming: true` for the ADK, LangChain/LangGraph, and
+custom frameworks, matching how `messages/sendStream` (and its A2A 1.0
+name, `SendStreamingMessage`) actually behaves: `GoogleADKAdapter`
+streams natively, and every other adapter inherits a working (if
+single-chunk) SSE fallback from the base `AgentAdapter.stream()`
+(`stls_a2a_adapters_model.py`). Earlier versions hardcoded `false` for
+these frameworks despite streaming genuinely working — see issue #14
+and `CHANGELOG.md` 0.1.8.
+
 **Tool names for raw-function ADK tools.** `to_a2a(...)` on a Google ADK
 agent whose `tools=[...]` list contains a raw Python function (not yet
 wrapped by ADK into a `FunctionTool`, which depends on the ADK version)
@@ -811,6 +856,16 @@ callables. Previously this fell through to `str(tool)`, producing entries
 like `<function send_report at 0x7f...>` in the public card — not a
 stable identifier (the memory address changes every process) and useless
 to any client reading the card.
+
+**Agent name for the `custom` framework.** The same kind of fallback
+applies one level up: `to_a2a(...)` on a plain Python function used
+directly as the agent (the `custom` framework's typical shape, e.g. the
+`calculator_handler` wrapper in `multi_agent_server.py`) now resolves
+the card's `name` via `.name` first, then the function's own
+`__name__`. Previously it fell through to `type(agent).__name__`,
+which for *any* function is literally the class `function` — every
+such agent's card reported the same useless, non-distinguishing name.
+See issue #14 and `CHANGELOG.md` 0.1.8.
 
 Practical examples:
 
@@ -849,7 +904,7 @@ Operational suggestions:
   - `arqit_py`: same generic `KeySessionProviderFactory` path. By default `create_provider_client()` still reads `ARQIT_PY_CLIENT_CONFIG` straight from the process environment (`host`/`port` are accepted but ignored — see `stls_core_providers_arqit_py.py`), one config for the whole process when no override is given.
     - Implemented: `KeyProviderArqitPy.create_provider_client()`/`create_provider_server()` read `config_path` from the existing `options: dict` parameter first, falling back to `ARQIT_PY_CLIENT_CONFIG`/`ARQIT_PY_SERVER_CONFIG` when absent — no change to the shared `KeyProvider` ABC signature. `KeySessionProviderFactory.get_session_provider()` has an optional `options` passthrough (previously hardcoded to `{}`). `SecureSessionManager` has an optional static `arqit_client_configs={base_url: config_path}` mapping on its constructor, consulted by `_resolve_via_key_session_provider(base_url)`; when no mapping is given, or no entry matches a given `base_url`, behavior is unchanged — it falls back to `ARQIT_PY_CLIENT_CONFIG` exactly as before this option existed.
     - This mapping is resolved entirely client-side and is never derived from the remote agent's card. An earlier draft of this note floated extending the agent card instead (an extension carrying "device identity / config reference") — that direction doesn't fit the client's own config: `ARQIT_PY_CLIENT_CONFIG` holds the client's own device credentials (realm username/password, Q-key, local file paths) decided and owned solely by the client; a remote server has no business dictating, or even seeing, which config the client uses for it. The only thing a card could ever legitimately carry is the *server's own* device identity (public information about itself), letting a client auto-match it against its own already-provisioned local configs instead of hardcoding the static map above — a discovery convenience, never a channel for the server to choose the client's config. No such card extension exists or is currently planned; the static map covers the actual need.
-    - 1 client → N servers: share one `SecureSessionManager` across all `ContextualSecureRemoteA2aAgent` instances (as already recommended for PQC/base) and pass `arqit_client_configs` on that shared manager — one process can then hold several `(base_url, config_path)` entries instead of the N-independent-processes workaround this used to require. **Validated against the real Arqit cloud for the sequential case** (`samples/client/10_client_ms/client.py` + `samples/server/10_server_ms/server_ms_{1,2}`, 2026-10-23): one client process, two distinct device identities via `arqit_client_configs`, each fully authenticated/peered/used end-to-end (real bilocation+P2P key agreement, real encrypted A2A round trip) before moving to the next — both servers answered correctly.
+    - 1 client → N servers: share one `SecureSessionManager` across all `ContextualSecureRemoteA2aAgent` instances (as already recommended for PQC/base) and pass `arqit_client_configs` on that shared manager — one process can then hold several `(base_url, config_path)` entries instead of the N-independent-processes workaround this used to require. **Validated against the real Arqit cloud for the sequential case** (`samples/client/10_client_ms/client_agent_multi_server.py` + `samples/server/10_server_ms/server_ms_{1,2}`, 2026-10-23): one client process, two distinct device identities via `arqit_client_configs`, each fully authenticated/peered/used end-to-end (real bilocation+P2P key agreement, real encrypted A2A round trip) before moving to the next — both servers answered correctly.
     - **`DeviceMetadata` singleton race — confirmed real, now mitigated by a process-wide lock (2026-10-23).** `uk.arqit.device.common.device_metadata.DeviceMetadata.get_instance(cfg)` is a true process-wide singleton (`.config` unconditionally overwritten on every call, regardless of which device's `cfg` is passed), and `AuthenticationClient.__mutex` (the Arqit SDK's own internal lock around `DeviceMetadata.load()`) is a *class*-level lock shared by every `AuthenticationClient` instance in the process, with no `try`/`finally` around the critical section it guards. Confirmed by direct reproduction against the real cloud (dedicated throwaway devices, `python/stls-core/tests/test_arqit_py_same_device_concurrent_real.py`, `py-spy` thread dumps): with no protection, concurrent `start()` calls for the same device deadlocked forever inside the SDK's own `authenticate_device()` — an unrelated exception during one call's critical section leaked that class-level mutex permanently, wedging every later call in the process. **Fix**: `stls_core_providers_arqit_py.py` now has a module-level `_ARQIT_PY_START_LOCK` (`threading.Lock`) that fully serializes `KeyProviderClientArqitPy.start()`/`KeyProviderServerArqitPy.start()` process-wide — across *all* devices, not just the same one, since `DeviceMetadata` is one global singleton regardless of which config is passed. Serializing authentication alone wasn't enough: letting a second session authenticate while a first session's negotiation was still connecting made the SDK's socket bilocation handshake fail outright (`ConnectionRefusedError`/`PeerUnableToConnectException`) for every session involved — so the client-side lock is held through the *full* negotiation (joins the negotiation thread, up to a 30s cap matching this provider's own key-delivery timeout, before releasing), not just through authentication. **Confirmed fixed**: the same 3-concurrent-sessions-same-device reproduction that previously deadlocked forever now completes in ~5s with 3/3 distinct keys and no errors, against the real cloud. **Residual limitation, by design, until Arqit fixes their SDK**: this makes `arqit_py` session establishment (`start()`) fully serial process-wide — no two `arqit_py` sessions, same device or not, same role or not, can ever be mid-authentication/negotiation concurrently in one process. This is a throughput cost, not a correctness one: multi-config/multi-session `arqit_py` usage (both the N-servers and the N-concurrent-sessions-to-one-server shapes) is safe to call concurrently (e.g. via `asyncio.gather()`/`asyncio.to_thread()`) now — the lock reduces it to the same sequential behavior `SecureSessionManager`'s own `for` loop already used, just enforced at the lowest level instead of relying on callers to avoid parallelizing it themselves. One clean full-pass run is the standard of evidence here, not two back-to-back ones: an immediate retry against the same throwaway devices right after the clean pass hit `ConnectionRefusedError` again, consistent with this project's own already-documented real-cloud rate-limiting/flakiness on back-to-back retries (see `sidecar/ARQIT_PEERING_NOTES.md`) — space retries out, don't chase a second green run as proof. On the server side a single `ARQIT_PY_SERVER_CONFIG` is enough regardless of how many clients peer with it — the server is one device identity accepting connections, it isn't per-client.
     - **Regression found and fixed while re-verifying the fix above against the Redis-backed key store (2026-10-23, same day).** `KeySessionProviderArqitPy.__init__()` snapshots `key_store.startup_seen_keys()` to pre-seed `_delivered_key_ids` with whatever is already sitting in the store, so a restarted process doesn't mistake old leftover keys for a fresh negotiation's result. The first version of the `start()` fix above built this session object *after* joining the negotiation thread — so by the time the snapshot ran, the negotiation it had just waited for had already pushed all its own keys into the store, and every one of them got wrongly absorbed into "already seen." Every subsequent `getSessionKeyIdentifier()` call then waited forever for a "new" key that would never come, since the negotiation was already finished. Caught by re-running `samples/client/10_client_ms/client_multi_server.py` (the Redis-backed path — the throwaway-device diagnostic above uses an in-memory store, which has no persistence to snapshot anything stale from, so it never exercised this). **Fixed** by building `self._session` (and thus taking that snapshot) *before* starting the negotiation thread, not after joining it — restores the original ordering while keeping the full-negotiation lock scope. Confirmed fixed: `client_multi_server.py` now reaches a real `200 OK` from both secure endpoints (only the downstream Gemini call fails, with the already-known, unrelated `402 RESOURCE_EXHAUSTED` quota error); the throwaway same-device concurrency reproduction was re-run afterward too and still passes (3/3 distinct kids, no errors) — the reordering didn't reopen the concurrency fix.
     - `KEY_SESSION_HOST`/`KEY_SESSION_PORT` have **no effect at all** on `arqit_py`, on either side: `KeyProviderArqitPy.create_provider_client(host, port, options)` and `create_provider_server(port, options)` never read their `host`/`port` arguments (`stls_core_providers_arqit_py.py:481-509`). The real peer address/port always comes from the JSON config (`SOCKET_RECEIVER_IP_ADDRESS`/`PORT` on the client side, `SOCKET_LISTENING_PORT` on the server side) — a comment in `stls-mcp/tests/vault_server.py` used to claim `KEY_SESSION_PORT` drives the server's listening port, which is stale/inaccurate for `arqit_py` and has been corrected.
@@ -872,7 +927,7 @@ At the moment, the module covers:
 - server-side authorization via `AuthConfig` or loader-based API key management (`StaticLoader`, `FileLoader`, `PostgresLoader`, via `stls_core.auth`)
 - `ApiKeyManager.from_loader(...)`, `ApiKeyManagerGroup`, default audit hooks, and Redis-backed key caching with namespace isolation
 - optional PostgreSQL `AgentRegistry` with heartbeat/liveness tracking for agent fleets
-- A2A-standard task lifecycle: `messages/send`, `messages/sendStream`, `tasks/get`, `tasks/cancel`, `tasks/list`, `tasks/subscribe`
+- A2A-standard task lifecycle: `messages/send`, `messages/sendStream`, `tasks/get`, `tasks/cancel`, `tasks/list`, `tasks/subscribe` — both A2A 0.3 and A2A 1.0 (spec §9.4) method names accepted, see [Using Standard A2A Methods](#using-standard-a2a-methods)
 - pluggable `TaskStore` backend (`memory` / `redis`) with typed parts (`TextPart`, `FilePart`, `DataPart`) and `Artifact` tracking
 - automatic `TaskStore` cleanup via `start_task_store_cleanup` (memory backend) and native Redis TTL expiration (redis backend)
 - `AgentResponse` as the standard return type for custom adapters

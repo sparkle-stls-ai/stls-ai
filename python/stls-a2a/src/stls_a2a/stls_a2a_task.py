@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_serializer
 from pydantic.alias_generators import to_camel
 from enum import Enum
 from typing import Union, Optional, Literal
@@ -20,6 +20,49 @@ class TaskState(str, Enum):
     FAILED = "failed"
     CANCELED = "canceled"
     INPUT_REQUIRED = "input-required"
+
+
+# A2A 1.0's proto TaskState enum uses TASK_STATE_* names (spec §4.1), not
+# our lowercase values — a real a2a-sdk Client silently defaults status.state
+# to TASK_STATE_UNSPECIFIED (protobuf's JSON unmarshal ignores unrecognized
+# enum strings rather than erroring) when it sees "completed" instead of
+# "TASK_STATE_COMPLETED". Verified against a real client: this is the only
+# reliable signal it has for detecting task completion in an SSE stream (the
+# A2A 1.0 TaskStatusUpdateEvent proto has no separate "final" field at all).
+# Used only inside the new 1.0-shaped structures added for issue #14 (the
+# "task"/"statusUpdate" wrappers) — the pre-existing lowercase fields these
+# sit alongside are untouched, so 0.3/existing consumers see no change.
+TASK_STATE_PROTO_NAMES: dict[str, str] = {
+    TaskState.SUBMITTED.value:      "TASK_STATE_SUBMITTED",
+    TaskState.WORKING.value:        "TASK_STATE_WORKING",
+    TaskState.COMPLETED.value:      "TASK_STATE_COMPLETED",
+    TaskState.FAILED.value:         "TASK_STATE_FAILED",
+    TaskState.CANCELED.value:       "TASK_STATE_CANCELED",
+    TaskState.INPUT_REQUIRED.value: "TASK_STATE_INPUT_REQUIRED",
+}
+
+
+def to_task_state_proto_name(state: "str | TaskState") -> str:
+    """Maps a TaskState (or its string value) to its A2A 1.0 proto enum name."""
+    value = state.value if isinstance(state, TaskState) else str(state)
+    return TASK_STATE_PROTO_NAMES.get(value, "TASK_STATE_UNSPECIFIED")
+
+
+# Same issue as TaskState above, for Message.role: the proto enum is
+# ROLE_USER/ROLE_AGENT, not our lowercase "user"/"agent" — a real client
+# silently sees ROLE_UNSPECIFIED for every history message otherwise
+# (confirmed: it can't tell which message came from whom). Same scope
+# restriction as TASK_STATE_PROTO_NAMES — only used inside the new
+# 1.0-shaped structures, never touching the pre-existing lowercase field.
+ROLE_PROTO_NAMES: dict[str, str] = {
+    "user":  "ROLE_USER",
+    "agent": "ROLE_AGENT",
+}
+
+
+def to_role_proto_name(role: str) -> str:
+    """Maps our lowercase Message.role value to its A2A 1.0 proto enum name."""
+    return ROLE_PROTO_NAMES.get(str(role), "ROLE_UNSPECIFIED")
 
 # ── TextPart ──────────────────────────────────────────
 class TextPart(BaseModel):
@@ -51,6 +94,32 @@ class FilePart(BaseModel):
     type: Literal["file"] = "file"
     kind: Literal["file"] = "file"   # ADK RemoteA2aAgent compatibility (mirrors type)
     file: Union[FileInline, FileReference]
+
+    @model_serializer(mode="wrap")
+    def _add_a2a_1_0_flat_fields(self, handler):
+        """
+        A2A 1.0's Part proto has no "file" wrapper at all — FileInline/
+        FileReference's fields sit directly on Part (raw/url/filename/
+        mediaType, part of Part's `content` oneof). Without this, a
+        FilePart echoed back in Task.history/artifacts (e.g. a client
+        sends a file, then calls GetTask) came back with NONE of the
+        oneof's fields set — effectively empty/unparseable to a real
+        a2a-sdk 1.3.0 client (confirmed: Part.WhichOneof('content') was
+        None). Adds the flat fields alongside the existing nested
+        "file" shape kept for 0.3/existing consumers (issue #14, gap
+        #12 — the outgoing-direction counterpart of gap #6/#11's
+        incoming-parsing fixes).
+        """
+        data = handler(self)
+        if isinstance(self.file, FileInline):
+            data["raw"] = self.file.data
+            data["mediaType"] = self.file.mimeType
+            if self.file.name:
+                data["filename"] = self.file.name
+        elif isinstance(self.file, FileReference):
+            data["url"] = self.file.uri
+            data["mediaType"] = self.file.mimeType
+        return data
 
 
 # ── DataPart ──────────────────────────────────────────

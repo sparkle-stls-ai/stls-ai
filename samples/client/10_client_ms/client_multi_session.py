@@ -24,10 +24,11 @@ Works, unmodified, with KEY_PROVIDER_NAME=base|pqc|arqit_py:
   defect in the test or the code.
 
 Unlike the original, this uses send_secure_message() (non-streaming):
-our minimal ADK agent (agent.py under 10_server_ms/) doesn't advertise
-capabilities.streaming in its card, and the point of this test is the
-robustness of the key/session layer under concurrency, not SSE
-streaming.
+the point of this test is the robustness of the key/session layer
+under concurrency, not SSE streaming — ADK's card does advertise
+capabilities.streaming (stls_a2a_utils.py's _card_from_adk builds on
+GoogleADKAdapter's native streaming support), it's just out of scope
+for what this script is testing.
 
 Run (after starting ONE of the two server_ms_* servers):
     python client_multi_session.py

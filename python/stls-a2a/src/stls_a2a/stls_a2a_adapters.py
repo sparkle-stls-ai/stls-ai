@@ -81,6 +81,37 @@ def create_adapter(
 # UTILITIES FOR A2A <-> AgentRequest/Response CONVERSION
 # ============================================================================
 
+# A2A 1.0 (spec §9.4) renamed the JSON-RPC methods to PascalCase, shared
+# across the JSON-RPC/gRPC/REST bindings — a breaking change from 0.3's
+# slash-style names (`messages/send`, `tasks/get`, ...), which is what
+# every dispatch point in this package still matches on internally.
+#
+# Rather than teaching every call site two spellings, 1.0 names are
+# normalized here, at the single point where a raw JSON-RPC message
+# becomes an AgentRequest, into their 0.3 equivalent. 0.3 clients are
+# unaffected (their method names aren't in this map, so they pass
+# through unchanged) — this is purely an additive input alias, not a
+# replacement.
+#
+# SendStreamingMessage/SubscribeToTask are included for defensiveness
+# (handle_request() has explicit branches that reject them with "requires
+# SSE endpoint"), but in practice they never reach this function un-normalized:
+# the SSE layer (SSE_STREAM_METHODS et al. in stls_a2a_integration.py) already
+# recognizes both the 0.3 and 1.0 spellings before a2a_to_agent_request runs.
+_A2A_1_0_METHOD_ALIASES: Dict[str, str] = {
+    "SendMessage":                      "messages/send",
+    "SendStreamingMessage":             "messages/sendStream",
+    "GetTask":                          "tasks/get",
+    "ListTasks":                        "tasks/list",
+    "CancelTask":                       "tasks/cancel",
+    "SubscribeToTask":                  "tasks/subscribe",
+    "CreateTaskPushNotificationConfig": "tasks/pushNotificationConfig/set",
+    "GetTaskPushNotificationConfig":    "tasks/pushNotificationConfig/get",
+    "ListTaskPushNotificationConfigs":  "tasks/pushNotificationConfig/list",
+    "DeleteTaskPushNotificationConfig": "tasks/pushNotificationConfig/delete",
+}
+
+
 def a2a_to_agent_request(a2a_message: Dict[str, Any]) -> AgentRequest:
     """
     Converts an A2A (JSON-RPC) message into an AgentRequest
@@ -91,8 +122,10 @@ def a2a_to_agent_request(a2a_message: Dict[str, Any]) -> AgentRequest:
     Returns:
         Standardized AgentRequest
     """
+    method = a2a_message.get('method', 'invoke')
+    method = _A2A_1_0_METHOD_ALIASES.get(method, method)
     return AgentRequest(
-        method=a2a_message.get('method', 'invoke'),
+        method=method,
         params=a2a_message.get('params', {}),
         id=a2a_message.get('id'),
         context=a2a_message.get('context')

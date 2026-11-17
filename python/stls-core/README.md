@@ -211,8 +211,9 @@ STLS_SESSION_CACHE_MAX=256      # max SessionCache size (memory backend only)
 STLS_SESSION_TTL=3600           # session idle TTL (seconds)
 ```
 
-See `.env.example` for the full list, organized into 6 sections (Key
-Provider, Arqit, Session Cache, Auth, Redis, PostgreSQL).
+See `.env.example` for the full list, organized into 9 sections (Key
+Provider, Arqit, Session Cache, Auth, Redis, PostgreSQL, Symmetric Key
+Store, Session Store, Encryption at Rest).
 
 ## License
 

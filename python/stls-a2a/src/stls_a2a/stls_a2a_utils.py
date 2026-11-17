@@ -139,9 +139,13 @@ def _card_from_adk(agent: Any, url: str | None = None,
         skills=skills,
         default_input_modes=input_modes,
         default_output_modes=output_modes,
-        capabilities=AgentCapabilities(streaming=False),
+        # GoogleADKAdapter overrides _invoke_stream() for true native
+        # chunk-by-chunk streaming (stls_a2a_adapters_model.py) — the
+        # card was advertising streaming=False despite this being the
+        # framework with the BEST streaming support, not the weakest.
+        capabilities=AgentCapabilities(streaming=True),
         security_scheme=_get_security_scheme(),
-        extensions=[_build_stls_extension(secure_url)],                               
+        extensions=[_build_stls_extension(secure_url)],
     )
 
 
@@ -188,24 +192,42 @@ def _card_from_langgraph(agent: Any, url: str | None = None,
         skills=list(skills),
         default_input_modes=input_modes,
         default_output_modes=output_modes,
-        capabilities=AgentCapabilities(streaming=False),
+        # LangChainAdapter (which actually handles requests for a
+        # LangGraph agent — this builder only produces its card) has no
+        # _invoke_stream() override, but still inherits the base
+        # AgentAdapter.stream() fallback, which genuinely works over
+        # SSE (single consolidated chunk instead of token-by-token).
+        # The card was advertising streaming=False despite this.
+        capabilities=AgentCapabilities(streaming=True),
         security_scheme=_get_security_scheme(),
-        extensions=[_build_stls_extension(secure_url)],                               
+        extensions=[_build_stls_extension(secure_url)],
     )
 
 
 def _card_generic(agent: Any, url: str | None = None,
                   secure_url: str | None = None, description: str | None = None) -> AgentCard:
-    """Generic fallback: best-effort introspection."""
-    name = getattr(agent, "name", type(agent).__name__)
+    """
+    Generic fallback: best-effort introspection.
+
+    Used for the 'custom' framework, where `agent` is often a plain
+    Python function (e.g. the calculator_handler wrapper in
+    multi_agent_server.py), not an object with a `.name` attribute.
+    Same fallback chain as _tool_identity() above, for the same reason:
+    `type(agent).__name__` alone would report the generic "function"
+    for every such agent, rather than that function's own name.
+    """
+    name = getattr(agent, "name", None) or getattr(agent, "__name__", None) or type(agent).__name__
     return AgentCard(
         name=name,
         description=description or getattr(agent, "description", f"Agent: {name}"),
         url=url,
         secure_url=secure_url,
-        capabilities=AgentCapabilities(streaming=False),
+        # Same base AgentAdapter.stream() fallback as langgraph/langchain
+        # (see _card_from_langgraph above) — works for any adapter,
+        # custom included, even without a native streaming override.
+        capabilities=AgentCapabilities(streaming=True),
         security_scheme=_get_security_scheme(),
-        extensions=[_build_stls_extension(secure_url)],                                
+        extensions=[_build_stls_extension(secure_url)],
     )
 
 def _card_from_semantic_kernel(agent: Any, url: str | None = None, 
