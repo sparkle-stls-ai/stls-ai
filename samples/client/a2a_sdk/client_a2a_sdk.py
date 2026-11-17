@@ -32,12 +32,18 @@ AGENT_CARD_URL = f"{BASE_URL}/.well-known/agent.json"
 
 class FinancialAgentA2AClient:
     """
-    Client A2A v1.0 spec-compliant per il Financial Agent remoto.
-    Usa l'a2a-sdk ufficiale invece di RemoteA2aAgent di Google ADK.
+    Client per il Financial Agent remoto basato sull'a2a-sdk ufficiale
+    (invece di RemoteA2aAgent di Google ADK). La versione installata
+    (a2a-sdk==0.3.26) implementa il wire format A2A 0.3, non 1.0:
 
-    Invia chiamate standard:
-      - method:  messages/send  (non message/send)
-      - parts:   [{type: 'text', ...}]  (non kind: 'text')
+      - method:  message/send, message/stream, tasks/get, tasks/cancel
+                 (slash-style singolare — non le PascalCase di 1.0 come
+                 SendMessage, né messages/send plurale)
+      - parts:   {kind: 'text', ...}  (non {type: 'text', ...})
+
+    Funziona contro il nostro server solo perché create_secure_a2a_endpoint
+    mantiene questi alias 0.3 insieme ai nomi 1.0 (vedi issue #14) — è
+    esattamente il caso reale che quella retrocompatibilità copre.
     """
 
     def __init__(
@@ -195,7 +201,7 @@ if __name__ == "__main__":
     import asyncio
 
     async def _demo():
-        print("=== Financial Agent A2A v1.0 client ===\n")
+        print("=== Financial Agent A2A client (a2a-sdk, A2A 0.3 wire format) ===\n")
 
         # Test 1 — risposta sincrona
         answer = await ask_financial_agent("What is the AAPL stock price?")

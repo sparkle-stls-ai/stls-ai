@@ -32,7 +32,7 @@ from .stls_a2a_adapters import (
     agent_response_to_a2a
 )
 from stls_core import KeySessionProvider, SessionCacheBase, SessionCacheFactory, StlsTransport
-from .stls_a2a_task import task_store, TaskState
+from .stls_a2a_task import task_store, TaskState, to_task_state_proto_name
 
 
 import logging
@@ -226,7 +226,7 @@ def _make_status_payload(
         final:      True if this is the task's last event.
     """
     state_val = status if isinstance(status, str) else getattr(status, "value", str(status))
-    return {
+    payload = {
         "kind":      "status-update",
         "taskId":    task_id,
         "contextId": context_id,
@@ -234,6 +234,20 @@ def _make_status_payload(
         "final":     final,
         "timestamp": _now_iso(),
     }
+    # A2A 1.0 (spec §4.2): StreamResponse is a oneof {task, message,
+    # statusUpdate, artifactUpdate} — a strict proto-JSON client (verified
+    # against a real a2a-sdk 1.3.0 Client, which otherwise gets back an
+    # event with none of those fields set) needs the event wrapped under
+    # "statusUpdate", not a flat dict. Kept alongside the flat shape above
+    # for existing consumers (0.3 SSE clients, sofia-client-secure) —
+    # additive only, same pattern as the SendMessage "task" wrapper
+    # (issue #14).
+    payload["statusUpdate"] = {
+        "taskId":    task_id,
+        "contextId": context_id,
+        "status":    {"state": to_task_state_proto_name(state_val), "timestamp": payload["timestamp"]},
+    }
+    return payload
 
 
 def _make_artifact_payload(
@@ -256,17 +270,25 @@ def _make_artifact_payload(
         last_chunk:  True = last chunk of the artifact.
         artifact_id: Artifact UUID; auto-generated if None.
     """
-    return {
+    artifact_id = artifact_id or str(_uuid.uuid4())
+    artifact = {"artifactId": artifact_id, "parts": parts}
+    payload = {
         "kind":      "artifact-update",
         "taskId":    task_id,
         "contextId": context_id,
-        "artifact":  {
-            "artifactId": artifact_id or str(_uuid.uuid4()),
-            "parts": parts,
-        },
+        "artifact":  artifact,
         "append":    append,
         "lastChunk": last_chunk,
     }
+    # Same reasoning as _make_status_payload's "statusUpdate" — see there.
+    payload["artifactUpdate"] = {
+        "taskId":    task_id,
+        "contextId": context_id,
+        "artifact":  artifact,
+        "append":    append,
+        "lastChunk": last_chunk,
+    }
+    return payload
 
 
 class _SseMethodError(Exception):
@@ -998,7 +1020,9 @@ class SecureA2AHTTPMiddleware:
         TERMINAL = {"completed", "failed", "canceled"}
 
         # ── Params validation ────────────────────────────────────────────────
-        task_id = params.get("taskId")
+        # SubscribeToTaskRequest's proto field is "id", not "taskId"
+        # (spec §9.4.6) — same mismatch as GetTask/CancelTask, issue #14.
+        task_id = params.get("taskId") or params.get("id")
         if not task_id:
             yield _sse_event("error", {
                 "code": -32602,

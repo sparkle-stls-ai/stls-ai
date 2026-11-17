@@ -81,6 +81,11 @@ SecurityScheme = (
     | StlsKeyExchangeSecurityScheme
 )
 
+# The only "type" values the A2A spec (0.3 and 1.0 alike) actually
+# recognizes for SecurityScheme — a closed set, no custom/extension
+# variant in either version. See AgentCard._populate_spec_fields().
+_OFFICIAL_SECURITY_SCHEME_TYPES = frozenset({"apiKey", "http", "oauth2", "openIdConnect", "mutualTLS"})
+
 
 class SecureTransport(BaseModel):
     enabled: bool = True
@@ -188,7 +193,19 @@ class AgentCard(BaseModel):
             self.supported_interfaces = [
                 AgentInterface(url=self.url, protocol_binding="JSONRPC", protocol_version="1.0")
             ]
-        if not self.security_schemes and self.security_scheme:
+        # securitySchemes' values are a CLOSED union in both the 0.3 and
+        # 1.0 spec (apiKey/http/oauth2/openIdConnect/mutualTLS — no
+        # "custom" variant in either). Our own StlsKeyExchangeSecurityScheme
+        # (type "stls_key_exchange") has no conformant representation in
+        # that union, and emitting it anyway isn't a soft violation: the
+        # official a2a-sdk 0.3.26 client's AgentCard model validates this
+        # strictly and HARD-FAILS card resolution entirely — confirmed
+        # against a real client, not assumed (issue #14). securitySchemes
+        # is optional in both spec versions, so only populate it for
+        # schemes that are actually one of the 5 official types; for our
+        # own extension type, omitting the field is the spec-legal choice,
+        # unlike emitting something that breaks every real client.
+        if not self.security_schemes and self.security_scheme and self.security_scheme.type in _OFFICIAL_SECURITY_SCHEME_TYPES:
             self.security_schemes = {self.security_scheme.type: self.security_scheme}
         return self
 

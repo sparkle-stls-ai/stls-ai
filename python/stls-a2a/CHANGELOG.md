@@ -10,9 +10,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.1.8] — 2026-11-14
 
 Part of the A2A protocol conformance assessment (issue #14) — closes
-all four gaps it identified: JSON-RPC method naming, the AgentCard
-schema, the streaming capability-flag bug, and the cosmetic
-generic-card-name fallback.
+all four gaps it identified (JSON-RPC method naming, the AgentCard
+schema, the streaming capability-flag bug, the cosmetic
+generic-card-name fallback), plus nine more found by running real
+`a2a-sdk` clients (both 0.3.26 and 1.3.0) against this server while
+building the issue's second half (testing against more complex
+agents): a non-oneof-wrapped `SendMessage` result, discriminator-less
+message parts being silently dropped, `securitySchemes` breaking the
+0.3 SDK's card resolution entirely, SSE streaming events not being
+oneof-wrapped either (plus a related task-state enum mismatch), a
+matching `Message.role` enum mismatch, `ListTasks`'s result not being
+wrapped at all, `GetTask`/`CancelTask`/`SubscribeToTask` rejecting
+every real client outright over a request field-name mismatch, and
+file parts (`FilePart`) being unparseable in both directions — dropped
+on the way in, empty on the way out.
 
 ### Added
 
@@ -53,6 +64,24 @@ generic-card-name fallback.
   `securitySchemes` field (previously it would've landed in the
   generic "Extra fields" catch-all). Purely additive — nothing removed
   or renamed; `tsc --noEmit` clean.
+- `samples/client/a2a_sdk_1_0` — a real `a2a-sdk` 1.x client (the major
+  version implementing A2A 1.0's protobuf-based wire format) against
+  `samples/server/4_custom_financial_agent`, in its own isolated venv
+  (1.x can't coexist with the 0.3.26 install `samples/client/a2a_sdk`
+  depends on in the shared root venv). Running it is what found gaps
+  #5 and #6 below. Real SSE streaming (`ClientConfig(streaming=True)`)
+  is now also fully verified against it — see the gap #7 fix below.
+- Extended `tests/a2a_protocol_conformance_test.py` to 14 groups: an
+  8th (checks `messages/send`'s result is task-wrapped), a 9th (checks
+  a part with neither `"type"` nor `"kind"` isn't dropped), a 10th
+  (checks SSE events are oneof-wrapped with correct `TASK_STATE_*`
+  state names), an 11th (checks history `role` uses the proto enum
+  name inside the `"task"` wrapper), a 12th (checks `ListTasks`'s
+  result is the wrapped object, not a bare array), a 13th (checks
+  `GetTask`/`CancelTask`/`SubscribeToTask` accept `"id"`), and a 14th
+  (checks a flat `FilePart` round-trips in both directions) — all as
+  plain httpx/JSON assertions, so the regressions are caught without
+  needing the real `a2a-sdk` installed in this venv.
 
 ### Fixed
 
@@ -81,6 +110,151 @@ generic-card-name fallback.
   around this independently (by passing a class instance with `.name`
   set instead of a bare function) — unaffected by this fix, since
   `.name` was already set there and takes priority either way.
+- **`messages/send`'s result is now wrapped in a `"task"` key, matching
+  A2A 1.0's oneof.** Spec §9.4.1 defines `SendMessageResponse` as a
+  `oneof {task, message}` — a real `a2a-sdk` 1.3.0 `Client` raised
+  `"Response has neither task nor message"` against this server,
+  because the result had every `Task` field spread flat at the top
+  level with no `"task"` key at all. `handle_request()`'s
+  `messages/send` branch (`stls_a2a_adapters_model.py`) now adds a
+  `"task"` key nesting the same fields, alongside the flat shape kept
+  for existing consumers (`stls_a2a_client.py`, ADK's
+  `RemoteA2aAgent`) — additive only, verified both ways still work.
+- **Message parts with neither `"type"` nor `"kind"` are no longer
+  silently dropped.** A real A2A 1.0 client's proto-JSON mapping sends
+  a text part as the bare `{"text": "..."}` — no discriminator key at
+  all, since the `oneof`'s selected field name is itself the only
+  discriminator. `_build_parts()` treated this as an empty part and
+  skipped it; even where kept, `_handle_messages_send`/
+  `_handle_messages_send_stream` passed adapters `request.params`
+  verbatim, so an adapter's own ad-hoc parsing (e.g.
+  `financial_agent.py`'s `(p.get("kind") or p.get("type")) == "text"`)
+  still missed it — **with no error of any kind**: the agent just saw
+  an empty message and replied with its generic fallback. Fixed in
+  two places: `_build_parts()` now infers the part's type from which
+  known key (`text`/`data`/`file`) is actually present, and both
+  `_handle_messages_send` and `_handle_messages_send_stream` now
+  substitute the already-normalized parts (which always carry both
+  `"type"` and `"kind"`, from the `TextPart`/`FilePart`/`DataPart`
+  models) into what the adapter actually receives, instead of the
+  raw, as-received ones. Verified against the real SDK: a "What is
+  the price of AAPL?" query that previously got the generic fallback
+  now returns the real looked-up price, through the same server code
+  path real agents use.
+
+- **`securitySchemes` no longer breaks the official 0.3 SDK's card
+  resolution.** `SecurityScheme` is a CLOSED union in both the 0.3 and
+  1.0 spec (`apiKey`/`http`/`oauth2`/`openIdConnect`/`mutualTLS` — no
+  custom/extension variant in either). Our own
+  `StlsKeyExchangeSecurityScheme` ("stls_key_exchange") isn't one of
+  them, and the initial version of `securitySchemes` auto-population
+  (above) included it anyway — which is every agent's *default* scheme
+  in this project. Found by running a real `a2a-sdk` 0.3.26
+  `A2ACardResolver` against a live agent: it didn't just warn, it
+  **hard-failed card resolution entirely**, breaking every 0.3 client
+  against every agent in this repo, including the already-existing
+  `samples/client/a2a_sdk` sample. `AgentCard._populate_spec_fields()`
+  now only populates `securitySchemes` when `security_scheme.type` is
+  one of the 5 official values; for our own extension type the field
+  is correctly omitted (spec-legal — it's optional in both versions)
+  rather than populated with something no real client can parse.
+  Verified against the real 0.3 SDK before and after: card resolution
+  now succeeds again, full real tool-calling confirmed through
+  Semantic Kernel and LangChain/LangGraph agents (not just the
+  deterministic custom-framework fixture used for gaps #5/#6).
+- **SSE streaming events are now oneof-wrapped too, with the correct
+  task-state enum names.** Same root cause as the `SendMessage` fix
+  above, for the streaming path: A2A 1.0's `StreamResponse` is a
+  `oneof {task, message, statusUpdate, artifactUpdate}` (spec §4.2),
+  but our SSE events were a flat dict with `"kind":
+  "status-update"`/`"artifact-update"` — a real `a2a-sdk` 1.3.0
+  `Client` got back events with **none** of the oneof's fields set.
+  Reproduced identically across every framework (custom,
+  LangChain/LangGraph, Semantic Kernel) — confirmed general-purpose,
+  not agent-specific. `_make_status_payload`/`_make_artifact_payload`
+  (`stls_a2a_integration.py`) now also nest the same data under
+  `"statusUpdate"`/`"artifactUpdate"`, additive alongside the flat
+  shape kept for existing consumers (`sofia-client-secure`'s SSE
+  parsing reads only the flat `kind`/`final`/`status.state` fields,
+  confirmed unaffected).
+
+  Fixing this surfaced a second, related issue: A2A 1.0's `TaskState`
+  proto enum uses `TASK_STATE_*` names (e.g. `"TASK_STATE_COMPLETED"`),
+  not our lowercase values — a real client silently defaults
+  `status.state` to `TASK_STATE_UNSPECIFIED` otherwise (protobuf's
+  JSON unmarshal ignores unrecognized enum strings rather than
+  erroring). This matters more than it sounds: the 1.0
+  `TaskStatusUpdateEvent` proto has **no separate `"final"` field at
+  all** — `status.state` is the *only* signal a strict client has for
+  detecting task completion in a stream. New
+  `to_task_state_proto_name()` (`stls_a2a_task.py`) maps our lowercase
+  `TaskState` values to their proto name, used only inside the new
+  nested structures (here, and in the `SendMessage` `"task"` wrapper
+  above) — the pre-existing flat lowercase fields are untouched.
+  Verified against the real SDK: a full streaming exchange now reports
+  `TASK_STATE_SUBMITTED` → `TASK_STATE_WORKING` → (artifact) →
+  `TASK_STATE_COMPLETED`, matching the proto enum exactly.
+- **`Message.role` now also uses the proto enum name inside the new
+  nested structures.** Same root cause as the `TaskState` issue above,
+  for A2A 1.0's `Role` enum (`ROLE_USER`/`ROLE_AGENT`, spec §4.1.3,
+  not our lowercase `"user"`/`"agent"`) — a real client otherwise sees
+  `ROLE_UNSPECIFIED` for every history message and can't tell which
+  came from the user vs. the agent. New `to_role_proto_name()`
+  (`stls_a2a_task.py`), used only inside the `SendMessage` `"task"`
+  wrapper (same scope restriction as `to_task_state_proto_name()`).
+  `GetTask`/`CancelTask` return a bare `Task` with no wrapper to add
+  this into without risking 0.3 compat (both read the exact same
+  object as 0.3 clients), so their `status.state`/`history[].role`
+  stay lowercase — a known, deliberate asymmetry, not an oversight.
+- **`GetTask`/`CancelTask`/`SubscribeToTask` no longer reject every
+  real client.** Their proto request field for the task identifier is
+  `"id"` (spec §9.4.3 example: `{"id": "task-uuid", "historyLength":
+  10}`), not `"taskId"` — a real `a2a-sdk` 1.3.0 `Client` sends exactly
+  `"id"` and got a flat `"taskId param is required"` error for all
+  three methods, regardless of the enum-naming issues above. Not a
+  shape nuance — a complete functional break, the most severe of this
+  batch. All three now accept either name.
+- **`ListTasks`'s result is now the spec-shaped wrapped object, not a
+  bare array.** A2A 1.0's `ListTasksResponse` is `{"tasks": [...],
+  "pageSize": ..., "nextPageToken": ...}` (spec §9.4.4); our result was
+  a bare array, which a real `a2a-sdk` 1.3.0 `Client` couldn't parse at
+  all (`ParseError ... unhashable type: 'dict'`) — a hard failure, not
+  a soft degradation. Also accepts the proto's `pageSize`/`pageToken`
+  request fields now, alongside the existing `limit`/`cursor`. This is
+  the **one fix in this release that isn't purely additive**: JSON
+  can't be an array and an object with a `"tasks"` key at the same
+  time, so the old bare-array shape is genuinely gone. Grep-verified
+  the only in-repo consumer (`tests/task_test.py`) before changing it,
+  and updated it to read `result.tasks` — no other consumer exists
+  (`samples/client/sofia-client-secure` never calls this method;
+  `sofia-admin`'s own `list_tasks` tool reads Redis directly, unrelated
+  to this JSON-RPC method entirely).
+- **File parts (`FilePart`) are now parseable in both directions.**
+  A2A 1.0's `Part` proto has no `"file"` wrapper at all — `FileInline`/
+  `FileReference`'s fields (`raw`/`url`/`filename`/`mediaType`) sit
+  directly on `Part`, part of its `content` oneof (`text`/`raw`/`url`/
+  `data`). Two separate bugs, same root cause, found and fixed
+  together:
+  - **Incoming:** a file part sent this way was silently dropped by
+    `_build_parts()` — the exact same symptom as the text-part fix
+    above, just never checked for files until now. Fixed by extending
+    the same `text`/`data`/`file` key-presence inference to also
+    recognize `raw`/`url`.
+  - **Outgoing:** even once accepted, a `FilePart` echoed back (e.g.
+    in `Task.history` after the client calls `GetTask`) was still
+    serialized with *only* the old nested `{"file": {...}}` shape — a
+    real client's `Part.WhichOneof('content')` came back `None`,
+    effectively empty. This is the direction the text/data fixes above
+    never had to address (`TextPart`'s `text` field already matches
+    both conventions). Fixed via a new `model_serializer` on
+    `FilePart` (`stls_a2a_task.py`) that adds the flat fields alongside
+    the nested `"file"` shape — one change point, since every
+    `Task.history`/artifact dump goes through this model's
+    serialization. `DataPart` needed no fix — its shape already
+    matched on both sides.
+  Verified against the real SDK: an inline file (`raw`) and a
+  URL-referenced one (`url`) both round-trip correctly now, in a
+  message sent to the server and echoed back in the task's history.
 
 ### Changed
 
@@ -100,12 +274,14 @@ generic-card-name fallback.
 
 ### Known partial gap
 
-- `securitySchemes`' values stay in the flatter `{"type": "apiKey", ...}`
-  shape already used by `security_scheme`, rather than the A2A 1.0
-  proto's nested oneof wrapper (e.g. `{"apiKeySecurityScheme": {...}}`).
-  The map container itself — the larger structural defect — is now
-  correct and keyed by scheme name; revisit the inner shape if a
-  strict 1.0 validator flags it.
+- For the officially-recognized scheme types that DO populate
+  `securitySchemes` (see Fixed, above), the values stay in the flatter
+  `{"type": "apiKey", ...}` shape already used by `security_scheme`,
+  rather than the A2A 1.0 proto's nested oneof wrapper (e.g.
+  `{"apiKeySecurityScheme": {...}}`). The map container itself — the
+  larger structural defect — is now correct and keyed by scheme name;
+  revisit the inner shape if a strict 1.0 validator flags it. Moot for
+  our own default scheme, which is omitted from the field entirely.
 
 ---
 

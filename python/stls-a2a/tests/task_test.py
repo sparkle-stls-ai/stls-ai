@@ -480,11 +480,16 @@ async def plain_endpoint_test():
         print(f"  📥 {extract_a2a_text(response)}")
 
     # ── 5.3 tasks/list ────────────────────────────────────────────────────────
+    # result is {"tasks": [...], "pageSize": ..., "nextPageToken": ...}
+    # (spec §9.4.4), not a bare array — changed alongside the server fix
+    # for issue #14 (gap #9): a real a2a-sdk 1.3.0 Client hard-failed
+    # trying to parse the old bare-array shape.
     print("\n── 5.3  tasks/list")
     response = await call_plain_agent(PLAIN_AGENT_PATH, "tasks/list", {"limit": 50})
-    tasks = response.get("result", [])
+    result = response.get("result", {})
+    tasks = result.get("tasks") if isinstance(result, dict) else None
     if not isinstance(tasks, list):
-        _fail("tasks/list", f"expected a list, received: {type(tasks)}")
+        _fail("tasks/list", f"expected result.tasks to be a list, received: {result!r}")
     else:
         _ok(f"{len(tasks)} tasks in the TaskStore")
         for t in tasks[:3]:
@@ -1294,8 +1299,10 @@ async def task_test():
             params={"limit": 50}
             )
         
-        result = response.get('result')
-        for task in result:
+        # result is {"tasks": [...], ...} (spec §9.4.4), not a bare array
+        # — see the 5.3 tasks/list note above for why.
+        result = response.get('result') or {}
+        for task in result.get('tasks', []):
             print(f'-> taskId={task.get("taskId")};contextId={task.get("contextId")};status={task.get("status")}')
         if len(result)>0:
             # take the first one

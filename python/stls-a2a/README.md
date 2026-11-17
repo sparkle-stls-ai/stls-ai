@@ -671,10 +671,10 @@ The adapters now route the standard A2A method set before delegating to the fram
 |---|---|---|
 | `messages/send` (alias `message/send`) | `SendMessage` | creates a Task, invokes the agent, returns the completed Task |
 | `messages/sendStream` (aliases `message/sendStream`, `message/stream`) | `SendStreamingMessage` | streams task updates via SSE |
-| `tasks/subscribe` (alias `task/subscribe`) | `SubscribeToTask` | subscribes to an existing task and streams status/artifact updates |
-| `tasks/get` (alias `task/get`) | `GetTask` | retrieves a task by `taskId` |
-| `tasks/cancel` (alias `task/cancel`) | `CancelTask` | cancels a task |
-| `tasks/list` (alias `task/list`) | `ListTasks` | lists tasks with optional `limit` and `cursor` |
+| `tasks/subscribe` (alias `task/subscribe`) | `SubscribeToTask` | subscribes to an existing task and streams status/artifact updates (A2A 1.0 param name: `id`, also accepted) |
+| `tasks/get` (alias `task/get`) | `GetTask` | retrieves a task by `taskId` (A2A 1.0 param name: `id`, also accepted) |
+| `tasks/cancel` (alias `task/cancel`) | `CancelTask` | cancels a task (A2A 1.0 param name: `id`, also accepted) |
+| `tasks/list` (alias `task/list`) | `ListTasks` | lists tasks with `limit`/`cursor` or `pageSize`/`pageToken` — result is `{"tasks": [...], "pageSize": ...}` (spec §9.4.4), not a bare array |
 | `tasks/pushNotificationConfig/set` (alias `task/...`) | `CreateTaskPushNotificationConfig` | not implemented — returns `ERR_PUSH_NOTIFICATION_NOT_SUPPORTED` (-32003) |
 | `tasks/pushNotificationConfig/get` (alias `task/...`) | `GetTaskPushNotificationConfig` | not implemented — same error |
 | `tasks/pushNotificationConfig/list` (alias `task/...`) | `ListTaskPushNotificationConfigs` | not implemented — same error |
@@ -698,7 +698,11 @@ response = await adapter.send_secure_message({
 })
 ```
 
-The response `result` is a `Task` object with `id` (alias `taskId`), `contextId`, `status` (object with `state`), `history`, and `artifacts`. Client-side helpers exported from the package:
+The response `result` is a `Task` object with `id` (alias `taskId`), `contextId`, `status` (object with `state`), `history`, and `artifacts`. Those fields are also nested under a `"task"` key (`result.task.id`, etc.) — A2A 1.0 spec §9.4.1 defines `SendMessageResponse` as a `oneof {task, message}`, and a strict proto-JSON client expects that wrapper; both shapes carry identical data, so existing code reading the flat fields is unaffected. Inside that `"task"` key specifically, `status.state` and `history[].role` use the A2A 1.0 proto enum names (`TASK_STATE_COMPLETED`, `ROLE_USER`/`ROLE_AGENT`) rather than the flat fields' lowercase values — the only reliable signal a strict client has for task completion and message attribution, since the 1.0 proto has no separate `"final"` field at all. See issue #14 and `CHANGELOG.md` 0.1.8.
+
+Incoming message parts are also accepted without any `"type"`/`"kind"` key at all — just the bare field — which is what A2A 1.0's real proto-JSON mapping actually sends (the `oneof`'s selected field name is the only discriminator there): `{"text": "..."}`, `{"data": {...}}`, or, for files, `{"raw": "<base64>", "filename": "...", "mediaType": "..."}` (inline) / `{"url": "...", "filename": "...", "mediaType": "..."}` (reference) — A2A 1.0's `Part` proto has **no `"file"` wrapper at all**; `FileInline`/`FileReference`'s fields sit directly on `Part`. The parts your adapter/agent receives are always normalized to carry both `"type"` and `"kind"` plus the nested `"file"` sub-object, regardless of what the client sent, so your own code only ever needs to check one of them. Outgoing `FilePart`s (e.g. in `Task.history`) carry the flat `raw`/`url`/`filename`/`mediaType` fields too, alongside the nested `"file"` shape, so a strict 1.0 client can parse them back.
+
+Client-side helpers exported from the package:
 
 ```python
 from stls_a2a import extract_a2a_text, extract_a2a_artifacts, extract_a2a_result
@@ -789,6 +793,8 @@ params = {
 
 A real example is available in [tests/task_test.py](./tests/task_test.py), where the client sends a PDF to the `invoices-classifier` agent.
 
+A2A 1.0 clients send files in a different, flatter shape — `{"raw": base64, "filename": ..., "mediaType": ...}` or `{"url": ..., "filename": ..., "mediaType": ...}`, no `"file"` wrapper at all — which is also accepted (see "Using Standard A2A Methods" above). `FilePart`s are echoed back (e.g. in `Task.history`) carrying both shapes at once, so either kind of client can read them.
+
 ## Agent Cards and Discovery
 
 For card generation you can use:
@@ -813,11 +819,22 @@ itself.
 and `securitySchemes` (a map, keyed by scheme type) alongside the
 pre-existing `url`/`secureUrl` and singular `securityScheme` fields —
 both pairs are populated automatically from the same values, so no
-caller needs to set the new fields explicitly. `securitySchemes`' values
-currently keep the flatter `{"type": "apiKey", ...}` shape rather than
-1.0's nested oneof wrapper (`{"apiKeySecurityScheme": {...}}`); see
-`CHANGELOG.md` 0.1.8 for that known partial gap and issue #14 for the
-full conformance assessment.
+caller needs to set the new fields explicitly. `securitySchemes`'s values
+keep the flatter `{"type": "apiKey", ...}` shape rather than 1.0's nested
+oneof wrapper (`{"apiKeySecurityScheme": {...}}`) — a known partial gap,
+see `CHANGELOG.md` 0.1.8.
+
+**`securitySchemes` is only populated for officially-recognized scheme
+types** (`apiKey`/`http`/`oauth2`/`openIdConnect`/`mutualTLS` — a closed
+union in both 0.3 and 1.0, no custom variant). This project's own default
+scheme (`stls_key_exchange`, see "Security scheme naming" above) isn't
+one of them, so `securitySchemes` is correctly **omitted** when that's
+the active scheme — a real `a2a-sdk` 0.3.26 client hard-fails card
+resolution entirely if it sees an unrecognized type there, which is
+exactly what happened before this fix (confirmed against a real client,
+not assumed; see `CHANGELOG.md` 0.1.8 and issue #14). The singular
+`securityScheme` field is unaffected either way — it always carries the
+active scheme, standard or not.
 
 **`capabilities.streaming` reflects actual support.** Every agent card
 now declares `streaming: true` for the ADK, LangChain/LangGraph, and

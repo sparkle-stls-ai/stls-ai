@@ -3,7 +3,7 @@ import asyncio
 import os
 from pydantic import BaseModel, ConfigDict
 from typing import Dict, Any, Optional, AsyncIterator
-from .stls_a2a_task import task_store, TaskState, TaskStatus, Message, Artifact, TextPart, FilePart, DataPart, Part
+from .stls_a2a_task import task_store, TaskState, TaskStatus, Message, Artifact, TextPart, FilePart, DataPart, Part, to_task_state_proto_name, to_role_proto_name
 
 
 import logging
@@ -330,9 +330,17 @@ class AgentAdapter(ABC):
         if _meta_prof is not None:
             _ctx["profile"] = _meta_prof
 
+        # Substitutes message.parts with the already-normalized `parts` —
+        # same reasoning as _handle_messages_send's enriched_request.
+        _message = dict(clean_params.get("message") or {})
+        _message["parts"] = [
+            p.model_dump(by_alias=True) if hasattr(p, "model_dump") else p
+            for p in parts
+        ]
+
         clean_request = AgentRequest(
             method=request.method,
-            params={**clean_params, "history": history_messages},
+            params={**clean_params, "message": _message, "history": history_messages},
             id=request.id,
             context=_ctx,
         )
@@ -433,7 +441,41 @@ class AgentAdapter(ABC):
 
             # ── messages/send ────────────────────────────────────────────────
             if method in ("messages/send","message/send"):
-                return await self._handle_messages_send(request, rpc_id)
+                response = await self._handle_messages_send(request, rpc_id)
+                # A2A 1.0 (spec §9.4.1): SendMessageResponse is a oneof
+                # {task, message} — a strict proto-JSON client expects the
+                # result wrapped under a "task" key. Verified against a
+                # real a2a-sdk 1.3.0 Client, which otherwise raises
+                # "Response has neither task nor message" (issue #14).
+                # Kept alongside the existing flat shape (every Task field
+                # also present at the top level) for 0.3/existing consumers
+                # (stls_a2a_client.py, ADK's RemoteA2aAgent) — additive only.
+                if response.result is not None and isinstance(response.result, dict):
+                    task_copy = dict(response.result)
+                    # Also normalizes status.state to the 1.0 proto enum
+                    # name (TASK_STATE_COMPLETED, not "completed") inside
+                    # this NEW nested copy only — a real client's only
+                    # signal for task completion. A fresh dict, not a
+                    # mutation of the flat status object above: that one
+                    # must keep its original lowercase value unchanged for
+                    # 0.3/existing consumers (see _task_dict below).
+                    old_status = task_copy.get("status") or {}
+                    task_copy["status"] = {
+                        **old_status,
+                        "state": to_task_state_proto_name(old_status.get("state")),
+                    }
+                    # Same reasoning, for Message.role inside history: a
+                    # real client otherwise sees ROLE_UNSPECIFIED for
+                    # every history message and can't tell which came
+                    # from the user vs. the agent. New dicts throughout —
+                    # never mutates the flat history list above, which
+                    # keeps its original lowercase "user"/"agent" values.
+                    task_copy["history"] = [
+                        {**msg, "role": to_role_proto_name(msg.get("role"))}
+                        for msg in (task_copy.get("history") or [])
+                    ]
+                    response.result = {**response.result, "task": task_copy}
+                return response
 
             # ── messages/sendStream (SSE) ────────────────────────────────────
             elif method in ("messages/sendStream", "message/sendStream"):
@@ -443,7 +485,12 @@ class AgentAdapter(ABC):
 
             # ── tasks/get ────────────────────────────────────────────────────
             elif method in ("tasks/get", "task/get"):
-                task_id    = params.get("taskId")
+                # A2A 1.0's GetTaskRequest proto field is "id", not
+                # "taskId" (spec §9.4.3 example: {"id": "task-uuid",
+                # "historyLength": 10)} — a real a2a-sdk 1.3.0 Client
+                # sends exactly that and got a flat "taskId required"
+                # error before this fix (issue #14). Accepts either.
+                task_id    = params.get("taskId") or params.get("id")
                 context_id = params.get("contextId")
 
                 if not task_id:
@@ -467,7 +514,8 @@ class AgentAdapter(ABC):
 
             # ── tasks/cancel ─────────────────────────────────────────────────
             elif method in ("tasks/cancel", "task/cancel"):
-                task_id    = params.get("taskId")
+                # Same "id" vs "taskId" field-name mismatch as tasks/get above.
+                task_id    = params.get("taskId") or params.get("id")
                 context_id = params.get("contextId")
 
                 if not task_id:
@@ -501,14 +549,30 @@ class AgentAdapter(ABC):
 
             # ── tasks/list ───────────────────────────────────────────────────
             elif method in ("tasks/list", "task/list"):
-                tasks = await task_store.list_tasks(
-                    limit=params.get("limit", 50),
-                    cursor=params.get("cursor"),
-                )
-                return AgentResponse(
-                    result=[_task_dict(t) for t in tasks],
-                    id=rpc_id,
-                )
+                # ListTasksRequest's proto fields are page_size/page_token
+                # (spec §9.4.4 example: {"pageSize": 50, "pageToken": ...}),
+                # not limit/cursor. Accepts either.
+                page_size = params.get("limit") or params.get("pageSize") or 50
+                cursor    = params.get("cursor") or params.get("pageToken")
+                tasks = await task_store.list_tasks(limit=page_size, cursor=cursor)
+                # Unlike every other fix in this file, this ISN'T purely
+                # additive: ListTasksResponse is a wrapped object
+                # ({"tasks": [...], "pageSize": ..., "nextPageToken": ...}
+                # — spec §9.4.4), not a bare array like our result used
+                # to be. JSON can't be an array AND an object with a
+                # "tasks" key at once, so there's no additive seam here —
+                # a real a2a-sdk 1.3.0 Client hard-failed trying to parse
+                # the old bare-array shape ("unhashable type: 'dict'").
+                # Grep-verified the only in-repo consumer of the old
+                # shape (tests/task_test.py) before changing it — updated
+                # alongside this (issue #14).
+                result: dict = {
+                    "tasks": [_task_dict(t) for t in tasks],
+                    "pageSize": page_size,
+                }
+                if len(tasks) == page_size:
+                    result["nextPageToken"] = tasks[-1].taskId
+                return AgentResponse(result=result, id=rpc_id)
 
             # ── push notification (not implemented) ─────────────────────────
             elif method in ("tasks/pushNotificationConfig/set",    "task/pushNotificationConfig/set",
@@ -544,16 +608,40 @@ class AgentAdapter(ABC):
             if not isinstance(part, dict):
                 continue
             # Normalizes "kind" → "type" without mutating the original dict.
-            # Some libraries (Google ADK RemoteA2aAgent, a2a-python SDK) send
-            # {"kind": "text", ...} instead of {"type": "text", ...}.
+            # Some libraries (Google ADK RemoteA2aAgent, a2a-python SDK 0.x)
+            # send {"kind": "text", ...} instead of {"type": "text", ...}.
             # Others send both fields — in that case "type" takes priority.
             # We always work on a local copy so as not to corrupt the shared
             # object received from the adapter (e.g. a dict reused across calls).
             part_type = part.get("type") or part.get("kind")
             if not part_type:
-                # Skips elements that have neither "type" nor "kind"
-                # (e.g. empty dict {} used as a default when params.message.parts is absent)
-                continue
+                # A2A 1.0's real wire format (a2a-sdk>=1.0, proto-JSON
+                # mapping of Part's oneof) sends NEITHER "type" nor "kind" —
+                # the oneof's selected field name (text/data/file) is itself
+                # the only discriminator. Infer it from which known key is
+                # actually present, rather than treating the part as empty
+                # (issue #14: this used to silently drop every incoming part
+                # from a real 1.0 client, with no error — the agent would
+                # just never see the message).
+                if "text" in part:
+                    part_type = "text"
+                elif "data" in part:
+                    part_type = "data"
+                elif "file" in part:
+                    part_type = "file"
+                elif "raw" in part or "url" in part:
+                    # A2A 1.0's real Part proto has no "file" wrapper at
+                    # all for files either — raw (inline base64)/url
+                    # (reference)/filename/mediaType sit directly on the
+                    # Part itself (issue #14, same root cause as above).
+                    # Verified live: a file part in this shape used to
+                    # land in history/artifacts as an empty [] — silently
+                    # dropped, no error, same as the text-part case.
+                    part_type = "file"
+                else:
+                    # Still nothing recognizable (e.g. {} used as a default
+                    # when params.message.parts is absent) — skip.
+                    continue
             if part_type == "text":
                 parts.append(TextPart(
                     text=part.get("text", ""),
@@ -563,9 +651,22 @@ class AgentAdapter(ABC):
                 # Normalizes the "file" sub-object: the SDK sends "bytes" instead of "data"
                 # (FileInline.data = base64 string; the SDK calls the same field "bytes").
                 # Copies the sub-dict before modifying it to avoid in-place mutation.
-                file_obj = dict(part.get("file", {}))
+                file_obj = dict(part.get("file") or {})
                 if "bytes" in file_obj and "data" not in file_obj:
                     file_obj["data"] = file_obj.pop("bytes")
+                if not file_obj:
+                    # A2A 1.0's flat shape (no "file" key at all) —
+                    # build the sub-object from the Part's own raw/url/
+                    # filename/mediaType fields. mimeType is REQUIRED on
+                    # both FileInline/FileReference; a real 1.0 client
+                    # may omit mediaType, so default rather than fail.
+                    media_type = part.get("mediaType", "application/octet-stream")
+                    if "raw" in part:
+                        file_obj = {"data": part["raw"], "mimeType": media_type}
+                        if part.get("filename"):
+                            file_obj["name"] = part["filename"]
+                    elif "url" in part:
+                        file_obj = {"uri": part["url"], "mimeType": media_type}
                 parts.append(FilePart(type="file", file=file_obj))
             elif part_type == "data":
                 parts.append(DataPart(**{
@@ -704,9 +805,30 @@ class AgentAdapter(ABC):
         if _meta_prof is not None:
             _ctx["profile"] = _meta_prof
 
+        # Substitutes message.parts with the already-normalized `parts`
+        # (built above via _build_parts) before handing params to the
+        # adapter — not just request.params's raw, as-received parts.
+        # Every normalized Part model (TextPart/FilePart/DataPart) always
+        # serializes with BOTH "type" and "kind" set, so any adapter's own
+        # part-parsing (whichever discriminator it happens to check, or
+        # neither — see _build_parts's fallback) sees a consistent shape
+        # regardless of what the client actually sent on the wire.
+        # Without this, adapters received request.params verbatim: a real
+        # A2A 1.0 client's parts (no "type"/"kind" key at all — just the
+        # bare field name) would parse fine into our own Task history via
+        # _build_parts, but reach the adapter's OWN ad-hoc parsing
+        # unnormalized — e.g. a custom agent checking `part.get("kind") or
+        # part.get("type")` would see neither and silently treat the
+        # message as empty, with no error of any kind (issue #14).
+        _message = dict(request.params.get("message") or {})
+        _message["parts"] = [
+            p.model_dump(by_alias=True) if hasattr(p, "model_dump") else p
+            for p in parts
+        ]
+
         enriched_request = AgentRequest(
             method=request.method,
-            params={**request.params, "history": history_messages},
+            params={**request.params, "message": _message, "history": history_messages},
             id=request.id,
             context=_ctx,
         )
