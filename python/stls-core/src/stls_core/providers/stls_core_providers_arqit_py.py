@@ -381,6 +381,7 @@ class KeyProviderClientArqitPy(KeyProviderClient):
                 AuthenticationSessionManager,
             )
             from uk.arqit.device.common.device_metadata import DeviceMetadata
+            from uk.arqit.device.provisioning.provisioning import ProvisioningClient
 
             logger.info(
                 "[KeyProviderClientArqitPy] start config=%s transport=%s",
@@ -393,7 +394,18 @@ class KeyProviderClientArqitPy(KeyProviderClient):
                 self._key_store, is_receiver=False, sdk_key_manager=sdk_key_manager
             )
 
-            auth_manager = AuthenticationSessionManager(qc_config, reprovision_handler=None)
+            # reprovision_handler: AuthenticationSessionManager.authenticate_device()
+            # falls back to this when the device is still at the bootstrap
+            # stage (provisioning_state == "") and the plain re-auth also
+            # fails — it's meant to be ProvisioningClient.transition_provisioning_state,
+            # which does the one-time bootstrap -> provisioned transition and
+            # persists the new ratchet to the metadata file. Passing None here
+            # (as this provider always did until now) means that fallback
+            # crashes with TypeError instead of actually reprovisioning,
+            # the moment the SDK ever takes that branch.
+            auth_manager = AuthenticationSessionManager(
+                qc_config, reprovision_handler=ProvisioningClient(qc_config).transition_provisioning_state
+            )
             auth_manager.set_auto_refresh(True)
             auth_manager.authenticate_device()
             logger.info("[KeyProviderClientArqitPy] authentication completed")
@@ -519,6 +531,7 @@ class KeyProviderServerArqitPy(KeyProviderServer):
             from uk.arqit.device.policy.client.policy_client_config import PolicyClientConfig
             from uk.arqit.device.policy.policystore.device_policy_store import DevicePolicyStore
             from uk.arqit.device.common.device_metadata import DeviceMetadata
+            from uk.arqit.device.provisioning.provisioning import ProvisioningClient
 
             logger.info(
                 "[KeyProviderServerArqitPy] start config=%s transport=%s",
@@ -540,7 +553,14 @@ class KeyProviderServerArqitPy(KeyProviderServer):
             )
             policy_client = PolicyClient(policy_client_config)
 
-            auth_manager = AuthenticationSessionManager(qc_config, reprovision_handler=None)
+            # See KeyProviderClientArqitPy.start()'s own comment on
+            # reprovision_handler: wiring the real
+            # ProvisioningClient.transition_provisioning_state here instead
+            # of None so the SDK's own bootstrap->provisioned fallback
+            # actually works instead of crashing with TypeError.
+            auth_manager = AuthenticationSessionManager(
+                qc_config, reprovision_handler=ProvisioningClient(qc_config).transition_provisioning_state
+            )
             auth_manager.set_auto_refresh(True)
             auth_manager.authenticate_device()
             logger.info("[KeyProviderServerArqitPy] authentication completed")
