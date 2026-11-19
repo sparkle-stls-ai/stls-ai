@@ -340,3 +340,43 @@ registration — `register_device_v3()` alone is not enough. Every
 device already committed in this repo happened to have this done at
 some point in its history; it just wasn't written down anywhere that
 a *new* pair needs it too.
+
+## Follow-up (2026-11-19, same day): the cwd pitfall can make `asyncio.gather()` hang silently instead of erroring
+
+The already-documented cwd pitfall (relative `DEVICE_METADATA_FILEPATH`
+resolved against the process's cwd, not the config file's own
+directory — see above, "missing/wrong-cwd `DEVICE_METADATA_FILEPATH`
+doesn't fail gracefully") has a nastier variant specific to
+`asyncio.gather()`: pointing `ARQIT_PY_CLIENT_CONFIG` at a device
+whose config lives OUTSIDE whatever directory the calling script
+itself `os.chdir()`'s to (e.g.
+`samples/client/10_client_ms/client_multi_session.py`, which
+hardcodes `os.chdir()` to its own directory) makes
+`KeyProviderClientArqitPy.start()` fail with the `FileNotFoundError`
+→ `AttributeError` cascade already documented — but when that happens
+inside one of two coroutines passed to `asyncio.gather()` (as in
+`client_multi_session.py`'s "Test A", 2 simultaneous sessions), the
+result isn't a clean crash: confirmed directly (while validating
+`samples/server/16_server_device_agent/`) that the whole script just
+**hangs indefinitely with no further output and no traceback** instead
+— consistent with `asyncio.gather()`'s default behavior of not
+cancelling sibling tasks when one raises, combined with Python's own
+"Task exception was never retrieved" becoming an easy-to-miss log
+warning rather than a visible failure.
+
+**Fix applied to `samples/server/16_server_device_agent/`'s own device
+pair**: `DEVICE_METADATA_FILEPATH`/`DEVICE_PROPERTIES_FILEPATH`/`DEVICE_POLICY_FILEPATH`
+in its `aq-sf-device-agent-16-{server,client}.json` are absolute paths,
+not the relative `./...` convention used elsewhere in this repo —
+sidesteps the whole cwd question regardless of which script's
+directory ends up being the process cwd. `samples/client/16_client_device_agent/client_session.py`
+(a new, minimal, single-session client — not `client_multi_session.py`'s
+always-2-concurrent-sessions "Test A") confirms this works end to end:
+real key resolution via the device-agent, then a real encrypted A2A
+call through a consumer-role replica, `HTTP 200 OK`.
+
+**Takeaway**: a silent hang in any `arqit_py` script that uses
+`asyncio.gather()` over multiple sessions is worth checking for this
+cwd mismatch FIRST, before suspecting a real concurrency bug or
+cloud-side rate-limiting — it produces no error at all, just nothing
+happening.

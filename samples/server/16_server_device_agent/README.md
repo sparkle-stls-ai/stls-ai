@@ -22,16 +22,29 @@ for this sample (never the throwaway race-test device —
 `aq-sf-device-agent-16-server`/`aq-sf-device-agent-16-client`, config
 JSON already included in `device_agent/`/
 [`samples/client/16_client_device_agent/`](../../client/16_client_device_agent/)):
-real client authentication, real bilocation+P2P negotiation, the
-resulting key landing in the device-agent's Redis-backed store, and a
-separate consumer session — that never called `start()` or
-authenticated the device at all — resolving the exact same key via
-`hint_kid`. See
-[`sidecar/ARQIT_PEERING_NOTES.md`](../../../python/stls-core/sidecar/ARQIT_PEERING_NOTES.md)'s
-2026-11-19 follow-up for the one gotcha hit along the way: a
-brand-new device pair needs an explicit provisioning transition
-before it can peer at all, not just registration (see "Prerequisites"
-below).
+
+- `stls-core` layer: real client authentication, real bilocation+P2P
+  negotiation, the resulting key landing in the device-agent's
+  Redis-backed store, and a separate consumer session — that never
+  called `start()` or authenticated the device at all — resolving the
+  exact same key via `hint_kid`.
+- **Full A2A layer**: a real encrypted call through
+  `server_consumer_1`'s actual HTTP endpoint (`POST .../secure-a2a`),
+  `HTTP 200 OK` — the STLS handshake/decrypt/encrypt round trip
+  completed correctly through a consumer-role replica that never owns
+  the device. The only failure past that point was the already-known,
+  expected one without `GOOGLE_API_KEY` configured (Gemini rejecting
+  the downstream call) — not anything this sample validates.
+
+See [`sidecar/ARQIT_PEERING_NOTES.md`](../../../python/stls-core/sidecar/ARQIT_PEERING_NOTES.md)'s
+2026-11-19 follow-ups for the two gotchas hit along the way: a
+brand-new device pair needs an explicit provisioning transition before
+it can peer at all (see "Prerequisites" below), and relative
+`DEVICE_METADATA_FILEPATH` can make a multi-session `asyncio.gather()`
+script hang silently instead of erroring if the device's own directory
+isn't the caller's cwd — worked around here by using absolute paths in
+this sample's own device config, unlike the relative-path convention
+used elsewhere in this repo.
 
 ## Layout
 
@@ -136,65 +149,54 @@ cp .env.example .env   # fill in GOOGLE_API_KEY
 python server.py
 ```
 
-## Client — there's no dedicated one here, reuse `10_client_ms`'s
+## Client
 
-This sample has no `agent.py`/client of its own: the client side of an
-STLS relationship is unaffected by anything in this sample (it's
-always a normal `arqit_py` client device, `ARQIT_PY_DEVICE_ROLE` is a
-SERVER-role-only concept — see
-`create_consumer_session()`'s own docstring) — so reuse
-[`client_multi_session.py`](../../client/10_client_ms/client_multi_session.py),
-overriding its `BASE_URL`/`AGENT_PATH`/`ARQIT_PY_CLIENT_CONFIG` at
-launch (the same override pattern its own `.env.example` already
-documents for targeting `server_ms_2` instead of `server_ms_1`):
+[`samples/client/16_client_device_agent/client_session.py`](../../client/16_client_device_agent/client_session.py)
+— one real, sequential A2A session (resolve key → one encrypted call),
+confirmed working end-to-end:
 
 ```bash
-cd samples/client/10_client_ms
-cp .env.example .env   # fill in GOOGLE_API_KEY; KEY_PROVIDER_NAME=arqit_py
-
-# against server_consumer_1 (port 8111) — using the device pair
-# already provided for this sample:
-ARQIT_PY_CLIENT_CONFIG=../../client/16_client_device_agent/aq-sf-device-agent-16-client.json \
+cd samples/client/16_client_device_agent
 BASE_URL=http://localhost:8111 AGENT_PATH=/agents/server-consumer-1/secure-a2a \
-python client_multi_session.py
+python client_session.py
 
-# against server_consumer_2 (port 8112) — same client device, same
-# command, just a different target replica:
-ARQIT_PY_CLIENT_CONFIG=../../client/16_client_device_agent/aq-sf-device-agent-16-client.json \
+# against server_consumer_2 instead — same client device, same command,
+# just a different target replica:
 BASE_URL=http://localhost:8112 AGENT_PATH=/agents/server-consumer-2/secure-a2a \
-python client_multi_session.py
+python client_session.py
 ```
 
-`ARQIT_PY_CLIENT_CONFIG` must point at the CLIENT half of the device
-pair — the counterpart to whatever `ARQIT_PY_SERVER_CONFIG`
-`device_agent/.env` uses, never `10_client_ms`'s own
-`aq-sf-client-ms-*.json` (those are paired with `10_server_ms`'s
-devices, a different relationship entirely). Both commands above
-resolve real session keys through the one device-agent — neither
+Both resolve real session keys through the one device-agent — neither
 `server_consumer_1` nor `server_consumer_2` ever calls `start()`
-itself.
+itself. A `GOOGLE_API_KEY`-related error at step 2 means the STLS/
+consumer-role layer worked (the encrypted round trip reached the
+agent code) and only the downstream Gemini call failed — expected,
+not a failure of anything this sample validates.
+
+`samples/client/10_client_ms/client_multi_session.py` is reusable too
+(override `BASE_URL`/`AGENT_PATH`/`ARQIT_PY_CLIENT_CONFIG`, same
+pattern its own `.env.example` shows for targeting `server_ms_2`), but
+its "Test A" always opens 2 CONCURRENT sessions regardless of
+`GROUP_SIZE`/`NUM_GROUPS` — a different (valid) thing to test than
+this sample is about, and the reason `client_session.py` exists as the
+simpler, recommended option instead.
 
 **`KEY_STORE_REDIS_NAMESPACE` for the client is a separate concern**:
 the client device is a different identity from the server device, so
 it needs its OWN namespace, never the same one `device_agent`/the
 consumer replicas use — reusing it collides on the device-level owner
 lock (confirmed directly while validating this sample: see
-`ARQIT_PEERING_NOTES.md`). `client_multi_session.py` doesn't set
-`KEY_STORE_BACKEND`/`KEY_STORE_REDIS_NAMESPACE` at all by default
-(a one-shot client doesn't need Redis sharing), which is the safe
-default here too — only set them if you have a specific reason to.
+`ARQIT_PEERING_NOTES.md`). Neither client script sets
+`KEY_STORE_BACKEND`/`KEY_STORE_REDIS_NAMESPACE` at all by default (a
+one-shot client doesn't need Redis sharing), which is the safe default
+here too — only set them if you have a specific reason to.
 
-## Validated — what's still worth doing yourself
+## Validated
 
-Confirmed end-to-end against the real Arqit cloud and a real Redis
-(see the "Validated" note near the top of this file): real
-authentication, real bilocation+P2P negotiation, the device-agent's
-key landing in Redis, and a consumer session that never called
-`start()` resolving the exact same key via `hint_kid`. Not yet run
-through the full `server.py`/A2A/MCP layer end-to-end (the validation
-above exercised the `stls-core` provider/session layer directly, the
-same way `arqit_device_agent.py`'s own unit tests do, just against the
-real cloud this time) — running an actual A2A request through
-`server_consumer_1`/`server_consumer_2` is the natural next check
-before trusting this in production, same standing caution as every
-other real `arqit_py` path in this project.
+Confirmed end-to-end against the real Arqit cloud and a real Redis —
+see the "Validated" note near the top of this file for the full list,
+`stls-core` layer and the full A2A layer both. Not yet tried: two
+consumer replicas resolving sessions concurrently (only one at a time
+was exercised), and — deliberately never repeated — the original
+two-independent-owners incident this issue is named after, now that
+it's understood and fixed.
