@@ -32,6 +32,13 @@ in consumer mode need `python/stls-core` >= 0.1.10 regardless of which
   the README's sidecar environment-variable reference — set on the
   Python sidecar process itself (same as `KEY_PROVIDER_NAME`), not
   read by any `.ts` code.
+- **`tests/interop/provider-factory-arqit-consumer-real.live.ts`**:
+  confirms the claim above empirically, not just by reading the code —
+  a real Python sidecar process in consumer mode, connected to from
+  Node via `KeySessionProviderFactory.getSessionProvider()`, resolving
+  a kid a real CLIENT already negotiated against a real device-agent.
+  Confirmed: byte-identical key, and the sidecar's own log shows no
+  `uk.arqit.device.*` usage at all in this mode.
 
 ## [0.1.9] — 2026-11-17
 

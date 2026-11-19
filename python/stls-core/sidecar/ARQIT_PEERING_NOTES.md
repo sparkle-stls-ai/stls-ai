@@ -380,3 +380,22 @@ call through a consumer-role replica, `HTTP 200 OK`.
 cwd mismatch FIRST, before suspecting a real concurrency bug or
 cloud-side rate-limiting — it produces no error at all, just nothing
 happening.
+
+## Follow-up (2026-11-19, same day): `ARQIT_PY_DEVICE_ROLE=consumer` confirmed through the Node sidecar path too
+
+Until now this was only reasoned about from reading the code (the
+sidecar's `"start"` RPC calls straight into
+`KeySessionProviderFactory.get_session_provider()` on the Python side,
+which already branches on `ARQIT_PY_DEVICE_ROLE` — see
+`stls_core_providers_factory.py`), never actually run. Ran it for
+real: one Python sidecar process (SERVER role,
+`ARQIT_PY_DEVICE_ROLE=consumer` on its own env) connected to from
+Node via `KeySessionProviderFactory.getSessionProvider()`
+(`node/stls-core/tests/interop/provider-factory-arqit-consumer-real.live.ts`),
+resolving a kid a real CLIENT had already negotiated against a real,
+separately-running `arqit_device_agent.py` — **confirmed**: Node
+correctly resolves the byte-identical key via `hintKid`, and the
+sidecar's own log shows no `uk.arqit.device.*` usage and no device
+authentication at all in this mode, exactly as the code reading
+predicted. No `node/stls-core` source changes were needed — the whole
+point of that code reading holding up.

@@ -185,6 +185,16 @@ builds both roles through this exact factory call and completes a real
 bilocation key agreement, a real handshake, and a real AES-256-GCM
 round trip.
 
+**`ARQIT_PY_DEVICE_ROLE=consumer` (issue #38) verified through this
+path too** — not just reasoned about: `tests/interop/provider-factory-arqit-consumer-real.live.ts`
+connects to a real Python sidecar process running in consumer mode
+(that env var set on the sidecar's OWN process, never read by any
+`.ts` code here) and resolves a real kid a separate real CLIENT
+already negotiated against a real device-agent
+(`python/stls-core/sidecar/arqit_device_agent.py`), confirmed
+byte-identical — and confirmed, from the sidecar's own log, that it
+never touches `uk.arqit.device.*`/authenticates anything in this mode.
+
 ### 4. Redis session cache (multi-instance deployment)
 
 ```ts
