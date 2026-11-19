@@ -108,12 +108,42 @@ cp .env.example .env   # fill in GOOGLE_API_KEY
 python server.py
 ```
 
-Then send a request to either `server_consumer_1` (port 8111) or
-`server_consumer_2` (port 8112) the same way you would against any
-other `arqit_py` sample — see
-[`samples/client/10_client_ms/README.md`](../../client/10_client_ms/README.md)
-for client-side scripts. Both replicas resolve real session keys
-through the one device-agent, neither ever calls `start()` itself.
+## Client — there's no dedicated one here, reuse `10_client_ms`'s
+
+This sample has no `agent.py`/client of its own: the client side of an
+STLS relationship is unaffected by anything in this sample (it's
+always a normal `arqit_py` client device, `ARQIT_PY_DEVICE_ROLE` is a
+SERVER-role-only concept — see
+`create_consumer_session()`'s own docstring) — so reuse
+[`client_multi_session.py`](../../client/10_client_ms/client_multi_session.py),
+overriding its `BASE_URL`/`AGENT_PATH`/`ARQIT_PY_CLIENT_CONFIG` at
+launch (the same override pattern its own `.env.example` already
+documents for targeting `server_ms_2` instead of `server_ms_1`):
+
+```bash
+cd samples/client/10_client_ms
+cp .env.example .env   # fill in GOOGLE_API_KEY; KEY_PROVIDER_NAME=arqit_py
+
+# against server_consumer_1 (port 8111):
+ARQIT_PY_CLIENT_CONFIG=/absolute/path/to/your/device-client.json \
+BASE_URL=http://localhost:8111 AGENT_PATH=/agents/server-consumer-1/secure-a2a \
+python client_multi_session.py
+
+# against server_consumer_2 (port 8112) — same client device, same
+# command, just a different target replica:
+ARQIT_PY_CLIENT_CONFIG=/absolute/path/to/your/device-client.json \
+BASE_URL=http://localhost:8112 AGENT_PATH=/agents/server-consumer-2/secure-a2a \
+python client_multi_session.py
+```
+
+`ARQIT_PY_CLIENT_CONFIG` must point at the CLIENT half of your own
+device pair — the counterpart to whatever `ARQIT_PY_SERVER_CONFIG`
+`device_agent/.env` uses, never `10_client_ms`'s own
+`aq-sf-client-ms-*.json` (those are paired with `10_server_ms`'s
+devices, a different relationship entirely). Both commands above
+resolve real session keys through the one device-agent — neither
+`server_consumer_1` nor `server_consumer_2` ever calls `start()`
+itself.
 
 ## What this does NOT (yet) prove
 
