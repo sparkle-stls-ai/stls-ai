@@ -305,3 +305,38 @@ parallelizing `arqit_py` calls themselves; the provider now does that
 safely on their behalf. The Node sidecar needed no code change of its
 own — it's a Python process running this same module under the hood,
 so it picked up the fix automatically.
+
+## Follow-up (2026-11-19): a brand-new device pair needs an explicit provisioning step before it can peer at all
+
+Registering a fresh device via `RegistrationClient.register_device_v3()`
+(see `stls_core_providers_arqit_py.py`'s `reprovision_handler` fix
+above) leaves it at bootstrap (`provisioningState: ""`) — enough to
+`authenticate_device()` successfully, but **not** enough to actually
+negotiate a bilocation key: confirmed directly while provisioning two
+brand-new devices for
+`samples/server/16_server_device_agent/`/`samples/client/16_client_device_agent/`
+(issue #38's end-to-end validation). Both authenticated fine, but the
+client's `agree_bilocation_key()` failed outright with `HTTP 403` from
+`get_intermediate_response` — a REST call to Arqit's own backend,
+before any local socket traffic between the two processes at all, so
+this is Arqit's backend rejecting the call, not a local config issue.
+
+Cross-checked against the two devices that already DO peer
+successfully in this repo (`aq-sf-server-ms-1`/`aq-sf-client-ms-1`):
+both sit at `provisioningState: "fullyProvisioned"`, not `""`. Running
+both new devices through the same bootstrap→provisioned flow the
+incident-recovery work above already established
+(`authenticate_device()` → `ProvisioningClient.transition_provisioning_state(session)`
+→ `authenticate_device()` again) immediately fixed it: **confirmed
+working end-to-end afterward** — real client authentication, real
+bilocation+P2P negotiation, the resulting key landing in the
+device-agent's Redis-backed store, and a separate consumer process
+that never called `start()` resolving the exact same key via
+`hint_kid`.
+
+**Consequence**: any brand-new `arqit_py` device pair needs this
+explicit provisioning transition before first use, not just
+registration — `register_device_v3()` alone is not enough. Every
+device already committed in this repo happened to have this done at
+some point in its history; it just wasn't written down anywhere that
+a *new* pair needs it too.
