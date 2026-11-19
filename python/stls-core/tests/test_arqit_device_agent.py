@@ -14,6 +14,10 @@ Coverage:
   H05 — unknown path -> 404
   D01 — run(): a successful provider.start() sets state.started
   D02 — run(): a failing provider.start() sets state.failed and re-raises
+  D03 — run(): a real SIGTERM makes run() return normally (not via
+        task cancellation) and calls provider.stop() -- D01 only
+        exercises task cancellation, which bypasses the signal
+        handler/stop_event path entirely
 """
 
 from __future__ import annotations
@@ -142,6 +146,44 @@ def test_d01_run_sets_started_on_successful_start(monkeypatch):
         asyncio.run(_drive())
 
     fake_provider.start.assert_awaited_once()
+
+
+def test_d03_real_sigterm_triggers_graceful_stop(monkeypatch):
+    """D03 — a real SIGTERM (not task.cancel()) is caught by
+    loop.add_signal_handler(), sets stop_event, and run() returns
+    normally having awaited provider.stop() -- the actual shutdown
+    path a real SIGTERM in production exercises, never previously
+    tested (D01 only covers task cancellation, a different path that
+    skips the signal handler/stop_event logic entirely).
+    """
+    import signal as signal_module
+
+    fake_provider = AsyncMock()
+    fake_provider.start = AsyncMock(return_value=None)
+    fake_provider.stop = AsyncMock(return_value=None)
+    fake_factory = AsyncMock()
+    fake_factory.create_provider_server = lambda port, options: fake_provider
+
+    with patch(
+        "stls_core.providers.stls_core_providers_arqit_py.KeyProviderArqitPy",
+        return_value=fake_factory,
+    ):
+        async def _drive():
+            task = asyncio.create_task(run(health_port=0))
+            for _ in range(100):
+                if fake_provider.start.called:
+                    break
+                await asyncio.sleep(0.01)
+            os.kill(os.getpid(), signal_module.SIGTERM)
+            # run() should return normally -- no CancelledError, no
+            # timeout -- because the signal handler set stop_event and
+            # run()'s own `await stop_event.wait()` unblocked.
+            await asyncio.wait_for(task, timeout=5.0)
+
+        asyncio.run(_drive())
+
+    fake_provider.start.assert_awaited_once()
+    fake_provider.stop.assert_awaited_once()
 
 
 def test_d02_run_sets_failed_and_reraises_on_start_error(monkeypatch):
