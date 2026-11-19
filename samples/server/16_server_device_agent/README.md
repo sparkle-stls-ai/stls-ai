@@ -173,20 +173,12 @@ consumer-role layer worked (the encrypted round trip reached the
 agent code) and only the downstream Gemini call failed — expected,
 not a failure of anything this sample validates.
 
-`samples/client/10_client_ms/client_multi_session.py` is reusable too
-(override `BASE_URL`/`AGENT_PATH`/`ARQIT_PY_CLIENT_CONFIG`, same
-pattern its own `.env.example` shows for targeting `server_ms_2`), but
-its "Test A" always opens 2 CONCURRENT sessions regardless of
-`GROUP_SIZE`/`NUM_GROUPS` — a different (valid) thing to test than
-this sample is about, and the reason `client_session.py` exists as the
-simpler, recommended option instead.
-
 **`KEY_STORE_REDIS_NAMESPACE` for the client is a separate concern**:
 the client device is a different identity from the server device, so
 it needs its OWN namespace, never the same one `device_agent`/the
 consumer replicas use — reusing it collides on the device-level owner
 lock (confirmed directly while validating this sample: see
-`ARQIT_PEERING_NOTES.md`). Neither client script sets
+`ARQIT_PEERING_NOTES.md`). `client_session.py` doesn't set
 `KEY_STORE_BACKEND`/`KEY_STORE_REDIS_NAMESPACE` at all by default (a
 one-shot client doesn't need Redis sharing), which is the safe default
 here too — only set them if you have a specific reason to.
