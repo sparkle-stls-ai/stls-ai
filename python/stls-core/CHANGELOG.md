@@ -45,6 +45,15 @@ real cloud, requiring a manual deregister/re-register to recover.
   CLIENT replicas for the same device — not just two SERVER ones.
   `ARQIT_PY_DEVICE_ROLE=consumer` sessions never touch this lock.
 - New env var `ARQIT_PY_OWNER_LOCK_TTL` (default: 60 seconds).
+- **`sidecar/arqit_device_agent.py`**: a standalone process whose only
+  job is to own the device (call `start()`, feed Redis) — no
+  HTTP/A2A/MCP serving of its own, with `/healthz`/`/livez` for
+  Kubernetes probes. The actual runnable artifact for the "one owner,
+  N consumers" topology above. New
+  [`samples/server/16_server_device_agent/`](../../samples/server/16_server_device_agent/README.md)
+  demonstrates it end-to-end: one device-agent + two
+  `ARQIT_PY_DEVICE_ROLE=consumer` `server.py` replicas sharing one
+  device, with zero code changes to `server.py` itself.
 
 ### Fixed
 

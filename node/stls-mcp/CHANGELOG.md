@@ -7,6 +7,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.7] — 2026-11-19
+
+No `.ts` source changes. Picks up `node/stls-core` 0.1.10 (`file:../stls-core`)
+and documents the cross-process `arqit_py` device-identity conflict
+fixed there (issue #38) in this README's Arqit notes —
+`ARQIT_PY_DEVICE_ROLE=consumer` and the new device-level owner lock
+are read inside the Python sidecar's own
+`KeySessionProviderFactory.get_session_provider()`, so a Node-fronted
+`arqit_py` SERVER session picks up both automatically.
+
 ## [0.1.6] — 2026-11-17
 
 No code changes in `src/` — two unrelated updates bundled in this
