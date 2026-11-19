@@ -9,6 +9,30 @@ of which this package is the TypeScript port.
 
 ---
 
+## [0.1.10] — 2026-11-19
+
+Mirrors [`python/stls-core` 0.1.10](../../python/stls-core/CHANGELOG.md)
+(issue #38) — no `.ts` source changes in this release. The new
+`ARQIT_PY_DEVICE_ROLE=consumer` mode and the device-level owner lock
+both live inside `KeySessionProviderFactory.get_session_provider()`
+and `KeyProviderClientArqitPy`/`KeyProviderServerArqitPy.start()` on
+the Python side, which is exactly what the Python sidecar process
+(`python/stls-core/sidecar/arqit_sidecar.py`) runs under the hood for
+every `provider_name="arqit_py"` session — `arqit-sidecar.ts`'s "start"
+RPC calls straight into that same code, so both land here for free.
+
+Version bumped in lockstep with `python/stls-core`, per this file's
+own versioning note, and because operators launching a sidecar process
+in consumer mode need `python/stls-core` >= 0.1.10 regardless of which
+`node/stls-core` they're on.
+
+### Added
+
+- Documented `ARQIT_PY_DEVICE_ROLE` and `ARQIT_PY_OWNER_LOCK_TTL` in
+  the README's sidecar environment-variable reference — set on the
+  Python sidecar process itself (same as `KEY_PROVIDER_NAME`), not
+  read by any `.ts` code.
+
 ## [0.1.9] — 2026-11-17
 
 Widens the STLS handshake proof (issue #36), mirroring

@@ -15,6 +15,8 @@ Copertura:
   M06 — wait_for_new_key() trova una chiave aggiunta in ritardo
   M07 — wait_for_new_key() restituisce None al timeout se seen_key_ids copre tutto
   M08 — wait_for_new_key() salta i kid presenti in seen_key_ids
+  M09 — startup_seen_keys() restituisce sempre set()
+  M10 — owner-lock methods are no-ops
 
   RedisArqitKeyStore  (fakeredis — nessun Redis reale richiesto)
   ──────────────────────────────────────────────────────────────
@@ -36,6 +38,10 @@ Copertura:
   R19 — with STLS_CORE_ATREST_KEY set, key_data is sealed and still
          round-trips through get() (issue #20 (b))
   R20 — get() with the wrong KEK fails closed (returns None), doesn't crash
+  R21 — try_acquire_owner_lock() succeeds when free
+  R22 — try_acquire_owner_lock() rejects a second, distinct owner (issue #38)
+  R23 — renew_owner_lock() extends the TTL only if already held
+  R24 — release_owner_lock() only by the current holder
 
   ArqitKeyStoreFactory
   ─────────────────────
@@ -45,6 +51,9 @@ Copertura:
   F04 — KEY_STORE_BACKEND=unknown → ValueError
   F05 — namespace passato esplicitamente viene usato
   F06 — namespace letto da KEY_STORE_REDIS_NAMESPACE se non passato
+  F08 — build_owner_lock_store() con backend non-redis → no-op
+  F09 — build_owner_lock_store() namespace senza suffisso di ruolo
+  F10 — build_owner_lock_store() condiviso tra istanze CLIENT diverse
 """
 
 from __future__ import annotations
@@ -178,6 +187,20 @@ class TestInMemoryArqitKeyStore:
         store.add(KID1, DATA1)
         store.add(KID2, DATA2)
         assert store.startup_seen_keys() == set()
+
+    def test_m10_owner_lock_is_a_noop(self):
+        """M10 — owner-lock methods are no-ops for InMemoryArqitKeyStore.
+
+        No cross-process sharing is possible for this backend in the
+        first place, so there's nothing to guard (issue #38):
+        try_acquire_owner_lock() always succeeds (returns None), and
+        renew/release never raise.
+        """
+        store = InMemoryArqitKeyStore()
+        assert store.try_acquire_owner_lock("owner-a", ttl=60) is None
+        assert store.try_acquire_owner_lock("owner-b", ttl=60) is None
+        store.renew_owner_lock("owner-a", ttl=60)
+        store.release_owner_lock("owner-a")
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +457,41 @@ class TestRedisArqitKeyStore:
         writer.add(KID1, DATA1)
         assert reader.get(KID1) is None
 
+    def test_r21_try_acquire_owner_lock_succeeds_when_free(self, rstore, rfake):
+        """R21 — try_acquire_owner_lock() succeeds (returns None) when nobody holds it yet."""
+        assert rstore.try_acquire_owner_lock("owner-a", ttl=60) is None
+        ttl = rfake.ttl(rstore._owner_lock_key())
+        assert 0 < ttl <= 60
+
+    def test_r22_try_acquire_owner_lock_rejects_second_owner(self, rstore):
+        """R22 — a second, distinct owner_id is rejected while the lock is held (issue #38)."""
+        assert rstore.try_acquire_owner_lock("owner-a", ttl=60) is None
+        conflicting = rstore.try_acquire_owner_lock("owner-b", ttl=60)
+        assert conflicting == "owner-a"
+
+    def test_r23_renew_owner_lock_extends_ttl_only_if_held(self, rstore, rfake):
+        """R23 — renew_owner_lock() (SET ... XX) only refreshes an existing lock, never creates one."""
+        # Not held yet: XX means this is a no-op, no key created.
+        rstore.renew_owner_lock("owner-a", ttl=60)
+        assert rfake.get(rstore._owner_lock_key()) is None
+
+        rstore.try_acquire_owner_lock("owner-a", ttl=1)
+        time.sleep(0.3)
+        rstore.renew_owner_lock("owner-a", ttl=60)
+        ttl = rfake.ttl(rstore._owner_lock_key())
+        assert ttl > 1
+
+    def test_r24_release_owner_lock_only_by_current_holder(self, rstore):
+        """R24 — release_owner_lock() is a no-op for a non-holder, deletes it for the real holder."""
+        rstore.try_acquire_owner_lock("owner-a", ttl=60)
+
+        # A non-holder releasing must not free the lock out from under owner-a.
+        rstore.release_owner_lock("owner-b")
+        assert rstore.try_acquire_owner_lock("owner-b", ttl=60) == "owner-a"
+
+        rstore.release_owner_lock("owner-a")
+        assert rstore.try_acquire_owner_lock("owner-b", ttl=60) is None
+
 
 # ---------------------------------------------------------------------------
 # F — ArqitKeyStoreFactory
@@ -542,3 +600,46 @@ class TestArqitKeyStoreFactory:
             with patch("redis.Redis.from_url"):
                 redis_store = ArqitKeyStoreFactory.build()
         assert isinstance(redis_store, ArqitKeyStoreBase)
+
+    def test_f08_owner_lock_store_memory_backend_is_noop(self):
+        """F08 — build_owner_lock_store() con backend non-redis → InMemoryArqitKeyStore (no-op)."""
+        with patch.dict(os.environ, {"KEY_STORE_BACKEND": "memory"}):
+            store = ArqitKeyStoreFactory.build_owner_lock_store()
+        assert isinstance(store, InMemoryArqitKeyStore)
+
+    def test_f09_owner_lock_store_namespace_has_no_role_suffix(self):
+        """F09 — build_owner_lock_store() usa {base_ns}:device-lock, senza suffisso di ruolo
+        (issue #38): a differenza di build(), è lo stesso per CLIENT e SERVER.
+        """
+        env = {
+            "KEY_STORE_BACKEND": "redis",
+            "KEY_STORE_REDIS_URL": "redis://localhost:6379",
+            "KEY_STORE_REDIS_NAMESPACE": "stls-sk",
+        }
+        with patch.dict(os.environ, env):
+            with patch("redis.Redis.from_url"):
+                store = ArqitKeyStoreFactory.build_owner_lock_store()
+        assert isinstance(store, RedisArqitKeyStore)
+        assert store._ns == "stls-sk:device-lock"
+
+    def test_f10_owner_lock_store_shared_across_client_instance_ids(self):
+        """F10 — build_owner_lock_store() non dipende da instance_id: due repliche CLIENT
+        per lo stesso device (stesso KEY_STORE_REDIS_NAMESPACE, instance_id diversi,
+        come genera KeyProviderClientArqitPy per ogni processo) finiscono sullo
+        STESSO lock — a differenza di build(role="client", instance_id=...), che le
+        isolerebbe. È proprio questo che fa funzionare il lock come guardia a
+        livello di device invece che a livello di singola sessione.
+        """
+        env = {
+            "KEY_STORE_BACKEND": "redis",
+            "KEY_STORE_REDIS_URL": "redis://localhost:6379",
+            "KEY_STORE_REDIS_NAMESPACE": "stls-sk",
+        }
+        with patch.dict(os.environ, env):
+            with patch("redis.Redis.from_url"):
+                lock_store_a = ArqitKeyStoreFactory.build_owner_lock_store()
+                lock_store_b = ArqitKeyStoreFactory.build_owner_lock_store()
+                client_store_a = ArqitKeyStoreFactory.build(role="client", instance_id="uuid-a")
+                client_store_b = ArqitKeyStoreFactory.build(role="client", instance_id="uuid-b")
+        assert lock_store_a._ns == lock_store_b._ns == "stls-sk:device-lock"
+        assert client_store_a._ns != client_store_b._ns

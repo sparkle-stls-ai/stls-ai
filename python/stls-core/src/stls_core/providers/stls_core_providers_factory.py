@@ -189,6 +189,23 @@ class KeySessionProviderFactory:
                 "Set the environment variable or pass name= explicitly."
             )
 
+        # ARQIT_PY_DEVICE_ROLE=consumer (issue #38): this replica never
+        # owns/authenticates the Arqit device — it only resolves session
+        # keys an ARQIT_PY_DEVICE_ROLE=owner process elsewhere already put
+        # in the shared Redis-backed store. Checked BEFORE
+        # KeyProviderFactory().get_provider(), which would otherwise
+        # unconditionally require the [arqit_py] extra/wheels to be
+        # installed even though this path never touches uk.arqit.device.*.
+        # Only meaningful for the SERVER role — a CLIENT session always
+        # negotiates its own key, "consumer" has no equivalent there.
+        if (
+            provider_name == "arqit_py"
+            and session_type == KeySessionProvider.KeySessionProviderType.SERVER
+            and os.getenv("ARQIT_PY_DEVICE_ROLE", "owner").strip().lower() == "consumer"
+        ):
+            from .stls_core_providers_arqit_py import KeyProviderArqitPy
+            return KeyProviderArqitPy().create_consumer_session()
+
         key_provider: KeyProvider = KeyProviderFactory().get_provider(provider_name)
         resolved_options = options or {}
 
