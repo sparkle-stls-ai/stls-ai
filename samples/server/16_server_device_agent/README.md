@@ -187,8 +187,14 @@ here too — only set them if you have a specific reason to.
 
 Confirmed end-to-end against the real Arqit cloud and a real Redis —
 see the "Validated" note near the top of this file for the full list,
-`stls-core` layer and the full A2A layer both. Not yet tried: two
-consumer replicas resolving sessions concurrently (only one at a time
-was exercised), and — deliberately never repeated — the original
-two-independent-owners incident this issue is named after, now that
-it's understood and fixed.
+`stls-core` layer and the full A2A layer both. Also confirmed
+(2026-11-19,
+[`client_concurrent.py`](../../client/16_client_device_agent/client_concurrent.py)):
+`server_consumer_1` and `server_consumer_2` both resolving distinct
+real sessions CONCURRENTLY, each correctly reading its own kid from
+Redis while the other does the same in a different process — two
+genuinely concurrent `HTTP 200 OK` responses, no cross-talk.
+
+Deliberately never repeated: the original two-independent-owners
+incident this issue is named after, now that it's understood and
+fixed — reproducing it costs a real device getting bricked.
