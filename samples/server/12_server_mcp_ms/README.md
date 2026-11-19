@@ -131,3 +131,15 @@ sidecar refuses to start without one).
   `hint_kid` to the real Python provider. Confirmed fixed: re-ran
   `client_multi_session.ts` with genuinely concurrent sessions — 3/3
   and 6/6 clean passes, 0 errors.
+
+**Re-confirmed (2026-11-19)** as a regression check after the issue
+#38 changes on the Python side (device-level owner lock,
+`reprovision_handler` fix) — this sample never sets
+`KEY_STORE_BACKEND=redis`, so the owner lock is a no-op here. `pqc`
+re-run directly; `arqit_py` re-run through the full real path (two
+separate sidecar processes, one per role, against the real cloud,
+genuinely concurrent `client_multi_session.ts`): 6/6 sessions, 0
+errors, unique `session_id`s, same as the original validation above.
+Also surfaced and fixed a real `SOCKET_LISTENING_PORT` collision
+between an unrelated new sample and this one's device — see
+`sidecar/ARQIT_PEERING_NOTES.md`'s port registry.

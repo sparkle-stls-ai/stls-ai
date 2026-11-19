@@ -50,3 +50,12 @@ providers against the real client in
 [`11_client_mcp_ms`](../../client/11_client_mcp_ms/README.md) — see
 that README for the full matrix and the one caveat (Gemini API quota
 blocking the final LLM answer, unrelated to this code).
+
+**Re-confirmed (2026-11-19)** as a regression check after the issue
+#38 changes to `stls_core_providers_arqit_py.py` (device-level owner
+lock, `reprovision_handler` fix) — both unaffected here since this
+sample never sets `KEY_STORE_BACKEND=redis` (the owner lock is a no-op
+on the default in-memory store) and never hits the SDK's bootstrap
+fallback. `pqc` and `arqit_py` both re-run against the real client
+with genuine concurrency: 6/6 sessions, 0 errors, unique `session_id`s,
+same as the original validation.

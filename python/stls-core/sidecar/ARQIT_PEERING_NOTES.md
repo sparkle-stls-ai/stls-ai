@@ -399,3 +399,23 @@ sidecar's own log shows no `uk.arqit.device.*` usage and no device
 authentication at all in this mode, exactly as the code reading
 predicted. No `node/stls-core` source changes were needed — the whole
 point of that code reading holding up.
+
+**Side finding, same session**: re-running `11_server_mcp_ms`/`12_server_mcp_ms`
+as a regression check (both roles, both `pqc` and `arqit_py`, genuine
+concurrency, all still PASS after today's changes) surfaced a real
+`SOCKET_LISTENING_PORT` collision — `16_server_device_agent`'s
+generated device had been given `8891`, already used by
+`11_server_mcp_ms/server_mcp_ms_1`'s device. Harmless as long as the
+two are never run at the same time (which never happened by luck, not
+by design), but worth avoiding — moved `16_server_device_agent`'s
+device to `8995`. Ports already claimed by existing samples, check
+before picking one for a new device:
+
+| Port(s) | Sample |
+|---|---|
+| 8881 / 8882 | `10_server_ms` / `10_client_ms` |
+| 8889 | `sofia-client-secure*`, `5_adk_doc_gen`, `server6` |
+| 8891 / 8892 | `11_server_mcp_ms` / `11_client_mcp_ms` |
+| 8911 / 8912 | `12_server_mcp_ms` / `12_client_mcp_ms` |
+| 8995 | `16_server_device_agent` / `16_client_device_agent` |
+| 8999 | `_arqit_race_fixtures` (stls-core's own test suite) |
