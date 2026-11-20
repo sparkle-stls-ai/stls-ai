@@ -26,10 +26,20 @@ DSN = os.getenv(
     "postgresql://postgres:postgres@localhost:5432/stls_identity_test",
 )
 
+# Explicit test-only table names — NEVER rely on the ambient
+# IDENTITY_PG_DID_TABLE/IDENTITY_PG_STATUS_LIST_TABLE fallback here.
+# Those env vars are meant to carry a deployment's real production
+# table names; if IDENTITY_TEST_PG_DSN were ever misconfigured to
+# coincide with a production DSN (it happened once — see issue history),
+# a fixture that forgot `table=` would TRUNCATE the real table instead
+# of a harmless, nonexistent one.
+_TEST_DID_TABLE = "stls_identity_test_did_documents"
+_TEST_STATUS_LIST_TABLE = "stls_identity_test_status_list_cache"
+
 
 @pytest.fixture
 async def did_store():
-    store = PostgresDIDDocumentStore(dsn=DSN)
+    store = PostgresDIDDocumentStore(dsn=DSN, table=_TEST_DID_TABLE)
     pool = await store._get_pool()
     async with pool.acquire() as conn:
         await conn.execute(store.get_ddl())
@@ -42,7 +52,7 @@ async def did_store():
 
 @pytest.fixture
 async def status_cache_store():
-    store = PostgresStatusListCacheStore(dsn=DSN)
+    store = PostgresStatusListCacheStore(dsn=DSN, table=_TEST_STATUS_LIST_TABLE)
     pool = await store._get_pool()
     async with pool.acquire() as conn:
         await conn.execute(store.get_ddl())

@@ -11,6 +11,7 @@ from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 from google.adk.agents.remote_a2a_agent import AGENT_CARD_WELL_KNOWN_PATH
 
 from stls_a2a import ContextualSecureRemoteA2aAgent
+from stls_identity import identity_challenge_handler_from_env
 
 from dotenv import load_dotenv
 import httpx
@@ -42,6 +43,36 @@ API_KEY_API_KEYS=os.getenv("API_KEY_API_KEYS", "")
 
 BASE_URL_MONITORING=os.getenv("BASE_URL_MONITORING", "http://localhost:8011").rstrip("/")
 API_KEY_MONITORING=os.getenv("API_KEY_MONITORING", "")
+
+BASE_URL_IDENTITY=os.getenv("BASE_URL_IDENTITY", "http://localhost:8014").rstrip("/")
+API_KEY_IDENTITY=os.getenv("API_KEY_IDENTITY", "")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COORDINATOR'S OWN IDENTITY (issue #45) — optional, off until bootstrapped
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# One call, fully driven by IDENTITY_AGENT_ID + GOVERNING_AUTHORITY_HOST
+# (see coordinator/.env) — generalized into stls_identity itself
+# (load_identity_presenter()/identity_challenge_handler_from_env(),
+# stls_id_presentation.py) from what used to be ~40 lines of hand-rolled
+# keystore/Redis/DID resolution here. Reads the SAME persistent stores
+# identity_manager's own tools (tools_identity.py) write to — the
+# identity keystore (private key) and the credential cache (Redis) —
+# NOT a static snapshot file: whichever path bootstraps/issues the
+# coordinator's identity (the standalone bootstrap_coordinator_identity.py
+# script, or just asking sofia_identity_agent in chat) ends up in the
+# SAME stores, so this always picks up the latest one on every restart.
+#
+# IDENTITY_AGENT_ID unset, or no key/credential found for it yet:
+# returns None — no presentation ever attached, same as not configuring
+# identity_challenge_handler at all. The coordinator keeps working
+# against every sub-agent exactly as before; only sofia_identity_agent
+# calls fail (with ERR_IDENTITY_CHALLENGE_REQUIRED) once
+# identity_manager's own REQUIRE_IDENTITY_PRESENTATION=true, until
+# bootstrapped.
+
+_identity_challenge_handler = identity_challenge_handler_from_env()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -85,7 +116,26 @@ sofia_monitoring_agent = RemoteA2aAgent(
         headers={"X-API-Key": API_KEY_MONITORING},
         timeout=httpx.Timeout(60.0),
     ),
-    
+
+)
+
+
+sofia_identity_agent = ContextualSecureRemoteA2aAgent(
+    name="sofia_identity_agent",
+    description=(
+        "Agent to manage W3C DID / Verifiable Credential identities for agents "
+        "running on the Sofia Platform — bootstrap/issue/revoke identities, "
+        "onboard trust anchors, validate credentials."
+    ),
+    agent_card=f"{BASE_URL_IDENTITY}{AGENT_CARD_WELL_KNOWN_PATH}",
+    extra_headers={"X-API-Key": API_KEY_IDENTITY},
+    context_keys=[],
+    # Issue #45: None until the coordinator has been bootstrapped — see
+    # _identity_challenge_handler above. Once identity_manager's own
+    # REQUIRE_IDENTITY_PRESENTATION=true, this is what lets the retry-once
+    # challenge/presentation flow happen transparently (same mechanism as
+    # samples/server/19_identity_presentation).
+    identity_challenge_handler=_identity_challenge_handler,
 )
 
 
@@ -106,13 +156,18 @@ root_agent = Agent(
         "2. 'sofia_api_keys_agent' — manage API keys: create, revoke, update scopes, "
         "list keys per client, usage statistics.\n"
         "3. 'sofia_redis_agent' — inspect and manage Redis: browse tasks by state or ID, "
-        "inspect API key cache, check revocation SET, monitor server health.\n\n"
+        "inspect API key cache, check revocation SET, monitor server health.\n"
+        "4. 'sofia_identity_agent' — manage W3C DID / Verifiable Credential identities: "
+        "bootstrap/issue/revoke an agent's identity, onboard/list/revoke trust anchors, "
+        "validate identity or operational (delegated) credentials.\n\n"
         "Routing hints:\n"
         "- Questions about 'which agents are running' or 'is agent X healthy' → sofia_monitoring_agent\n"
         "- Requests to 'create/revoke/list API keys' → sofia_api_keys_agent\n"
         "- Questions about 'tasks', 'Redis memory', 'cache entries' → sofia_redis_agent\n"
+        "- Questions about identity, DID, Verifiable Credentials, trust anchors or "
+        "delegation → sofia_identity_agent\n"
         "- For cross-domain questions (e.g. 'is the key for agent X in Redis?') "
         "coordinate both sofia_api_keys_agent and sofia_redis_agent."
     ),
-    sub_agents=[sofia_monitoring_agent, sofia_api_keys_agent, sofia_redis_agent],
+    sub_agents=[sofia_monitoring_agent, sofia_api_keys_agent, sofia_redis_agent, sofia_identity_agent],
 )

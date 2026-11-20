@@ -19,6 +19,7 @@ from .stls_id_models import (
     NetworkAuthorityCredential,
     OperationalCredential,
     OperationalCredentialSubject,
+    PRESENTATION_HEADER,
     StatusListCredential,
     StatusPurpose,
     VerificationMethod,
@@ -30,6 +31,7 @@ from .stls_id_models import (
 from .stls_id_did import (
     bootstrap_signing_key,
     build_did_document,
+    decode_multibase_ed25519_public_key,
     did_to_resolution_url,
     domain_and_path_to_did,
 )
@@ -39,11 +41,33 @@ from .stls_id_keystore import (
     InMemoryIdentityKeystore,
     RedisIdentityKeystore,
 )
-from .stls_id_status import MRI_SECONDS, StatusListManager
+from .stls_id_credential_cache import (
+    IdentityCredentialCacheBase,
+    IdentityCredentialCacheFactory,
+    InMemoryIdentityCredentialCache,
+    RedisIdentityCredentialCache,
+)
+from .stls_id_status import (
+    MRI_SECONDS,
+    StatusListManager,
+    fetch_remote_credential_status,
+    fetch_status_bit,
+)
 from .stls_id_issuer import DEFAULT_VALIDITY, IdentityManager
 from .stls_id_delegation import DEFAULT_OPERATIONAL_VALIDITY, DelegationManager
-from .stls_id_presentation import build_verifiable_presentation
+from .stls_id_presentation import (
+    IdentityPresenter,
+    attach_identity_presentation_header,
+    build_verifiable_presentation,
+    identity_challenge_handler_from_env,
+    load_identity_presenter,
+)
 from .stls_id_verifier import CredentialVerificationError, Sentinel
+from .stls_id_request_verifier import (
+    PresentationVerificationResult,
+    RequestPresentationVerifier,
+    StatusResolver,
+)
 from .stls_id_postgres_store import (
     DDL,
     DIDDocumentStoreBase,
@@ -64,7 +88,7 @@ from .stls_id_trust_registry_client import (
 )
 from .stls_id_trust_registry_bridge import create_trust_registry_router
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     # models
@@ -76,6 +100,7 @@ __all__ = [
     "NetworkAuthorityCredential",
     "OperationalCredential",
     "OperationalCredentialSubject",
+    "PRESENTATION_HEADER",
     "StatusListCredential",
     "StatusPurpose",
     "VerificationMethod",
@@ -86,6 +111,7 @@ __all__ = [
     # did
     "bootstrap_signing_key",
     "build_did_document",
+    "decode_multibase_ed25519_public_key",
     "did_to_resolution_url",
     "domain_and_path_to_did",
     # keystore
@@ -93,9 +119,16 @@ __all__ = [
     "IdentityKeystoreFactory",
     "InMemoryIdentityKeystore",
     "RedisIdentityKeystore",
+    # credential_cache
+    "IdentityCredentialCacheBase",
+    "IdentityCredentialCacheFactory",
+    "InMemoryIdentityCredentialCache",
+    "RedisIdentityCredentialCache",
     # status
     "MRI_SECONDS",
     "StatusListManager",
+    "fetch_remote_credential_status",
+    "fetch_status_bit",
     # issuer
     "DEFAULT_VALIDITY",
     "IdentityManager",
@@ -103,10 +136,18 @@ __all__ = [
     "DEFAULT_OPERATIONAL_VALIDITY",
     "DelegationManager",
     # presentation
+    "IdentityPresenter",
+    "attach_identity_presentation_header",
     "build_verifiable_presentation",
+    "identity_challenge_handler_from_env",
+    "load_identity_presenter",
     # verifier
     "CredentialVerificationError",
     "Sentinel",
+    # a2a_request_verifier
+    "PresentationVerificationResult",
+    "RequestPresentationVerifier",
+    "StatusResolver",
     # postgres_store
     "DDL",
     "DIDDocumentStoreBase",

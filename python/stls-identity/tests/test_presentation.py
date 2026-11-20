@@ -15,7 +15,9 @@ Covers:
       usato nel deck)
 """
 
+import base64
 import datetime as dt
+import json
 import uuid
 
 import pytest
@@ -24,8 +26,12 @@ from stls_identity import (
     CredentialVerificationError,
     DelegationManager,
     IdentityManager,
+    IdentityPresenter,
     InMemoryIdentityKeystore,
+    PRESENTATION_HEADER,
     Sentinel,
+    VerifiablePresentation,
+    attach_identity_presentation_header,
     bootstrap_signing_key,
     build_did_document,
     build_verifiable_presentation,
@@ -240,6 +246,34 @@ async def test_presentation_replay_with_stale_challenge_is_rejected():
         s.sentinel.verify_presentation_proof(vp, expected_challenge=new_challenge)
 
 
+async def test_presentation_replay_cannot_be_salvaged_by_forging_the_challenge_field():
+    """
+    Regression for a real bug found while building issue #15 gap #1:
+    challenge must be covered by the signature (build_verifiable_presentation
+    now signs over proof-minus-proofValue, not just {holder,
+    verifiableCredential}), or a captured VP's proof.challenge could be
+    overwritten in place to match a NEW expected challenge — no private
+    key needed, since the signature bytes alone wouldn't change. Distinct
+    from test_presentation_replay_with_stale_challenge_is_rejected above,
+    which never mutates the captured VP.
+    """
+    s = await _scenario()
+    original_challenge = str(uuid.uuid4())
+
+    vp = build_verifiable_presentation(
+        holder_did=s.grantor_doc.id, holder_signing_key=s.grantor_key,
+        holder_verification_method_id=s.grantor_vm_id,
+        credentials=[s.grantor_identity_credential], challenge=original_challenge,
+    )
+
+    # Attacker captures vp, overwrites ONLY proof.challenge — no key access.
+    new_challenge = str(uuid.uuid4())
+    vp.proof.challenge = new_challenge
+
+    with pytest.raises(CredentialVerificationError, match="signature"):
+        s.sentinel.verify_presentation_proof(vp, expected_challenge=new_challenge)
+
+
 # ---------------------------------------------------------------------------
 # Tamper check — modificare il contenuto dopo la firma deve invalidarla
 # ---------------------------------------------------------------------------
@@ -321,6 +355,64 @@ async def test_unpack_presentation_rejects_empty_list():
         # costruibile in modo sensato per questo flusso — il builder non
         # impedisce esplicitamente la lista vuota, ma unpack_presentation
         # deve comunque rifiutarla invece di restituire qualcosa di ambiguo.
-        from stls_identity import VerifiablePresentation
         vp = VerifiablePresentation(holder="did:web:example.com:agents:1", verifiable_credential=[])
         Sentinel.unpack_presentation(vp)
+
+
+# ---------------------------------------------------------------------------
+# Wire helpers (issue #15 gap #1) — attach_identity_presentation_header()
+# and IdentityPresenter, the client-side counterpart of
+# RequestPresentationVerifier (test_request_verifier.py)
+# ---------------------------------------------------------------------------
+
+async def test_attach_identity_presentation_header_roundtrips():
+    s = await _scenario()
+    challenge = str(uuid.uuid4())
+    vp = build_verifiable_presentation(
+        holder_did=s.grantor_doc.id, holder_signing_key=s.grantor_key,
+        holder_verification_method_id=s.grantor_vm_id,
+        credentials=[s.grantor_identity_credential], challenge=challenge,
+    )
+
+    headers = attach_identity_presentation_header(vp)
+    assert list(headers.keys()) == [PRESENTATION_HEADER]
+
+    decoded = VerifiablePresentation.model_validate(
+        json.loads(base64.b64decode(headers[PRESENTATION_HEADER]))
+    )
+    assert decoded == vp
+    # and it must still verify — the round-trip through JSON/base64
+    # mustn't lose anything the signature covers.
+    s.sentinel.verify_presentation_proof(decoded, expected_challenge=challenge)
+
+
+async def test_identity_presenter_on_challenge_produces_a_fresh_header_each_time():
+    s = await _scenario()
+    presenter = IdentityPresenter(
+        holder_did=s.grantor_doc.id, holder_signing_key=s.grantor_key,
+        holder_verification_method_id=s.grantor_vm_id,
+        credentials=[s.grantor_identity_credential],
+    )
+
+    challenge_1 = str(uuid.uuid4())
+    challenge_2 = str(uuid.uuid4())
+    headers_1 = presenter.on_challenge(challenge_1)
+    headers_2 = presenter.on_challenge(challenge_2)
+
+    assert headers_1[PRESENTATION_HEADER] != headers_2[PRESENTATION_HEADER]
+
+    for headers, challenge in ((headers_1, challenge_1), (headers_2, challenge_2)):
+        decoded = VerifiablePresentation.model_validate(
+            json.loads(base64.b64decode(headers[PRESENTATION_HEADER]))
+        )
+        s.sentinel.verify_presentation_proof(decoded, expected_challenge=challenge)
+
+    # a header signed for challenge_1 must NOT verify against challenge_2
+    # (this is exactly the forged-challenge regression above, from the
+    # other direction: swapping in a mismatched header/challenge pair
+    # rather than mutating one in place).
+    decoded_1 = VerifiablePresentation.model_validate(
+        json.loads(base64.b64decode(headers_1[PRESENTATION_HEADER]))
+    )
+    with pytest.raises(CredentialVerificationError):
+        s.sentinel.verify_presentation_proof(decoded_1, expected_challenge=challenge_2)

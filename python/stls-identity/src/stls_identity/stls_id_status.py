@@ -28,7 +28,10 @@ import base64
 import gzip
 import datetime as dt
 
+import httpx
 import redis.asyncio as redis
+
+from .stls_id_models import VerifiableCredential
 
 MRI_SECONDS = 300  # 5 minutes — matches the revocation freshness requirement
 
@@ -91,3 +94,54 @@ class StatusListManager:
         compressed = gzip.compress(raw)
         encoded = base64.urlsafe_b64encode(compressed).decode("ascii")
         return encoded, dt.datetime.now(dt.timezone.utc)
+
+
+async def fetch_status_bit(status_list_url: str, index: int) -> bool:
+    """
+    Verifier-side inverse of publish(): fetches a published
+    StatusListCredential over HTTP and checks a single bit. Same
+    encoding both ends (base64url + gzip) — only works against a
+    document actually produced by publish() (or wire-compatible with
+    it). Originally written in samples/server/sofia-admin's
+    tools_identity.py (used there 3x), promoted here since it's
+    generic — any verifier resolving ANY credential's own published
+    status list needs exactly this, not just this package's own
+    deployment.
+
+    Raises on fetch failure or a missing/empty encodedList — fails
+    loudly rather than silently treating "couldn't check" as "not
+    revoked", same fail-closed posture as verify_not_revoked()'s MRI
+    staleness check (stls_id_verifier.py).
+    """
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(status_list_url)
+    resp.raise_for_status()
+    payload = resp.json()
+
+    encoded_list = payload.get("encodedList", "")
+    if not encoded_list:
+        raise ValueError(f"empty or missing encodedList at {status_list_url}")
+
+    padded = encoded_list + "=" * (-len(encoded_list) % 4)
+    decompressed = gzip.decompress(base64.urlsafe_b64decode(padded))
+    byte_idx, bit_idx = index // 8, index % 8
+    return bool(len(decompressed) > byte_idx and (decompressed[byte_idx] >> (7 - bit_idx)) & 1)
+
+
+async def fetch_remote_credential_status(
+    credential: VerifiableCredential,
+) -> tuple[dt.datetime, bool]:
+    """
+    Ready-to-use `status_resolver` for RequestPresentationVerifier
+    (stls_id_request_verifier.py, issue #15 gap #1) — fetches the
+    credential's OWN issuer-published status list
+    (credentialStatus.statusListCredential) and checks its bit. Works
+    for any credential whose issuer publishes a StatusListCredential
+    this shape, not just this deployment's own — both the URL and the
+    index come from the credential itself.
+    """
+    is_revoked = await fetch_status_bit(
+        credential.credential_status.status_list_credential,
+        credential.credential_status.status_list_index,
+    )
+    return dt.datetime.now(dt.timezone.utc), is_revoked

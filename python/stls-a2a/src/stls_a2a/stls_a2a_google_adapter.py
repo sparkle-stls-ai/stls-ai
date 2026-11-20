@@ -26,6 +26,49 @@ def _is_youtube_url(uri: str) -> bool:
     return host == "youtube.com" or host.endswith(".youtube.com")
 
 
+async def _assert_safe_remote_file_url(uri: str) -> None:
+    """
+    SSRF guard for the httpx fallback download path below (any
+    FileReference URI that isn't gs:// or youtube.com). Without this,
+    a remote caller can hand us a FileReference pointing at an
+    internal address — e.g. http://169.254.169.254/latest/meta-data/
+    (cloud instance metadata) or http://localhost:6379 — and this
+    server would fetch it on the caller's behalf and feed the response
+    straight into the model as file content.
+
+    Scheme restricted to http(s); every resolved address for the host
+    must be public (not loopback/link-local/private/reserved/
+    multicast/unspecified, IPv4 or IPv6) — resolving ourselves and
+    checking the IP, not the hostname string, so a DNS name that
+    merely *looks* external but resolves internally (DNS rebinding)
+    is still caught. The caller must also NOT follow redirects (see
+    the httpx.AsyncClient construction below) — otherwise a safe URL
+    could redirect to an unsafe one after this check already passed.
+    """
+    import ipaddress
+    import socket
+
+    parsed = urlparse(uri)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"unsupported scheme for remote file URI: {parsed.scheme!r}")
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"remote file URI has no host: {uri!r}")
+
+    try:
+        addrinfo = await asyncio.get_running_loop().getaddrinfo(host, None)
+    except socket.gaierror as e:
+        raise ValueError(f"could not resolve host {host!r}: {e}") from e
+
+    for *_, sockaddr in addrinfo:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if (
+            ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+        ):
+            raise ValueError(f"remote file URI {uri!r} resolves to a non-public address ({ip})")
+
+
 # ============================================================================
 # ADAPTER FOR GOOGLE ADK
 # ============================================================================
@@ -195,10 +238,14 @@ class GoogleADKAdapter(AgentAdapter):
                         )
                     else:
                         import httpx
+                        await _assert_safe_remote_file_url(uri)
                         # Explicit timeout: the httpx default (5s) would fail
                         # on remote file downloads even just moderately large.
+                        # follow_redirects=False (the default) deliberately kept
+                        # explicit: a redirect could otherwise point past the
+                        # SSRF check just performed on the original URI.
                         _dl_timeout = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
-                        async with httpx.AsyncClient(timeout=_dl_timeout) as client:
+                        async with httpx.AsyncClient(timeout=_dl_timeout, follow_redirects=False) as client:
                             response = await client.get(uri)
                             response.raise_for_status()
                         genai_parts.append(
@@ -574,11 +621,35 @@ class GoogleADKAdapter(AgentAdapter):
                             break  # ✅ Break only on the final text response
                         # else: it's an intermediate event (function call), continue
 
-                # Checks whether there's an error
-                elif hasattr(event, 'is_error') and event.is_error():
+                # Checks whether there's an error.
+                #
+                # BUGFIX (found while testing issue #45, but general —
+                # masks a failure from ANY sub-agent, not just identity
+                # ones): this used to check `event.is_error()`, a method
+                # that doesn't exist on ADK's Event class (it only has
+                # `is_final_response()` — confirmed against the
+                # installed google-adk; Event extends LlmResponse, whose
+                # real fields are `error_code`/`error_message`). The
+                # `hasattr` guard made this branch permanently dead code:
+                # a sub-agent failure (e.g. RemoteA2aAgent's own 401/500
+                # handling, which DOES yield Event(error_message=...))
+                # was silently skipped here, falling through to the
+                # generic "No response received from agent" below —
+                # losing the real reason, and in some cases letting the
+                # root LLM's own next turn produce a response with no
+                # visible error at all.
+                #
+                # `error_code` (when ADK does set it — e.g. a model
+                # safety/finish-reason block) is a string like "SAFETY",
+                # not a JSON-RPC integer code, so it's kept only in the
+                # message, never as the JSON-RPC `code` field.
+                elif event.error_message is not None:
                     error_details = {
-                        'code': getattr(event, 'error_code', -32603),
-                        'message': str(getattr(event, 'error_details', 'Unknown error'))
+                        'code': -32603,
+                        'message': (
+                            f"{event.error_message} (error_code={event.error_code})"
+                            if event.error_code else event.error_message
+                        ),
                     }
                     break
             
@@ -724,9 +795,37 @@ class GoogleADKAdapter(AgentAdapter):
             session_id=session_id,
             new_message=new_message,
         ):
+            # BUGFIX (found while testing issue #45, general — not
+            # identity-specific): a failing sub-agent (e.g.
+            # RemoteA2aAgent's own 401/500 handling) yields
+            # Event(error_message=..., content=None), which
+            # `if not (event.content and event.content.parts): continue`
+            # silently dropped — no trace of the error anywhere in the
+            # stream, which is exactly invoke()'s now-fixed
+            # `event.is_error()` dead-code bug, just worse here (no
+            # fallback at all, unlike invoke()'s "No response received"
+            # catch-all). Surfaced as a visible text part instead of a
+            # new SSE event type, so no change is needed to the
+            # adapter-agnostic stream-consumption code in
+            # stls_a2a_integration.py.
+            if event.error_message is not None:
+                yield {
+                    "parts": [{
+                        "type": "text",
+                        "text": (
+                            f"⚠️ Sub-agent error: {event.error_message}"
+                            + (f" (error_code={event.error_code})" if event.error_code else "")
+                        ),
+                        "mimeType": "text/plain",
+                    }],
+                    "append": True,
+                    "last_chunk": True,
+                }
+                return
+
             if not (event.content and event.content.parts):
                 continue
- 
+
             is_final  = event.is_final_response()
 
             # Converts all of the event's parts into typed A2A Parts.

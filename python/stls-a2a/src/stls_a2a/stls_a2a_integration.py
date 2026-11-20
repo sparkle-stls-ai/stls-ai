@@ -120,6 +120,18 @@ class SessionExpiredError(Exception):
         super().__init__(f"Expired or unknown STLS session: session_id={session_id}")
 
 
+_IDENTITY_CHALLENGE_TTL_SECONDS = 120
+"""
+How long a minted identity challenge (see SecureA2AHTTPMiddleware.
+_check_identity_async()) stays acceptable. Deliberately short and
+independent of the transport session's own TTL (STLS_SESSION_TTL,
+default 3600s): the challenge only needs to survive one client
+round-trip (receive it, sign a VerifiablePresentation, retry), not the
+whole session's lifetime — the signed presentation itself, not the
+challenge, is what stays valid for the rest of the session.
+"""
+
+
 # ── SSE Heartbeat (keep-alive) ────────────────────────────────────────────────
 # When the adapter stays for a long time without producing a chunk (e.g. a
 # blocking delegation to a non-streaming sub-agent via RemoteA2aAgent), the
@@ -624,6 +636,7 @@ class SecureA2AHTTPMiddleware:
         agent_adapter: Optional[AgentAdapter] = None,
         auth: Optional[AuthConfig] = None,
         api_key_manager: Optional[Any] = None,
+        identity_verifier: Optional[Any] = None,
     ):
         """
         Args:
@@ -635,6 +648,18 @@ class SecureA2AHTTPMiddleware:
             api_key_manager:      Enterprise ApiKeyManager (optional).
                                   If present, takes priority over ``auth``.
                                   Supports Redis, File, Postgres as backends.
+            identity_verifier:    Optional DID/VC identity check (issue #15),
+                                  duck-typed like api_key_manager — stls-a2a
+                                  never imports stls_identity, it only calls
+                                  `await identity_verifier.verify_request(request,
+                                  challenge=...)` expecting an object with
+                                  `.ok: bool` / `.error: str | None`. Runs as
+                                  an ADDITIONAL check, strictly after
+                                  api_key_manager/auth have already passed —
+                                  never a substitute for them. None (default)
+                                  = disabled: zero header parsing, zero
+                                  challenge-cache use, zero behavior change
+                                  for every existing caller.
         """
         self.key_session_provider = key_session_provider
         # LRU+TTL SessionCache shared with stls-mcp (stls_core).
@@ -645,6 +670,14 @@ class SecureA2AHTTPMiddleware:
         self.agent_adapter = agent_adapter
         self.auth = auth
         self.api_key_manager = api_key_manager
+        self.identity_verifier = identity_verifier
+        # {session_id: (challenge, minted_at_monotonic)} — only ever
+        # populated when identity_verifier is configured; see
+        # _check_identity_async(). Unbounded by session count only in
+        # the sense that SessionCache itself already is; a session with
+        # no valid presentation yet holds exactly one entry here until
+        # it either verifies (popped) or the session itself expires.
+        self._identity_challenges: Dict[str, Any] = {}
         self._closed = False
 
     def _check_auth(self, request: Any) -> Optional[Any]:
@@ -716,24 +749,23 @@ class SecureA2AHTTPMiddleware:
         if self.api_key_manager is not None:
             try:
                 result = await self.api_key_manager.validate_request(request)
-                if result.ok:
-                    return None
-                logger.warning(
-                    "ApiKeyManager auth denied: %s %s — %s",
-                    request.method, request.url.path, result.result.value,
-                )
-                return _JSONResponse(
-                    status_code=401,
-                    content={
-                        "jsonrpc": "2.0",
-                        "error": {
-                            "code": -32600,
-                            "message": "Unauthorized: missing or invalid credentials",
+                if not result.ok:
+                    logger.warning(
+                        "ApiKeyManager auth denied: %s %s — %s",
+                        request.method, request.url.path, result.result.value,
+                    )
+                    return _JSONResponse(
+                        status_code=401,
+                        content={
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32600,
+                                "message": "Unauthorized: missing or invalid credentials",
+                            },
+                            "id": None,
                         },
-                        "id": None,
-                    },
-                    headers={"WWW-Authenticate": result.www_authenticate_header()},
-                )
+                        headers={"WWW-Authenticate": result.www_authenticate_header()},
+                    )
             except Exception as exc:
                 logger.error("ApiKeyManager.validate_request() error: %s", exc)
                 return _JSONResponse(
@@ -744,9 +776,122 @@ class SecureA2AHTTPMiddleware:
                         "id": None,
                     },
                 )
+        else:
+            # ── 2. Legacy AuthConfig (sync, no await needed) ──────────────
+            legacy_err = self._check_auth(request)
+            if legacy_err is not None:
+                return legacy_err
 
-        # ── 2. Legacy AuthConfig (sync, no await needed) ──────────────
-        return self._check_auth(request)
+        # ── 3. Identity presentation (issue #15, optional, additional) ───
+        return await self._check_identity_async(request)
+
+    async def _check_identity_async(self, request: Any) -> Optional[Any]:
+        """
+        DID/VC identity check (issue #15) — runs only when
+        identity_verifier is configured, strictly AFTER
+        api_key_manager/auth have already passed. Mirrors the posture
+        already documented on stls-identity's own Sentinel: "an
+        additional check... alongside, not instead of,
+        ApiKeyManager.validate()".
+
+        With identity_verifier=None (the default), this is a no-op:
+        returns None immediately, no header parsing, no challenge-cache
+        use — zero behavior change for every existing caller.
+
+        Challenge/response shape: the first request on a session_id
+        without a (still-fresh) cached challenge gets back
+        ERR_IDENTITY_CHALLENGE_REQUIRED plus a freshly minted challenge;
+        the client is expected to sign a VerifiablePresentation over it
+        and retry exactly once, same shape as ERR_SESSION_EXPIRED. The
+        challenge is intentionally NOT derived from the key-session
+        provider (pqc/base/arqit_py) — only pqc's session_id has
+        verifier-issued/fresh semantics, base's kid is a fixed constant
+        and arqit_py's kid comes from quantum-peering key delivery, so
+        this layer mints and tracks its own, independent of whichever
+        provider established the encrypted channel.
+
+        Returns:
+            None          → authorized (or identity not configured)
+            JSONResponse  → HTTP 401 with JSON-RPC body
+        """
+        if self.identity_verifier is None:
+            return None
+
+        from .stls_a2a_adapters_model import ERR_IDENTITY_CHALLENGE_REQUIRED
+        from starlette.responses import JSONResponse as _JSONResponse
+        import secrets
+        import time
+
+        session_id = request.headers.get("X-A2A-Session-ID", "").strip()
+        if not session_id:
+            # No encrypted session to bind a challenge to — either the
+            # PQC handshake request itself, or (this check runs for
+            # BOTH /secure-a2a and the plain /a2a handlers, same as
+            # api_key_manager/auth above) a plain-endpoint request,
+            # which never carries this header at all. Identity
+            # presentation is scoped to the encrypted transport by
+            # design (issue #15 gap #1); the plain endpoint is
+            # unaffected even when identity_verifier is configured.
+            return None
+
+        def _challenge_required_response(challenge: str) -> Any:
+            return _JSONResponse(
+                status_code=401,
+                content={
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": ERR_IDENTITY_CHALLENGE_REQUIRED,
+                        "message": "Identity presentation required",
+                        "challenge": challenge,
+                    },
+                    "id": None,
+                },
+            )
+
+        presentation_header = request.headers.get("X-STLS-Identity-Presentation", "").strip()
+        cached = self._identity_challenges.get(session_id)
+
+        if not presentation_header or cached is None or (
+            time.monotonic() - cached[1] > _IDENTITY_CHALLENGE_TTL_SECONDS
+        ):
+            challenge = secrets.token_urlsafe(32)
+            self._identity_challenges[session_id] = (challenge, time.monotonic())
+            logger.info("Identity challenge issued for session_id=%s", session_id)
+            return _challenge_required_response(challenge)
+
+        challenge, _minted_at = cached
+        try:
+            result = await self.identity_verifier.verify_request(request, challenge=challenge)
+        except Exception as exc:
+            logger.error("identity_verifier.verify_request() error: %s", exc)
+            return _JSONResponse(
+                status_code=503,
+                content={
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32603, "message": "Identity verification service unavailable"},
+                    "id": None,
+                },
+            )
+
+        if result.ok:
+            self._identity_challenges.pop(session_id, None)
+            return None
+
+        logger.warning(
+            "Identity verification denied: %s %s — %s",
+            request.method, request.url.path, getattr(result, "error", None),
+        )
+        return _JSONResponse(
+            status_code=401,
+            content={
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32600,
+                    "message": "Unauthorized: invalid identity presentation",
+                },
+                "id": None,
+            },
+        )
 
     def _extract_http_context(self, request: Any) -> Dict[str, Any]:
         """
@@ -1848,6 +1993,7 @@ def create_secure_a2a_endpoint(
     auth: Optional[AuthConfig] = None,
     api_key_manager: Optional[Any] = None,
     agent_name: Optional[str] = None,
+    identity_verifier: Optional[Any] = None,
 ):
     """
     Adds A2A endpoints (encrypted and, optionally, plain) to a FastAPI/Starlette app.
@@ -1869,6 +2015,10 @@ def create_secure_a2a_endpoint(
                                 Supports Redis/File/Postgres backends.
         agent_name:             Human-readable agent name for the PG registry.
                                 Default: derived from the path (e.g. /agents/calc/secure-a2a → calc).
+        identity_verifier:      Optional DID/VC identity check (issue #15). See
+                                SecureA2AHTTPMiddleware's own docstring for the
+                                exact duck type and the off-by-default guarantee.
+                                None (default) = disabled, no behavior change.
     """
     from starlette.requests import Request
     from starlette.responses import JSONResponse
@@ -1884,6 +2034,7 @@ def create_secure_a2a_endpoint(
         agent_adapter,
         auth=auth,
         api_key_manager=api_key_manager,
+        identity_verifier=identity_verifier,
     )
 
     # ── Centralized registry on the app ─────────────────────────────────────
@@ -1894,10 +2045,20 @@ def create_secure_a2a_endpoint(
     if enable_plain_endpoint:
         plain_path = path.replace("secure-", "") if "secure-" in path else f"{path}-plain"
 
-    # the absolute url is required for standard clients to work
+    # the absolute url is required for standard clients to work.
+    #
+    # BUGFIX (found while building issue #15's sample, unrelated to
+    # identity): enable_plain_endpoint=False leaves plain_path=None —
+    # `base_url + plain_path if base_url else plain_path` only checked
+    # base_url, so a truthy base_url with plain_path=None evaluated
+    # `base_url + None` and crashed with TypeError before this call
+    # ever returned, for EVERY agent (not just identity-related ones).
+    # to_a2a() already supports url=None (it only requires at least one
+    # of url/secure_url to be set — see its own docstring/guard), so the
+    # fix is to require plain_path too, not just base_url.
     agent_card = to_a2a(
         agent=agent,
-        url=base_url + plain_path if base_url else plain_path,
+        url=(base_url + plain_path) if (base_url and plain_path) else plain_path,
         secure_url=base_url + path if base_url else path,
     )
     

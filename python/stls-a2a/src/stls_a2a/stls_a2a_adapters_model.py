@@ -33,6 +33,20 @@ session_id alone) it's the ONLY available signal — a cache miss is
 always irreversible, never a transient error worth retrying without a
 handshake.
 """
+ERR_IDENTITY_CHALLENGE_REQUIRED   = -32005
+"""
+No valid identity presentation (X-STLS-Identity-Presentation header)
+for this session yet — only ever returned when the server has an
+identity_verifier configured (see create_secure_a2a_endpoint()); never
+raised otherwise.
+
+Distinct from the generic unauthorized response: the error payload
+carries a freshly minted challenge for this session_id, and the correct
+client action is to build/sign a VerifiablePresentation over that
+challenge and retry exactly once — same "retry-once with info from the
+error" shape already used for ERR_SESSION_EXPIRED, not a permanent
+rejection.
+"""
 
 # Terminal states: a task in one of these states can't be canceled
 _TERMINAL_STATES = {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED}

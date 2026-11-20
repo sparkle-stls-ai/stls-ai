@@ -223,6 +223,18 @@ class Sentinel:
             CredentialVerificationError: unsigned, wrong proof purpose,
                 challenge mismatch (possible replay), unknown signer, or
                 bad signature.
+
+        SECURITY: `challenge` MUST be covered by the signature, not
+        checked as a separate plaintext comparison against an
+        otherwise-unrelated canonicalized payload — a signature that
+        covers only {holder, verifiableCredential} would let anyone
+        holding a captured, validly-signed VP overwrite proof.challenge
+        with a newly-issued one and replay it, no private key needed,
+        since the signature bytes would never change. The canonical
+        payload here therefore includes proof-minus-proofValue (so
+        challenge, created and verificationMethod are all signed over),
+        mirroring build_verifiable_presentation() (stls_id_presentation.py)
+        exactly — both sides must canonicalize the identical shape.
         """
         proof = presentation.proof
         if proof is None:
@@ -246,8 +258,8 @@ class Sentinel:
                 f"unknown or untrusted holder verification method: {proof.verification_method}"
             )
 
-        unsigned = presentation.model_copy(update={"proof": None})
-        payload = unsigned.model_dump(mode="json", by_alias=True, exclude_none=True)
+        payload = presentation.model_dump(mode="json", by_alias=True, exclude_none=True)
+        del payload["proof"]["proofValue"]
         canonical = rfc8785.dumps(payload)
 
         try:
