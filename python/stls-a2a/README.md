@@ -570,6 +570,27 @@ create_secure_a2a_endpoint(
 
 `AuthConfig(...)` remains available when you only need simple bearer-token or fixed API-key checks.
 
+#### Optional: DID/VC identity check (issue #15 gap #1)
+
+`identity_verifier=` adds an ADDITIONAL check on top of `api_key_manager`/`auth` — never a
+substitute for them. It's a duck type, same posture as `api_key_manager`: `stls-a2a` never
+imports `stls-identity`, it only calls `await identity_verifier.verify_request(request,
+challenge=...)` expecting an object with `.ok`/`.error`. `stls-identity`'s
+`RequestPresentationVerifier` (`from stls_identity import RequestPresentationVerifier, Sentinel`)
+is the ready-made implementation, built on `Sentinel`. Omitting it (the default) means zero
+header parsing, zero challenge-cache use, zero behavior change.
+
+On the client side, `STLSHttpxTransport`/`ContextualSecureRemoteA2aAgent` take a matching
+`identity_challenge_handler=` — typically `stls_identity.IdentityPresenter(...).on_challenge`,
+passed directly. The first call on a session gets `ERR_IDENTITY_CHALLENGE_REQUIRED` (-32005) with
+a fresh challenge; the handler signs a `VerifiablePresentation` over it and the SAME call retries
+automatically, exactly once, same shape as the existing re-handshake-on-`ERR_SESSION_EXPIRED`
+behavior.
+
+See [`samples/server/19_identity_presentation`](../../samples/server/19_identity_presentation) for
+a full working example (both roles, three observable outcomes) and `stls-identity`'s own README
+for what actually travels on the wire.
+
 Frameworks supported by the adapters:
 
 - `auto`

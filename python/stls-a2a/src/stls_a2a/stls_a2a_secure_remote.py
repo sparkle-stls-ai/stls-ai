@@ -84,10 +84,11 @@ only arrives at ContextualSecureRemoteA2aAgent's instantiation.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
 from urllib.parse import urlsplit
 
 import httpx
@@ -114,10 +115,28 @@ __all__ = [
 if TYPE_CHECKING:
     pass
 
-# ERR_SESSION_EXPIRED error code (stls_a2a_adapters_model.py) — imported
-# by value rather than through the public export to avoid a circular
-# import at the package level; it's a stable constant (-32004).
+# ERR_SESSION_EXPIRED / ERR_IDENTITY_CHALLENGE_REQUIRED error codes
+# (stls_a2a_adapters_model.py) — imported by value rather than through
+# the public export to avoid a circular import at the package level;
+# both are stable constants (-32004, -32005).
 _ERR_SESSION_EXPIRED = -32004
+_ERR_IDENTITY_CHALLENGE_REQUIRED = -32005
+
+IdentityChallengeHandler = Callable[[str], Union[dict[str, str], Awaitable[dict[str, str]]]]
+"""
+Signature stls-a2a expects for identity_challenge_handler (issue #15
+gap #1): given the server-issued challenge string, returns (sync or
+async) the headers to merge into the retried request — typically
+stls_identity.IdentityPresenter.on_challenge, passed directly. stls-a2a
+never imports stls_identity; this is a duck type, same posture as
+identity_verifier on the server side (SecureA2AHTTPMiddleware).
+"""
+
+
+async def _maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 # Methods expected to arrive via SSE from the ADK/a2a-sdk caller.
 # Intentional copy (not imported) from SSE_STREAM_METHODS in
@@ -442,11 +461,17 @@ class STLSHttpxTransport(httpx.AsyncBaseTransport):
         *,
         extra_headers: Optional[dict[str, str]] = None,
         inner_transport: Optional[httpx.AsyncBaseTransport] = None,
+        identity_challenge_handler: Optional[IdentityChallengeHandler] = None,
     ) -> None:
         self._sessions = session_manager
         self._extra_headers = dict(extra_headers or {})
         # Real transport for the passthrough (discovery, non-JSON-RPC requests).
         self._inner = inner_transport or httpx.AsyncHTTPTransport()
+        # Optional, off by default (issue #15 gap #1) — see
+        # IdentityChallengeHandler's own docstring. None here means every
+        # ERR_IDENTITY_CHALLENGE_REQUIRED simply propagates as a normal
+        # httpx.HTTPStatusError, same as before this hook existed.
+        self._identity_challenge_handler = identity_challenge_handler
 
     async def aclose(self) -> None:
         await self._inner.aclose()
@@ -495,6 +520,7 @@ class STLSHttpxTransport(httpx.AsyncBaseTransport):
         headers: dict,
         *,
         _retried: bool = False,
+        _identity_retried: bool = False,
     ) -> httpx.Response:
         adapter = await self._sessions.get_adapter(base_url)
         try:
@@ -510,8 +536,26 @@ class STLSHttpxTransport(httpx.AsyncBaseTransport):
                 )
                 self._sessions.invalidate(base_url)
                 return await self._handle_sync(
-                    request, base_url, payload, headers, _retried=True
+                    request, base_url, payload, headers,
+                    _retried=True, _identity_retried=_identity_retried,
                 )
+
+            if (
+                exc.response.status_code == 401
+                and not _identity_retried
+                and self._identity_challenge_handler is not None
+            ):
+                challenge = _looks_like_identity_challenge_required(exc.response)
+                if challenge is not None:
+                    logger.info(
+                        "STLSHttpxTransport: identity presentation required toward %s, "
+                        "signing and retrying", base_url,
+                    )
+                    identity_headers = await _maybe_await(self._identity_challenge_handler(challenge))
+                    return await self._handle_sync(
+                        request, base_url, payload, {**headers, **identity_headers},
+                        _retried=_retried, _identity_retried=True,
+                    )
             raise
 
         return httpx.Response(
@@ -530,6 +574,7 @@ class STLSHttpxTransport(httpx.AsyncBaseTransport):
         headers: dict,
         *,
         _retried: bool = False,
+        _identity_retried: bool = False,
     ):
         """
         Opens the stream toward the adapter and "primes" it (consumes) its
@@ -547,6 +592,17 @@ class STLSHttpxTransport(httpx.AsyncBaseTransport):
         element of the remaining sequence and propagates it as an
         "error" event — no retry at that point.
 
+        ERR_IDENTITY_CHALLENGE_REQUIRED (issue #15 gap #1) takes a
+        DIFFERENT shape here than ERR_SESSION_EXPIRED: the identity
+        check (SecureA2AHTTPMiddleware._check_identity_async()) runs
+        BEFORE the streaming response is ever opened, so it's a plain
+        top-level HTTP 401 — stream_secure_message()'s
+        resp.raise_for_status() raises httpx.HTTPStatusError straight
+        out of this agen.__anext__() call, it never reaches the
+        "yield {event: error}" branch SessionExpiredError does deeper
+        in request processing (after the 200 SSE response already
+        committed). Caught as an exception here, not as a chunk shape.
+
         Returns:
             (first_chunk, agen) — first_chunk is None if the stream is
             empty (no event, immediate StopAsyncIteration); agen is the
@@ -561,6 +617,24 @@ class STLSHttpxTransport(httpx.AsyncBaseTransport):
             first_chunk = await agen.__anext__()
         except StopAsyncIteration:
             return None, agen
+        except httpx.HTTPStatusError as exc:
+            if (
+                exc.response.status_code == 401
+                and not _identity_retried
+                and self._identity_challenge_handler is not None
+            ):
+                challenge = _looks_like_identity_challenge_required(exc.response)
+                if challenge is not None:
+                    logger.info(
+                        "STLSHttpxTransport: identity presentation required toward %s "
+                        "(streaming, no byte emitted yet) — signing and retrying", base_url,
+                    )
+                    identity_headers = await _maybe_await(self._identity_challenge_handler(challenge))
+                    return await self._open_stream(
+                        base_url, payload, {**headers, **identity_headers},
+                        _retried=_retried, _identity_retried=True,
+                    )
+            raise
 
         if (
             not _retried
@@ -575,7 +649,10 @@ class STLSHttpxTransport(httpx.AsyncBaseTransport):
             aclose = getattr(agen, "aclose", None)
             if aclose is not None:
                 await aclose()
-            return await self._open_stream(base_url, payload, headers, _retried=True)
+            return await self._open_stream(
+                base_url, payload, headers,
+                _retried=True, _identity_retried=_identity_retried,
+            )
 
         return first_chunk, agen
 
@@ -681,6 +758,26 @@ def _looks_like_session_expired(response: httpx.Response) -> bool:
     return isinstance(error, dict) and error.get("code") == _ERR_SESSION_EXPIRED
 
 
+def _looks_like_identity_challenge_required(response: httpx.Response) -> Optional[str]:
+    """
+    Recognizes a 401 response as ERR_IDENTITY_CHALLENGE_REQUIRED (-32005)
+    and extracts the challenge to sign over — distinct from
+    ERR_SESSION_EXPIRED's own 401 (that one justifies a re-handshake;
+    this one justifies calling identity_challenge_handler and retrying
+    with a signed VerifiablePresentation header instead).
+
+    Returns the challenge string, or None if this isn't that error.
+    """
+    try:
+        body = response.json()
+    except Exception:
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    if isinstance(error, dict) and error.get("code") == _ERR_IDENTITY_CHALLENGE_REQUIRED:
+        return error.get("challenge")
+    return None
+
+
 class ContextualSecureRemoteA2aAgent:
     """
     Drop-in replacement for RemoteA2aAgent with:
@@ -708,6 +805,10 @@ class ContextualSecureRemoteA2aAgent:
                             you construct and pass that in instead.
         extra_headers:      application headers (e.g. X-API-Key) injected
                             into every encrypted request, both sync and SSE.
+        identity_challenge_handler: optional (issue #15 gap #1) — see
+                            STLSHttpxTransport's IdentityChallengeHandler
+                            docstring. None (default) = disabled, no
+                            behavior change.
         **kwargs:           other RemoteA2aAgent parameters (timeout,
                             description, etc.) — do NOT pass httpx_client:
                             this class builds it internally with the
@@ -731,6 +832,7 @@ class ContextualSecureRemoteA2aAgent:
         session_manager: Optional[SecureSessionManager] = None,
         provider_name: Optional[str] = None,
         extra_headers: Optional[dict[str, str]] = None,
+        identity_challenge_handler: Optional[IdentityChallengeHandler] = None,
         **kwargs: Any,
     ) -> Any:
         if "httpx_client" in kwargs:
@@ -777,7 +879,10 @@ class ContextualSecureRemoteA2aAgent:
         _manager = session_manager or SecureSessionManager(
             client_id=name, provider_name=provider_name or "pqc",
         )
-        _transport = STLSHttpxTransport(_manager, extra_headers=extra_headers)
+        _transport = STLSHttpxTransport(
+            _manager, extra_headers=extra_headers,
+            identity_challenge_handler=identity_challenge_handler,
+        )
         _httpx_client = httpx.AsyncClient(transport=_transport)
 
         instance = RemoteA2aAgent(

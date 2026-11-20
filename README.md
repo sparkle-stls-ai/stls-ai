@@ -104,8 +104,8 @@ stls-ai/
 | Package | Language | Version | What it provides |
 |---|---|---|---|
 | [`stls-core`](python/stls-core) | Python ≥3.12 | 0.1.10 | Protocol-agnostic crypto, session cache, handshake, key providers, API-key auth. The common foundation. |
-| [`stls-identity`](python/stls-identity) | Python ≥3.12 | 0.1.0 | DID documents, Identity/Operational Verifiable Credentials, delegation, revocation, Trust Anchor Registry, Sentinel verifier. |
-| [`stls-a2a`](python/stls-a2a) | Python ≥3.12 | 0.1.10 | Secure A2A transport, framework adapters (Google ADK, LangChain, Semantic Kernel, custom), task lifecycle, agent cards, agent registry. |
+| [`stls-identity`](python/stls-identity) | Python ≥3.12 | 0.1.1 | DID documents, Identity/Operational Verifiable Credentials, delegation, revocation, Trust Anchor Registry, Sentinel verifier. |
+| [`stls-a2a`](python/stls-a2a) | Python ≥3.12 | 0.1.11 | Secure A2A transport, framework adapters (Google ADK, LangChain, Semantic Kernel, custom), task lifecycle, agent cards, agent registry. |
 | [`stls-mcp`](python/stls-mcp) | Python ≥3.12 | 0.1.7 | Encrypted MCP endpoint (`/mcp-stls`) alongside a 100%-standard MCP endpoint (`/mcp`), built on the official MCP SDK. |
 | [`stls-core`](node/stls-core) | Node.js ≥20 / TS | 0.1.10 | TypeScript port of `python/stls-core` — bit-compatible wire format, cross-language tested. |
 | [`stls-mcp`](node/stls-mcp) | Node.js ≥20 / TS | 0.1.7 | TypeScript port of `python/stls-mcp` — same dual-endpoint design, verified against the Python server/client. |
@@ -180,6 +180,7 @@ packages above against real agent frameworks and deployment targets:
 - [`samples/server/16_server_device_agent`](samples/server/16_server_device_agent) / [`samples/client/16_client_device_agent`](samples/client/16_client_device_agent) — one real Arqit device shared safely across N replicas via `arqit_device_agent.py` + `ARQIT_PY_DEVICE_ROLE=consumer` (issue #38's device-agent/consumer split).
 - [`samples/peer/17_peer_a_core`](samples/peer/17_peer_a_core) / [`17_peer_b_core`](samples/peer/17_peer_b_core) — the device-agent/consumer split applied to a genuinely bidirectional peer (each side plays both roles), not just N replicas of one role.
 - [`samples/peer/18_naas_federation`](samples/peer/18_naas_federation) — multi-party NaaS RFQ federation: one buyer company compares real quotes from two seller companies, each seller's receiving side running as 2 replicas behind the device-agent/consumer split, validated end to end on a real K8s cluster with both `pqc` and real `arqit_py` devices.
+- [`samples/server/19_identity_presentation`](samples/server/19_identity_presentation) — `stls-identity`'s DID/Verifiable-Credential layer attached to a real secure A2A call for the first time (issue #15 gap #1): a Requestor presents a signed `VerifiablePresentation`, the Verifier agent challenges and checks it via `RequestPresentationVerifier`, all transparent to the caller via one automatic retry.
 - [`samples/server/2_sk_financial_agent`](samples/server/2_sk_financial_agent) — Semantic Kernel financial agent.
 - [`samples/server/5_adk_doc_gen`](samples/server/5_adk_doc_gen) — Google ADK document-generation agent.
 - [`samples/server/sofia-admin`](samples/server/sofia-admin) — admin/management server with cloud deployment scaffolding.

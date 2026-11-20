@@ -19,6 +19,7 @@ from .stls_id_models import (
     NetworkAuthorityCredential,
     OperationalCredential,
     OperationalCredentialSubject,
+    PRESENTATION_HEADER,
     StatusListCredential,
     StatusPurpose,
     VerificationMethod,
@@ -42,8 +43,17 @@ from .stls_id_keystore import (
 from .stls_id_status import MRI_SECONDS, StatusListManager
 from .stls_id_issuer import DEFAULT_VALIDITY, IdentityManager
 from .stls_id_delegation import DEFAULT_OPERATIONAL_VALIDITY, DelegationManager
-from .stls_id_presentation import build_verifiable_presentation
+from .stls_id_presentation import (
+    IdentityPresenter,
+    attach_identity_presentation_header,
+    build_verifiable_presentation,
+)
 from .stls_id_verifier import CredentialVerificationError, Sentinel
+from .stls_id_request_verifier import (
+    PresentationVerificationResult,
+    RequestPresentationVerifier,
+    StatusResolver,
+)
 from .stls_id_postgres_store import (
     DDL,
     DIDDocumentStoreBase,
@@ -64,7 +74,7 @@ from .stls_id_trust_registry_client import (
 )
 from .stls_id_trust_registry_bridge import create_trust_registry_router
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     # models
@@ -76,6 +86,7 @@ __all__ = [
     "NetworkAuthorityCredential",
     "OperationalCredential",
     "OperationalCredentialSubject",
+    "PRESENTATION_HEADER",
     "StatusListCredential",
     "StatusPurpose",
     "VerificationMethod",
@@ -103,10 +114,16 @@ __all__ = [
     "DEFAULT_OPERATIONAL_VALIDITY",
     "DelegationManager",
     # presentation
+    "IdentityPresenter",
+    "attach_identity_presentation_header",
     "build_verifiable_presentation",
     # verifier
     "CredentialVerificationError",
     "Sentinel",
+    # a2a_request_verifier
+    "PresentationVerificationResult",
+    "RequestPresentationVerifier",
+    "StatusResolver",
     # postgres_store
     "DDL",
     "DIDDocumentStoreBase",

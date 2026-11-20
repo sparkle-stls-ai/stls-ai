@@ -322,6 +322,17 @@ class StatusListCredential(BaseModel):
 # request (see "Cosa Viaggia, Cosa È Pubblicato" in the deck)
 # ---------------------------------------------------------------------------
 
+PRESENTATION_HEADER = "X-STLS-Identity-Presentation"
+"""
+HTTP header a VerifiablePresentation travels under in an A2A request
+(issue #15 gap #1) — base64 of its JSON serialization. Defined here,
+not in presentation.py/a2a_request_verifier.py, so the client-side
+builder (attach_identity_presentation_header(), presentation.py) and
+the server-side bridge (RequestPresentationVerifier,
+a2a_request_verifier.py) share one source of truth for the name
+instead of each hardcoding it.
+"""
+
 class PresentationProof(BaseModel):
     """
     Same shape as CredentialProof, but deliberately a DISTINCT type —
