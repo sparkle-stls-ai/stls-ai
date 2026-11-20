@@ -1,0 +1,86 @@
+# The standalone device-agent company-b's 2 seller replicas consume
+# from (issue #38's "one owner, N consumers" split) -- a single
+# process that authenticates the ab-rfq-server device once and feeds
+# the session key into Redis via KEY_STORE_BACKEND=redis. Reuses the
+# SAME Redis instance already running in this namespace for
+# SESSION_CACHE_BACKEND (05-redis.yaml) -- different key prefix
+# (KEY_STORE_REDIS_NAMESPACE), same Deployment, no second Redis needed.
+#
+# Kubernetes Secret volumes are ALWAYS read-only regardless of the
+# volumeMount's own readOnly field (confirmed empirically on an
+# earlier pass of this sample) -- but authenticate_device() rewrites
+# the device's own _metadata.json on every call, rotating its
+# ratchet/auth-key state. A plain emptyDir is actively WRONG here, not
+# just non-persistent-by-convenience: it gets re-seeded from the
+# (unrotated) Secret on every pod recreation, so the device's very
+# NEXT real authentication attempt replays stale, already-superseded
+# state -- which the real Arqit cloud correctly rejects (confirmed:
+# this is what was actually causing this sample's own earlier
+# "unexplained" device-bricking pattern). Fix: a PVC (survives pod
+# recreation) seeded from the Secret only on true first use -- the
+# initContainer's `ls ... || cp ...` only copies if the PVC is still
+# empty, see 02-device-storage.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: b-device-agent
+  namespace: naas-company-b
+spec:
+  replicas: 1
+  # Recreate, not the default RollingUpdate: this process holds an
+  # EXCLUSIVE real-device owner lock (issue #38) -- RollingUpdate
+  # starts the NEW pod before killing the OLD one, so the new one can
+  # never pass the owner-lock check while the old one is still up,
+  # which also means the old one never becomes eligible for
+  # termination either (deadlock, confirmed hitting it on this exact
+  # sample). Recreate kills the old pod first, releasing the lock,
+  # before the new one even starts.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: b-device-agent
+  template:
+    metadata:
+      labels:
+        app: b-device-agent
+    spec:
+      volumes:
+        - name: devices-secret
+          secret:
+            secretName: p18-devices-b
+        - name: devices
+          persistentVolumeClaim:
+            claimName: p18-b-device-agent-pvc
+      initContainers:
+        - name: copy-devices
+          image: naas18-sidecar:dev
+          imagePullPolicy: IfNotPresent
+          # Checks for THIS device's own config specifically, not "any
+          # json file" -- the Secret (and so this PVC) also carries
+          # ab-reply-client's files (company-b's OTHER device, shared
+          # Secret), so a generic "any *.json" check would wrongly
+          # skip re-seeding this device's own files if they'd been
+          # removed while leaving the other device's files in place
+          # (hit this exact bug once, patching the PVC by hand).
+          command: ["sh", "-c", "test -f /devices/aq-sf-p18-ab-rfq-server.json || cp /devices-secret/* /devices/"]
+          volumeMounts:
+            - { name: devices-secret, mountPath: /devices-secret }
+            - { name: devices, mountPath: /devices }
+      containers:
+        - name: device-agent
+          image: naas18-sidecar:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "arqit_device_agent.py", "--health-port", "8081"]
+          volumeMounts:
+            - { name: devices, mountPath: /home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices }
+          env:
+            - { name: ARQIT_PY_SERVER_CONFIG, value: "/home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices/aq-sf-p18-ab-rfq-server.json" }
+            - { name: KEY_STORE_BACKEND, value: "redis" }
+            - { name: KEY_STORE_REDIS_URL, value: "redis://redis:6379" }
+            - { name: KEY_STORE_REDIS_NAMESPACE, value: "p18-ab-rfq" }
+          ports:
+            - containerPort: 8081
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8081 }
+            initialDelaySeconds: 2

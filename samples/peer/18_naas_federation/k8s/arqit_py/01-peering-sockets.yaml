@@ -1,0 +1,64 @@
+# Arqit's own P2P/bilocation peering socket (SOCKET_RECEIVER_IP_ADDRESS/
+# PORT in each device's own config) is a SEPARATE, lower-level thing
+# from this sample's own STLS/HTTP traffic -- it's the Arqit SDK's own
+# plumbing for the real key-agreement handshake between two paired
+# devices' own processes, and it needs the CLIENT-role device to reach
+# the SERVER-role device's process directly over TCP. Found out the
+# hard way: in every earlier bare-process sample (14_/16_/17_), both
+# paired devices happened to run on the SAME host, so
+# SOCKET_RECEIVER_IP_ADDRESS=localhost trivially worked -- the first
+# time two paired devices' owning processes are genuinely in different
+# pods (this sample), that assumption breaks (`ConnectionRefusedError`
+# -> `PeerUnableToConnectException`).
+#
+# Exposed via NodePort for the same reason this sample's own HTTP
+# traffic is NodePort-only between companies: a real deployment would
+# have these two devices' owning processes on different machines
+# entirely, so nothing here should rely on being inside one cluster.
+# The externally-visible NodePort number does NOT need to match the
+# device's own internal SOCKET_LISTENING_PORT -- only the CLIENT
+# device's own SOCKET_RECEIVER_PORT (which just needs to dial
+# SOMETHING that ends up at the SERVER's bound port) needs to agree
+# with whatever NodePort is chosen here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: b-device-agent-peering
+  namespace: naas-company-b
+spec:
+  type: NodePort
+  selector:
+    app: b-device-agent
+  ports:
+    - port: 9101
+      targetPort: 9101
+      nodePort: 30910
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: a-buyer-peering
+  namespace: naas-company-a
+spec:
+  type: NodePort
+  selector:
+    app: a-buyer
+  ports:
+    - { name: ab-reply-server, port: 9103, targetPort: 9103, nodePort: 30911, protocol: TCP }
+    - { name: ac-reply-server, port: 9107, targetPort: 9107, nodePort: 30913, protocol: TCP }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: c-device-agent-peering
+  namespace: naas-company-c
+spec:
+  type: NodePort
+  selector:
+    app: c-device-agent
+  ports:
+    - port: 9105
+      targetPort: 9105
+      nodePort: 30912
+      protocol: TCP

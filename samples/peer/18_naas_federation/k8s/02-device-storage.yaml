@@ -1,0 +1,68 @@
+# Persistent storage for each process that owns a real arqit_py
+# device -- found the hard way (this sample's own real-cloud
+# debugging) that an emptyDir here is actively WRONG, not just
+# non-persistent-by-convenience: authenticate_device() rotates the
+# device's own ratchet/auth-key state on every successful call and
+# writes it back to DEVICE_METADATA_FILEPATH. An emptyDir is re-seeded
+# from the (unrotated) K8s Secret on every pod recreation, so the very
+# NEXT authentication attempt replays stale, already-superseded
+# ratchet state -- which the real Arqit cloud correctly rejects
+# (`NotAuthorizedException` / "Terminal authentication failure,
+# factory reset"). A PVC survives pod recreation, so the SAME rotated
+# state carries forward; the Secret is only ever used to seed it once,
+# on true first use (see each Deployment/Job's own initContainer,
+# which only copies from the Secret if the PVC is still empty).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: p18-devices-a-pvc
+  namespace: naas-company-a
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: p18-b-device-agent-pvc
+  namespace: naas-company-b
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: p18-b-reply-agent-pvc
+  namespace: naas-company-b
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: p18-c-device-agent-pvc
+  namespace: naas-company-c
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: p18-c-reply-agent-pvc
+  namespace: naas-company-c
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Mi

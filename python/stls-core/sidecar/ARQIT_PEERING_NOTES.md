@@ -419,3 +419,5 @@ before picking one for a new device:
 | 8911 / 8912 | `12_server_mcp_ms` / `12_client_mcp_ms` |
 | 8995 | `16_server_device_agent` / `16_client_device_agent` |
 | 8999 | `_arqit_race_fixtures` (stls-core's own test suite) |
+| 9001 / 9002 | `17_peer_a_core` / `17_peer_b_core` (pair 1 / pair 2) |
+| 9101, 9103, 9105, 9107 | `samples/peer/18_naas_federation` (A-B and A-C relationships, port shared per device PAIR, not per device -- see this sample's own README on why) |

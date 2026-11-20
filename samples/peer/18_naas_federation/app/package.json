@@ -1,0 +1,16 @@
+{
+  "name": "18-naas-federation-sample",
+  "private": true,
+  "version": "0.0.0",
+  "description": "NaaS RFQ federation sample (issue #38) — buyer/seller/reply-agent nodes, device-agent/consumer-role split applied to a replicated seller. Built gradually: step 1 is 1 buyer (company-a) vs. 1 seller with 2 replicas (company-b).",
+  "type": "module",
+  "dependencies": {
+    "stls-core": "file:../../../../node/stls-core",
+    "redis": "^5.12.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

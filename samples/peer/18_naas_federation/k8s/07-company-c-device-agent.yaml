@@ -1,0 +1,53 @@
+# Mirror of 06-company-b-device-agent.yaml for the A-C relationship's
+# ac-rfq-server device -- see that file's own comments for the full
+# rationale (Recreate strategy, PVC instead of emptyDir, specific-file
+# existence check in the initContainer).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: c-device-agent
+  namespace: naas-company-c
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: c-device-agent
+  template:
+    metadata:
+      labels:
+        app: c-device-agent
+    spec:
+      volumes:
+        - name: devices-secret
+          secret:
+            secretName: p18-devices-c
+        - name: devices
+          persistentVolumeClaim:
+            claimName: p18-c-device-agent-pvc
+      initContainers:
+        - name: copy-devices
+          image: naas18-sidecar:dev
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "test -f /devices/aq-sf-p18-ac-rfq-server.json || cp /devices-secret/* /devices/"]
+          volumeMounts:
+            - { name: devices-secret, mountPath: /devices-secret }
+            - { name: devices, mountPath: /devices }
+      containers:
+        - name: device-agent
+          image: naas18-sidecar:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "arqit_device_agent.py", "--health-port", "8081"]
+          volumeMounts:
+            - { name: devices, mountPath: /home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices }
+          env:
+            - { name: ARQIT_PY_SERVER_CONFIG, value: "/home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices/aq-sf-p18-ac-rfq-server.json" }
+            - { name: KEY_STORE_BACKEND, value: "redis" }
+            - { name: KEY_STORE_REDIS_URL, value: "redis://redis:6379" }
+            - { name: KEY_STORE_REDIS_NAMESPACE, value: "p18-ac-rfq" }
+          ports:
+            - containerPort: 8081
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8081 }
+            initialDelaySeconds: 2

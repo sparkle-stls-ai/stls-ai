@@ -1,0 +1,47 @@
+# company-a: buyer only (target: company-b). A one-shot Job, not a
+# Deployment -- buyer.ts sends its RFQ and exits(0) once the quote is
+# in, same one-shot-script convention as every other sample's client.
+# restartPolicy=OnFailure lets it retry (via the Job controller's own
+# backoff) if it starts before company-b is ready.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: a-buyer
+  namespace: naas-company-a
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app: a-buyer
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: a-buyer
+          image: naas18-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["npx", "tsx", "buyer.ts"]
+          env:
+            - { name: COMPANY_NAME, value: "company-a" }
+            - { name: PORT, value: "8601" }
+            - { name: KEY_PROVIDER_NAME, value: "pqc" }
+            - { name: TARGETS_COUNT, value: "1" }
+            - { name: TARGET_1_NAME, value: "company-b" }
+            # NodePort, not in-cluster DNS -- see 00-namespaces.yaml.
+            - { name: TARGET_1_URL, value: "http://192.168.49.2:30604" }
+          ports:
+            - containerPort: 8601
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: a-buyer
+  namespace: naas-company-a
+spec:
+  type: NodePort
+  selector:
+    app: a-buyer
+  ports:
+    - port: 8601
+      targetPort: 8601
+      nodePort: 30601
