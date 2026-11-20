@@ -16,6 +16,7 @@ import asyncio
 import base64
 import gzip
 import os
+from urllib.parse import urlparse
 
 import pytest
 import redis.asyncio as redis
@@ -23,6 +24,23 @@ import redis.asyncio as redis
 from stls_identity import StatusListManager, MRI_SECONDS
 
 REDIS_URL = os.getenv("STATUS_LIST_TEST_REDIS_URL", "redis://localhost:6379/15")
+
+# This fixture calls flushdb() — a FULL wipe of whatever DB the URL
+# resolves to, not a targeted delete. DB 0 is Redis's own default and
+# the one every other service in this codebase defaults to
+# (IDENTITY_KEYSTORE_REDIS_URL, STATUS_LIST_REDIS_URL, ...), so a
+# misconfigured STATUS_LIST_TEST_REDIS_URL missing its /<n> suffix
+# silently points here at production data instead of an isolated test
+# DB — exactly what happened once (see issue history). Refuse to run
+# rather than risk repeating that, even if the env var is wrong again.
+_db_path = urlparse(REDIS_URL).path.lstrip("/")
+if _db_path in ("", "0"):
+    raise RuntimeError(
+        f"STATUS_LIST_TEST_REDIS_URL={REDIS_URL!r} resolves to Redis DB "
+        f"{_db_path or '0'} (the default production DB) — refusing to run "
+        "tests that flushdb() against it. Use an isolated DB index, e.g. "
+        "redis://localhost:6379/15."
+    )
 
 
 @pytest.fixture

@@ -817,6 +817,8 @@ A real example is available in [tests/task_test.py](./tests/task_test.py), where
 
 A2A 1.0 clients send files in a different, flatter shape — `{"raw": base64, "filename": ..., "mediaType": ...}` or `{"url": ..., "filename": ..., "mediaType": ...}`, no `"file"` wrapper at all — which is also accepted (see "Using Standard A2A Methods" above). `FilePart`s are echoed back (e.g. in `Task.history`) carrying both shapes at once, so either kind of client can read them.
 
+`GoogleADKAdapter` specifically: a `FileReference.uri` that isn't `gs://` or a real youtube.com host is downloaded with `httpx` before being handed to the model. Since 0.1.11, that download is guarded against SSRF — the scheme is restricted to http(s) and the resolved host address is rejected if it's loopback/link-local/private/reserved/multicast/unspecified, so a `FileReference` can't be used to make the server fetch an internal address (cloud metadata endpoints, localhost services) on the caller's behalf.
+
 ## Agent Cards and Discovery
 
 For card generation you can use:

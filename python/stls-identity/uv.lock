@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12"
 
 [[package]]
@@ -516,7 +516,7 @@ wheels = [
 
 [[package]]
 name = "stls-core"
-version = "0.1.8"
+version = "0.1.10"
 source = { directory = "../stls-core" }
 dependencies = [
     { name = "cryptography" },
@@ -552,7 +552,7 @@ provides-extras = ["redis", "postgres", "arqit-py", "pqc", "dev"]
 
 [[package]]
 name = "stls-identity"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "asyncpg" },

@@ -51,14 +51,15 @@ StatusResolver = Callable[[VerifiableCredential], Awaitable[tuple[dt.datetime, b
 (status_bitstring_fetch_time, is_revoked) — exactly the two inputs
 Sentinel.verify()/verify_not_revoked() already require explicitly as
 arguments (stls_id_verifier.py). No default is provided here on
-purpose: this package has no remote status-list fetcher yet (only the
-issuer side publishes a BitstringStatusList — see status.py; nothing
-resolves a REMOTE authority's published one for a verifying bridge
-like this). Silently treating "no resolver" as "not revoked" would be
-an insecure default a caller could easily miss; requiring an
-explicitly-named one keeps the limitation visible in their own code
-instead (see tests/test_request_verifier.py for a trivial in-memory
-one)."""
+purpose, even though a real one now exists
+(fetch_remote_credential_status, stls_id_status.py): silently
+defaulting to it would let a caller end up doing a live HTTP fetch per
+verification without ever having decided that's the right tradeoff for
+their deployment (caching policy, failure mode on an unreachable
+status list, etc.) — requiring an explicit resolver keeps that choice
+visible in their own code. Pass fetch_remote_credential_status
+directly for the common case, or see
+tests/test_request_verifier.py for a trivial in-memory one."""
 
 
 class RequestPresentationVerifier:

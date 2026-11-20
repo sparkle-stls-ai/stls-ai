@@ -18,12 +18,14 @@ parallel throughout the migration.
 | DID Document (`did:web`), Ed25519 key bootstrap | `stls_id_did.py` | ✅ tested |
 | Identity Credential (`NetworkAuthorityCredential`) | `stls_id_issuer.py` | ✅ tested |
 | Operational Credential — Grantor → Requestor delegation, depth-limit 1 | `stls_id_delegation.py` | ✅ tested |
-| Revocation via status list (bitstring on Redis, 5 min MRI) | `stls_id_status.py` | ✅ tested (real Redis) |
+| Revocation via status list (bitstring on Redis, 5 min MRI), + remote fetch/check over HTTP (`fetch_remote_credential_status`) for a verifying bridge | `stls_id_status.py` | ✅ tested (real Redis + real HTTP) |
 | Verifiable Presentation (Identity + Operational bundle) | `stls_id_presentation.py` | ✅ tested |
 | Identity Bridge (HTTP: DID Document + status list) | `stls_id_bridge.py`, `stls_id_postgres_store.py` | ✅ tested (real Postgres) |
 | Trust Anchor Registry — recognized Authorities + key history | `stls_id_trust_registry_*.py` | ✅ tested (real Postgres), hooked up live to the Sentinel |
 | Verification (`Sentinel`) — signature, validity, revocation, delegation chain | `stls_id_verifier.py` | ✅ tested |
 | `stls-a2a` request bridge (issue #15 gap #1) — `X-STLS-Identity-Presentation` header, server-side verification, client-side `IdentityPresenter` | `stls_id_request_verifier.py`, `stls_id_presentation.py` | ✅ tested |
+| Identity Credential cache (issue #45) — `IdentityCredentialCacheBase`/`IdentityCredentialCacheFactory` (memory/redis), separate lifecycle from the signing-key keystore (TTL = the credential's own `validUntil`, no manual cleanup) | `stls_id_credential_cache.py` | ✅ tested |
+| Generalized identity loader (issue #45) — `load_identity_presenter()`/`identity_challenge_handler_from_env()`: one call, driven by `IDENTITY_AGENT_ID`, builds a `stls-a2a` `identity_challenge_handler` from whatever's already in the keystore/credential cache — promoted from a hand-rolled pattern first written for `samples/server/sofia-admin`'s coordinator | `stls_id_presentation.py` | ✅ tested |
 
 Canonicalization: real RFC 8785 (JCS) via the `rfc8785` library, not an
 approximation — necessary so that bridges implemented independently on
@@ -35,12 +37,6 @@ Ed25519, proof type `DataIntegrityProof` /
 
 Listed explicitly so it doesn't look like it was forgotten:
 
-- **Remote status-list fetching for a verifying bridge** —
-  `RequestPresentationVerifier`/`Sentinel.verify()` take
-  `status_bitstring_fetch_time`/`is_revoked` as caller-supplied
-  arguments; nothing in this package fetches and checks a REMOTE
-  Authority's published `BitstringStatusList` on a verifier's behalf
-  yet (only the issuing side publishes one, via `stls_id_status.py`).
 - **Single-agent key rotation** — key history only exists for
   Governing Authorities in the Trust Anchor Registry. An agent that
   rotates its own key doesn't have the same mechanism (its DID
@@ -106,7 +102,7 @@ the variables (`IDENTITY_TEST_PG_DSN`, `STATUS_LIST_TEST_REDIS_URL`,
 loaded automatically by `tests/conftest.py`). Tests that don't touch
 external infrastructure still run with nothing configured.
 
-68 tests as of 0.1.0, 77 as of 0.1.1, all against real crypto/DB/cache
+68 tests as of 0.1.0, 91 as of 0.1.1, all against real crypto/DB/cache
 where relevant — never against Python stubs for the parts that matter
 (signing, canonicalization, persistence, revocation).
 
@@ -119,7 +115,7 @@ src/stls_identity/
     stls_id_keystore.py            signing-key persistence (no-TTL, not ArqitKeyStoreBase)
     stls_id_issuer.py              IdentityManager — Identity Credential issuance
     stls_id_delegation.py          DelegationManager — Operational Credential, depth-1
-    stls_id_status.py              status list (Redis bitstring, MRI)
+    stls_id_status.py              status list (Redis bitstring, MRI) + remote fetch/check over HTTP
     stls_id_presentation.py        Verifiable Presentation construction/signing, wire helpers, IdentityPresenter
     stls_id_verifier.py            Sentinel — all verifications
     stls_id_request_verifier.py    stls-a2a identity_verifier bridge (issue #15 gap #1)
@@ -128,7 +124,7 @@ src/stls_identity/
     stls_id_trust_registry_store.py    Trust Anchor Registry, key history (Postgres)
     stls_id_trust_registry_client.py   cache/TTL, historical fallback for the Sentinel
     stls_id_trust_registry_bridge.py   read-only HTTP endpoint for the registry
-tests/       77 tests, same "against real infrastructure" discipline as the rest of the monorepo
+tests/       81 tests, same "against real infrastructure" discipline as the rest of the monorepo
 ```
 
 ## License

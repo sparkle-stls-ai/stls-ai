@@ -48,11 +48,10 @@ import os
 
 import httpx
 import redis.asyncio as redis_asyncio
-from base58 import b58decode
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from stls_identity import (
     CredentialVerificationError,
+    IdentityCredentialCacheFactory,
     IdentityKeystoreFactory,
     IdentityManager,
     NetworkAuthorityCredential,
@@ -65,6 +64,8 @@ from stls_identity import (
     TrustAnchorRegistryClient,
     bootstrap_signing_key,
     build_did_document,
+    decode_multibase_ed25519_public_key,
+    fetch_status_bit,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,14 @@ _STATUS_LIST_PUBLISH_URL = os.environ.get(
     "STATUS_LIST_PUBLISH_URL", "https://sofia.sparkle.example.com/identity/status-list"
 )
 _AUTHORITY_VM_ID = f"{_GOVERNING_AUTHORITY_DID}#key-1"
+
+# Issue #45: agent_id of the identity-presenting caller this sample is
+# built around (the coordinator) — same env var name
+# stls_identity.identity_challenge_handler_from_env() reads on the
+# coordinator's own side (agent_coordinator.py), so one value drives
+# both "which identity do I present" (coordinator) and "whose identity
+# do I trust as a caller" (this module's own server.py, below).
+IDENTITY_AGENT_ID = os.environ.get("IDENTITY_AGENT_ID", "sofia-admin-coordinator")
 
 # Issuance/revocation log — audit ONLY, never consulted by the
 # verification path (validate_agent_identity_credential doesn't touch
@@ -109,12 +118,10 @@ _CREDENTIAL_LOG_DDL = """
     CREATE INDEX IF NOT EXISTS {table}_status_list_index_idx ON {table} (status_list_index);
     CREATE INDEX IF NOT EXISTS {table}_agent_id_idx ON {table} (agent_id);
 """
-# Credential cache namespace — same Redis as the status list and
-# keystore, same trust perimeter: whoever can already read an agent's
-# private key is already inside the right perimeter to also read its
-# credential (which ends up presented publicly on every call anyway —
-# it's less sensitive than the key, not more).
-_CRED_KEY_PREFIX = "stls:identity:credential"        # single slot, Identity Credential
+# Operational Credential cache namespace — same Redis as the status
+# list, same trust perimeter reasoning. The Identity Credential's own
+# cache is now stls_identity.IdentityCredentialCache (issue #45) — see
+# cache_own_identity_credential/get_cached_identity_credential below.
 _OPCRED_KEY_PREFIX = "stls:identity:opcred"           # collection, Operational Credential
 _OPCRED_INDEX_PREFIX = "stls:identity:opcred_index"   # sorted set, score = validUntil epoch
 
@@ -126,14 +133,14 @@ class _Deps:
 
     __slots__ = (
         "keystore", "did_store", "status_list_manager", "identity_manager",
-        "sentinel", "cache_redis", "pg_pool", "credential_log_table",
+        "sentinel", "cache_redis", "credential_cache", "pg_pool", "credential_log_table",
         "trust_registry_store", "trust_registry_client",
     )
 
     def __init__(
         self, keystore, did_store, status_list_manager, identity_manager,
-        sentinel, cache_redis, pg_pool, credential_log_table, trust_registry_store,
-        trust_registry_client,
+        sentinel, cache_redis, credential_cache, pg_pool, credential_log_table,
+        trust_registry_store, trust_registry_client,
     ):
         self.keystore = keystore
         self.did_store = did_store
@@ -141,6 +148,7 @@ class _Deps:
         self.identity_manager = identity_manager
         self.sentinel = sentinel
         self.cache_redis = cache_redis
+        self.credential_cache = credential_cache
         self.pg_pool = pg_pool
         self.credential_log_table = credential_log_table
         self.trust_registry_store = trust_registry_store
@@ -260,9 +268,17 @@ async def _deps() -> _Deps:
 
     sentinel = Sentinel(trusted_issuer_keys={_AUTHORITY_VM_ID: authority_pub})
 
+    # Issue #45: package primitive (stls_id_credential_cache.py), not a
+    # second hand-rolled Redis client — this is the SAME store
+    # load_identity_presenter() reads from on whichever process presents
+    # this agent's identity (e.g. the Sofia Admin coordinator). Sync
+    # client, like IdentityKeystoreFactory's own — fine here, same
+    # "startup/admin-tool call, not a hot request path" reasoning.
+    credential_cache = IdentityCredentialCacheFactory.build()
+
     _deps_singleton = _Deps(
         keystore, did_store, status_list_manager, identity_manager, sentinel,
-        cache_redis, pool, _CREDENTIAL_LOG_TABLE, trust_registry_store,
+        cache_redis, credential_cache, pool, _CREDENTIAL_LOG_TABLE, trust_registry_store,
         trust_registry_client,
     )
     return _deps_singleton
@@ -325,6 +341,12 @@ async def issue_identity_credential_for_agent(
         principal_ref: opaque reference to the human/organization
             principal responsible for this agent (e.g. "org:sparkle:bda").
 
+    Also always caches the issued credential (same effect as calling
+    cache_own_identity_credential right after — issue #45: whoever reads
+    an agent's own credential from the cache, e.g. the Sofia Admin
+    coordinator's own identity_challenge_handler, must see it regardless
+    of which path issued it).
+
     Returns:
         The signed credential as a JSON-compatible dict, or
         {'error': '...'} if the agent isn't bootstrapped yet.
@@ -363,6 +385,20 @@ async def issue_identity_credential_for_agent(
                 )
         except Exception as e:
             logger.error("credential log INSERT failed (credential is still valid): %s", e)
+
+        # Issue #45: ALWAYS cache the newly issued credential — not just
+        # "offered" by the agent's own instruction (agent_identity.py)
+        # and left to whether the user accepts. The coordinator's own
+        # identity_challenge_handler (agent_coordinator.py) reads this
+        # SAME cache directly, so a credential issued through THIS tool
+        # (via chat) must be visible there exactly like one issued via
+        # bootstrap_coordinator_identity.py — one source of truth,
+        # whichever path issued it. Failure here never invalidates the
+        # issuance itself, same posture as the audit log INSERT above.
+        try:
+            await cache_own_identity_credential(agent_id, payload)
+        except Exception as e:
+            logger.error("auto-cache of issued credential failed (issuance still valid): %s", e)
 
         return payload
     except Exception as e:
@@ -480,13 +516,10 @@ async def revoke_agent_identity_credential(credential: dict) -> dict:
 
         cache_invalidated = False
         agent_id = parsed.credential_subject.client_id
-        cache_key = f"{_CRED_KEY_PREFIX}:{agent_id}"
-        cached_raw = await d.cache_redis.get(cache_key)
-        if cached_raw is not None:
-            cached = json.loads(cached_raw)
-            if cached.get("id") == parsed.id:
-                await d.cache_redis.delete(cache_key)
-                cache_invalidated = True
+        cached = d.credential_cache.get(agent_id)
+        if cached is not None and cached.id == parsed.id:
+            d.credential_cache.delete(agent_id)
+            cache_invalidated = True
 
         # Same spirit as the log INSERT in issue_identity_credential_for_agent:
         # if this UPDATE fails, the real revocation (on the status list)
@@ -584,12 +617,11 @@ async def cache_own_identity_credential(agent_id: str, credential: dict) -> dict
         return {"error": "the credential is already expired, not saving it"}
 
     try:
-        key = f"{_CRED_KEY_PREFIX}:{agent_id}"
-        payload = json.dumps(credential)
-        if ttl is not None:
-            await d.cache_redis.set(key, payload, ex=ttl)
-        else:
-            await d.cache_redis.set(key, payload)
+        # Issue #45: the package primitive (stls_identity.IdentityCredentialCache)
+        # owns the actual storage/TTL decision now — same store
+        # load_identity_presenter() reads from, so this and ANY other
+        # caller end up looking at the same cache.
+        d.credential_cache.set(agent_id, parsed)
         return {"cached": True, "ttl_seconds": ttl}
     except Exception as e:
         logger.error("cache_own_identity_credential error: %s", e)
@@ -611,10 +643,10 @@ async def get_cached_identity_credential(agent_id: str) -> dict:
     """
     d = await _deps()
     try:
-        raw = await d.cache_redis.get(f"{_CRED_KEY_PREFIX}:{agent_id}")
-        if raw is None:
+        credential = d.credential_cache.get(agent_id)
+        if credential is None:
             return {"found": False}
-        return {"found": True, "credential": json.loads(raw)}
+        return {"found": True, "credential": credential.model_dump(mode="json", by_alias=True, exclude_none=True)}
     except Exception as e:
         logger.error("get_cached_identity_credential error: %s", e)
         return {"error": str(e)}
@@ -945,46 +977,14 @@ async def revoke_trust_anchor(authority_id: str) -> dict:
 # EXTERNAL CREDENTIAL VERIFICATION — actually uses the Trust Anchor Registry
 # ══════════════════════════════════════════════════════════════════════════════
 
-_MULTICODEC_ED25519_PUB_PREFIX = b"\xed\x01"  # same multicodec stls-identity uses for publicKeyMultibase
-
-
-def _decode_multibase_ed25519_public_key(multibase_str: str) -> Ed25519PublicKey:
-    """
-    Reconstructs an Ed25519PublicKey from a publicKeyMultibase — local
-    to this file, not imported from stls_identity: the package's
-    equivalent function isn't exported from its __init__.py in the
-    installed version (ImportError found in production), so we keep it
-    here instead of depending on an unstable internal detail. Same
-    logic already verified against a real key (Operator B's, onboarded
-    into the Trust Anchor Registry).
-    """
-    if not multibase_str.startswith("z"):
-        raise ValueError(f"expected multibase prefix 'z' (base58btc), found: {multibase_str[:1]!r}")
-    raw = b58decode(multibase_str[1:])
-    prefix, key_bytes = raw[:2], raw[2:]
-    if prefix != _MULTICODEC_ED25519_PUB_PREFIX:
-        raise ValueError(
-            f"unexpected multicodec {prefix!r}, expected {_MULTICODEC_ED25519_PUB_PREFIX!r} (ed25519-pub)"
-        )
-    return Ed25519PublicKey.from_public_bytes(key_bytes)
-
-
-async def _is_bit_revoked_at_url(status_list_url: str, index: int) -> bool:
-    """Fetch + decode (base64url + gzip) of a published status list,
-    then checks the single bit. Third time this logic is needed
-    (after check_published_status_list and validate_external_identity_credential)
-    — extracted here instead of being duplicated a third time."""
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(status_list_url)
-    resp.raise_for_status()
-    payload = resp.json()
-    encoded_list = payload.get("encodedList", "")
-    if not encoded_list:
-        raise ValueError(f"empty status list at {status_list_url}")
-    padded = encoded_list + "=" * (-len(encoded_list) % 4)
-    decompressed = gzip.decompress(base64.urlsafe_b64decode(padded))
-    byte_idx, bit_idx = index // 8, index % 8
-    return bool(len(decompressed) > byte_idx and (decompressed[byte_idx] >> (7 - bit_idx)) & 1)
+# _decode_multibase_ed25519_public_key / _is_bit_revoked_at_url used to be
+# defined here, duplicated from logic that genuinely lives in the
+# stls-identity package but wasn't exported (decode_multibase_ed25519_public_key,
+# stls_id_did.py) or didn't exist yet as a reusable primitive
+# (fetch_status_bit/fetch_remote_credential_status, stls_id_status.py —
+# promoted from this exact code while scoping issue #15's follow-up, #45).
+# Both are now imported from the package below instead of duplicated a
+# second time.
 
 
 async def validate_external_identity_credential(credential: dict) -> dict:
@@ -1022,7 +1022,7 @@ async def validate_external_identity_credential(credential: dict) -> dict:
 
     status_list_url = parsed.credential_status.status_list_credential
     try:
-        is_revoked = await _is_bit_revoked_at_url(
+        is_revoked = await fetch_status_bit(
             status_list_url, parsed.credential_status.status_list_index
         )
     except Exception as e:
@@ -1136,7 +1136,7 @@ async def validate_external_operational_credential(
 
     try:
         vm = grantor_did_document["verificationMethod"][0]
-        grantor_pub = _decode_multibase_ed25519_public_key(vm["publicKeyMultibase"])
+        grantor_pub = decode_multibase_ed25519_public_key(vm["publicKeyMultibase"])
         grantor_vm_id = vm["id"]
     except Exception as e:
         return {"valid": False, "reason": f"malformed grantor_did_document: {e}"}
@@ -1152,11 +1152,11 @@ async def validate_external_operational_credential(
 
     now = dt.datetime.now(dt.timezone.utc)
     try:
-        grantor_revoked = await _is_bit_revoked_at_url(
+        grantor_revoked = await fetch_status_bit(
             grantor_id_cred.credential_status.status_list_credential,
             grantor_id_cred.credential_status.status_list_index,
         )
-        op_revoked = await _is_bit_revoked_at_url(
+        op_revoked = await fetch_status_bit(
             op.credential_status.status_list_credential,
             op.credential_status.status_list_index,
         )

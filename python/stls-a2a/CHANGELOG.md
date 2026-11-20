@@ -7,6 +7,56 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.11] — 2026-11-20
+
+Issue #15 gap #1 — the VP wire format — plus two real bugs found
+while testing its follow-up (issue #45: sofia-admin's coordinator
+calling a Google-ADK-based sub-agent), fixed in
+`stls_a2a_google_adapter.py`. The adapter fixes are not
+identity-specific. See [`python/stls-identity` 0.1.1](../stls-identity/CHANGELOG.md)
+for the identity-engine side of the gap #1 change.
+
+### Added
+
+- `X-STLS-Identity-Presentation` request header, carrying a
+  Verifiable Presentation signed over a server-minted challenge
+  independent of the key-session provider (pqc/base/arqit_py).
+- `identity_verifier` (server, `create_secure_a2a_endpoint()`) /
+  `identity_challenge_handler` (client, `STLSHttpxTransport`) hooks —
+  duck-typed, `stls-a2a` never imports `stls_identity`. Both default
+  to `None`: zero behavior change for every existing caller.
+- Retry-once client flow mirroring the existing `ERR_SESSION_EXPIRED`
+  behavior: new `ERR_IDENTITY_CHALLENGE_REQUIRED` (`-32005`).
+
+### Security
+
+- Fixed an SSRF in `GoogleADKAdapter._to_genai_parts()`: a
+  `FileReference.uri` that wasn't `gs://` or a real youtube.com host
+  fell through to an unrestricted `httpx.get(uri)` — any caller of
+  `messages/send`/`messages/sendStream` could make this server fetch
+  an arbitrary URL on their behalf (cloud instance metadata endpoints,
+  internal services) and have the response fed into the model. Added
+  `_assert_safe_remote_file_url()`: restricts the scheme to http(s)
+  and resolves the host, rejecting any address that is loopback/
+  link-local/private/reserved/multicast/unspecified (catches DNS
+  rebinding too, since the resolved IP is checked, not the hostname
+  string); the download client also now sets `follow_redirects=False`
+  explicitly so a safe URL can't redirect past the check.
+
+### Fixed
+
+- `create_secure_a2a_endpoint(enable_plain_endpoint=False, base_url=...)`
+  crashed for every agent using that combination.
+- `GoogleADKAdapter.invoke()`/`_invoke_stream()` checked
+  `hasattr(event, 'is_error') and event.is_error()` to detect a failed
+  sub-agent call — `google.adk.events.event.Event` has no
+  `is_error()` method, so the check was permanently `False`, dead
+  code. A sub-agent failure (e.g. a 401 from an identity-protected
+  endpoint) now surfaces its real `error_message` instead of falling
+  through to a generic "No response received from agent" (`invoke()`)
+  or being dropped with zero trace at all (`_invoke_stream()`, the
+  path a real chat UI like `sofia-client-secure` actually uses).
+
 ## [0.1.10] — 2026-11-19
 
 No code changes in this package. Documents the cross-process

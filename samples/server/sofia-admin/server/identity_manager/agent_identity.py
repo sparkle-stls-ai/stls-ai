@@ -1,4 +1,20 @@
-MODEL_GEMINI_2_5_FLASH = "gemini-2.5-flash"
+from dotenv import load_dotenv
+load_dotenv()
+
+import logging
+import os
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s-%(levelname)-8s-%(name)s-%(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_AGENT_MODEL = "gemini-3.5-flash"
+AGENT_MODEL = (os.getenv("AGENT_MODEL") or DEFAULT_AGENT_MODEL).strip()
+logger.info(f"--- Agent model: {AGENT_MODEL} ---")
+
 
 from google.adk.agents import Agent
 
@@ -43,7 +59,7 @@ from tools_identity import (
 
 sofia_identity_agent = Agent(
     name="sofia_identity_agent",
-    model=MODEL_GEMINI_2_5_FLASH,
+    model=AGENT_MODEL,
     description=(
         "Agent to manage W3C DID / Verifiable Credential identities for agents "
         "running on the Sofia Platform."
@@ -121,9 +137,10 @@ sofia_identity_agent = Agent(
         "then issue_identity_credential_for_agent. If issuance fails because the "
         "agent has no DID yet, bootstrap it and retry automatically, without "
         "asking for confirmation. Never invent an agent_id — only use the one "
-        "given by the caller. After issuing a credential, offer to cache it with "
-        "cache_own_identity_credential so the user doesn't have to paste it back "
-        "later to validate or revoke it.\n\n"
+        "given by the caller. issue_identity_credential_for_agent already caches "
+        "every credential it issues automatically — cache_own_identity_credential "
+        "is only needed to save one that came from somewhere else (e.g. pasted "
+        "in by the user).\n\n"
         "To make an agent a Grantor, issue its Identity Credential with "
         "roles=[\"grantor\"]. This is identity provisioning only — you never "
         "perform the act of delegation itself (no tool here issues Operational "
