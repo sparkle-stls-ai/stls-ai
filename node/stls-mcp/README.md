@@ -242,6 +242,19 @@ same design as Python's `create_secure_mcp_app()`.
   `process.exit(0)` at the end to exit cleanly, same as a one-shot CLI
   script would; a long-running server (`vault-server.ts`) doesn't need
   to, since it's meant to keep running.
+- **Sharing ONE `arqit_py` device across horizontally-scaled replicas
+  (issue #38, `stls-core` 0.1.10)**: two independent processes
+  authenticating the same device identity at once — even sequentially
+  — can lock it out entirely on the real Arqit cloud. `ARQIT_PY_DEVICE_ROLE=consumer`
+  and the new device-level owner lock are read inside the Python
+  sidecar's own `KeySessionProviderFactory.get_session_provider()` —
+  the sidecar's `"start"` RPC calls straight into that, so a
+  Node-fronted `arqit_py` SERVER session picks up both automatically,
+  with no `.ts` code change. Set them on the sidecar process's own
+  environment (same as `KEY_PROVIDER_NAME`) when you launch it — see
+  `node/stls-core/README.md`'s environment-variables section and
+  `python/stls-core/README.md`'s `arqit_py` section for the full
+  write-up.
 
 ## Testing
 

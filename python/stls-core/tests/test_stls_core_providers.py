@@ -17,6 +17,11 @@ Copertura:
   P11 — KeySessionProviderFactory crea provider SERVER base senza errori
   P12 — KeySessionProviderFactory crea provider CLIENT base senza errori
   P13 — KeyProviderFactory.get_provider("arqit_py") → ImportError se wheel assenti
+  P14 — ARQIT_PY_DEVICE_ROLE=consumer + KEY_STORE_BACKEND=redis → KeySessionProviderArqitPy
+        SERVER, senza richiedere i wheel [arqit_py] (issue #38)
+  P15 — ARQIT_PY_DEVICE_ROLE=consumer + backend non-redis → ValueError
+  P16 — ARQIT_PY_DEVICE_ROLE=consumer è ignorato per session_type=CLIENT
+  P17 — ARQIT_PY_DEVICE_ROLE non impostato (default "owner") → comportamento inalterato
 """
 
 import asyncio
@@ -202,3 +207,83 @@ def test_P13_arqit_py_import_error():
     except ImportError:
         with pytest.raises(ImportError, match="arqit_py"):
             factory.get_provider("arqit_py")
+
+
+# ---------------------------------------------------------------------------
+# P14-P17 — ARQIT_PY_DEVICE_ROLE=consumer (issue #38)
+# ---------------------------------------------------------------------------
+
+def test_P14_consumer_role_returns_session_provider_without_wheels(monkeypatch):
+    """P14 — consumer role builds a KeySessionProviderArqitPy SERVER session
+    directly off the Redis-backed store, without ever needing the real
+    uk.arqit.device.* SDK — forced absent here via sys.modules so this
+    holds regardless of whether the [arqit_py] extra happens to be
+    installed in the environment running this test.
+    """
+    import sys
+
+    monkeypatch.setitem(sys.modules, "uk.arqit.device.common", None)
+    monkeypatch.setenv("ARQIT_PY_DEVICE_ROLE", "consumer")
+    monkeypatch.setenv("KEY_STORE_BACKEND", "redis")
+    monkeypatch.setenv("KEY_STORE_REDIS_URL", "redis://localhost:6379")
+
+    from unittest.mock import patch
+    from stls_core.providers.stls_core_providers_arqit_py import KeySessionProviderArqitPy
+
+    with patch("redis.Redis.from_url"):
+        provider = KeySessionProviderFactory().get_session_provider(
+            session_type=KeySessionProvider.KeySessionProviderType.SERVER,
+            name="arqit_py",
+        )
+    assert isinstance(provider, KeySessionProviderArqitPy)
+    assert provider.getSessionType() == KeySessionProvider.KeySessionProviderType.SERVER
+
+
+def test_P15_consumer_role_requires_redis_backend(monkeypatch):
+    """P15 — consumer role with a non-redis KEY_STORE_BACKEND raises ValueError:
+    a consumer replica has no negotiation of its own, KEY_STORE_BACKEND=memory
+    would leave it waiting forever for keys nobody populates.
+    """
+    monkeypatch.setenv("ARQIT_PY_DEVICE_ROLE", "consumer")
+    monkeypatch.delenv("KEY_STORE_BACKEND", raising=False)
+
+    with pytest.raises(ValueError, match="KEY_STORE_BACKEND=redis"):
+        KeySessionProviderFactory().get_session_provider(
+            session_type=KeySessionProvider.KeySessionProviderType.SERVER,
+            name="arqit_py",
+        )
+
+
+def test_P16_consumer_role_ignored_for_client_session_type(monkeypatch):
+    """P16 — ARQIT_PY_DEVICE_ROLE=consumer has no effect on a CLIENT session:
+    there's no "consumer client" concept, a client always negotiates its own
+    key. Falls through to the normal path, which still requires the real
+    SDK wheels -- forced absent here (see test_P14) so this holds
+    regardless of the environment running this test.
+    """
+    import sys
+
+    monkeypatch.setitem(sys.modules, "uk.arqit.device.common", None)
+    monkeypatch.setenv("ARQIT_PY_DEVICE_ROLE", "consumer")
+    with pytest.raises(ImportError, match="arqit_py"):
+        KeySessionProviderFactory().get_session_provider(
+            session_type=KeySessionProvider.KeySessionProviderType.CLIENT,
+            name="arqit_py",
+        )
+
+
+def test_P17_default_role_is_owner_unchanged_behavior(monkeypatch):
+    """P17 — ARQIT_PY_DEVICE_ROLE unset (default "owner"): behavior identical
+    to before this role even existed -- still requires the real SDK wheels
+    for a SERVER session, same as test_P13 (forced absent here, see test_P14,
+    so this holds regardless of the environment running this test).
+    """
+    import sys
+
+    monkeypatch.setitem(sys.modules, "uk.arqit.device.common", None)
+    monkeypatch.delenv("ARQIT_PY_DEVICE_ROLE", raising=False)
+    with pytest.raises(ImportError, match="arqit_py"):
+        KeySessionProviderFactory().get_session_provider(
+            session_type=KeySessionProvider.KeySessionProviderType.SERVER,
+            name="arqit_py",
+        )

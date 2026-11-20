@@ -195,6 +195,39 @@ section of
 for the full write-up, including the process-wide serialization lock
 this required inside the provider itself to make concurrent use safe.
 
+**Sharing ONE `arqit_py` device across horizontally-scaled replicas
+(issue #38).** Confirmed directly that two independent processes
+calling `authenticate_device()` for the SAME device identity at
+once — even sequentially, not just concurrently — can lock the device
+out entirely on the real Arqit cloud, requiring a manual
+deregister/re-register to recover. Two pieces close this:
+
+- **`ARQIT_PY_DEVICE_ROLE=consumer`**: set on a replica that should
+  only resolve session keys an `owner` process elsewhere already put
+  in the shared Redis-backed store (`KEY_STORE_BACKEND=redis`
+  required), never authenticating the device itself. Read inside
+  `KeySessionProviderFactory.get_session_provider()`, so every caller
+  built on it (`stls-a2a`, `stls-mcp`, the Node sidecar) gets this for
+  free with no code changes. Default (`ARQIT_PY_DEVICE_ROLE` unset, or
+  `"owner"`) is unchanged.
+- **A device-level owner lock**
+  (`ArqitKeyStoreFactory.build_owner_lock_store()`), claimed by both
+  `KeyProviderServerArqitPy.start()` and
+  `KeyProviderClientArqitPy.start()` before touching the SDK at all —
+  a second independent process authenticating the same device fails
+  fast with a clear error instead of repeating the incident above.
+
+For the actual "one owner, N consumers" topology,
+[`sidecar/arqit_device_agent.py`](./sidecar/arqit_device_agent.py) is
+a standalone process whose only job is to own the device and feed
+Redis — no HTTP/A2A/MCP serving of its own, with `/healthz`/`/livez`
+for Kubernetes probes. See
+[`samples/server/16_server_device_agent/README.md`](../../samples/server/16_server_device_agent/README.md)
+for a runnable end-to-end demo (one device-agent + two consumer
+`server.py` replicas) and `ARQIT_PY_OWNER_LOCK_TTL` in
+`providers/stls_core_providers_keystore.py`'s own module docstring for
+the lock's exact Redis layout.
+
 ## Configuration
 
 Copy `.env.example` to `.env` and adjust the values. Main variables:

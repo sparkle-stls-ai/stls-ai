@@ -185,6 +185,16 @@ builds both roles through this exact factory call and completes a real
 bilocation key agreement, a real handshake, and a real AES-256-GCM
 round trip.
 
+**`ARQIT_PY_DEVICE_ROLE=consumer` (issue #38) verified through this
+path too** — not just reasoned about: `tests/interop/provider-factory-arqit-consumer-real.live.ts`
+connects to a real Python sidecar process running in consumer mode
+(that env var set on the sidecar's OWN process, never read by any
+`.ts` code here) and resolves a real kid a separate real CLIENT
+already negotiated against a real device-agent
+(`python/stls-core/sidecar/arqit_device_agent.py`), confirmed
+byte-identical — and confirmed, from the sidecar's own log, that it
+never touches `uk.arqit.device.*`/authenticates anything in this mode.
+
 ### 4. Redis session cache (multi-instance deployment)
 
 ```ts
@@ -374,6 +384,17 @@ ARQIT_SIDECAR_TOKEN_SERVER=server-secret      # optional: role-specific override
 ARQIT_SIDECAR_TOKEN_CLIENT=client-secret      # optional: role-specific override, same convention as ARQIT_SIDECAR_SOCKET_CLIENT
 ARQIT_N_CLIENTS=1                 # arqit-sidecar-real.live.ts: how many sequential clients to run against the one SERVER session
 KEY_PROVIDER_NAME=base            # also read by the Python sidecar: "base" | "arqit_py"
+
+# arqit_py device sharing across replicas (issue #38) — set on the
+# PYTHON SIDECAR PROCESS's own environment when you launch it (same as
+# KEY_PROVIDER_NAME above), never read by any .ts code. The sidecar's
+# "start" RPC calls straight into KeySessionProviderFactory on the
+# Python side, so these apply identically to a Node-fronted SERVER
+# session as they do to a pure-Python one — see
+# python/stls-core/CHANGELOG.md 0.1.10 and
+# python/stls-core/src/stls_core/providers/stls_core_providers_keystore.py.
+ARQIT_PY_DEVICE_ROLE=owner        # "owner" (default) | "consumer" — consumer requires KEY_STORE_BACKEND=redis
+ARQIT_PY_OWNER_LOCK_TTL=60        # seconds; device-level owner-lock TTL, SERVER role only renews it
 ```
 
 ## Testing

@@ -1,0 +1,29 @@
+# samples/peer/18_naas_federation/k8s (issue #38)
+# ------------------------------------------------------------------------
+# Three namespaces, one per company, standing in for geographically
+# distributed clusters (a real deployment would use separate clusters
+# entirely). Cross-company traffic deliberately only ever uses
+# NodePort-exposed Services (never in-cluster ClusterIP/Service DNS) so
+# the sample doesn't accidentally rely on a shortcut that would not
+# exist if these really were separate clusters. Intra-company traffic
+# (a company's own seller replicas -> its own reply-agent) uses
+# ordinary ClusterIP Service DNS, which is fine -- that is genuinely
+# the same company's own infrastructure.
+#
+# Topology: company-a buys from BOTH company-b and company-c (same RFQ,
+# picks the cheaper real quote), each of company-b/c selling via its
+# own 2-replica seller + device-agent/consumer split (issue #38).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: naas-company-a
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: naas-company-b
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: naas-company-c

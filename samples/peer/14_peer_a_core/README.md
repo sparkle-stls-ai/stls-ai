@@ -189,3 +189,11 @@ peer-a listening on port 8401 (KEY_PROVIDER_NAME=base)
 [peer-a] round trip complete via two independent channels
 RESULT: PASS
 ```
+
+**Re-confirmed (2026-11-19)** as a regression check after the issue
+#38 changes to `stls_core_providers_arqit_py.py` (device-level owner
+lock, `reprovision_handler` fix) — unaffected here since this sample
+never sets `KEY_STORE_BACKEND=redis` (no-op owner lock) and the SDK's
+bootstrap fallback is never reached. `pqc` and `arqit_py` both re-run
+end to end (4 sidecars, real cloud, cross-wired pairing as above):
+PASS, same as the original validation.

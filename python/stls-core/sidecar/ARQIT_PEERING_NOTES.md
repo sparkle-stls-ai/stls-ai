@@ -305,3 +305,119 @@ parallelizing `arqit_py` calls themselves; the provider now does that
 safely on their behalf. The Node sidecar needed no code change of its
 own — it's a Python process running this same module under the hood,
 so it picked up the fix automatically.
+
+## Follow-up (2026-11-19): a brand-new device pair needs an explicit provisioning step before it can peer at all
+
+Registering a fresh device via `RegistrationClient.register_device_v3()`
+(see `stls_core_providers_arqit_py.py`'s `reprovision_handler` fix
+above) leaves it at bootstrap (`provisioningState: ""`) — enough to
+`authenticate_device()` successfully, but **not** enough to actually
+negotiate a bilocation key: confirmed directly while provisioning two
+brand-new devices for
+`samples/server/16_server_device_agent/`/`samples/client/16_client_device_agent/`
+(issue #38's end-to-end validation). Both authenticated fine, but the
+client's `agree_bilocation_key()` failed outright with `HTTP 403` from
+`get_intermediate_response` — a REST call to Arqit's own backend,
+before any local socket traffic between the two processes at all, so
+this is Arqit's backend rejecting the call, not a local config issue.
+
+Cross-checked against the two devices that already DO peer
+successfully in this repo (`aq-sf-server-ms-1`/`aq-sf-client-ms-1`):
+both sit at `provisioningState: "fullyProvisioned"`, not `""`. Running
+both new devices through the same bootstrap→provisioned flow the
+incident-recovery work above already established
+(`authenticate_device()` → `ProvisioningClient.transition_provisioning_state(session)`
+→ `authenticate_device()` again) immediately fixed it: **confirmed
+working end-to-end afterward** — real client authentication, real
+bilocation+P2P negotiation, the resulting key landing in the
+device-agent's Redis-backed store, and a separate consumer process
+that never called `start()` resolving the exact same key via
+`hint_kid`.
+
+**Consequence**: any brand-new `arqit_py` device pair needs this
+explicit provisioning transition before first use, not just
+registration — `register_device_v3()` alone is not enough. Every
+device already committed in this repo happened to have this done at
+some point in its history; it just wasn't written down anywhere that
+a *new* pair needs it too.
+
+## Follow-up (2026-11-19, same day): the cwd pitfall can make `asyncio.gather()` hang silently instead of erroring
+
+The already-documented cwd pitfall (relative `DEVICE_METADATA_FILEPATH`
+resolved against the process's cwd, not the config file's own
+directory — see above, "missing/wrong-cwd `DEVICE_METADATA_FILEPATH`
+doesn't fail gracefully") has a nastier variant specific to
+`asyncio.gather()`: pointing `ARQIT_PY_CLIENT_CONFIG` at a device
+whose config lives OUTSIDE whatever directory the calling script
+itself `os.chdir()`'s to (e.g.
+`samples/client/10_client_ms/client_multi_session.py`, which
+hardcodes `os.chdir()` to its own directory) makes
+`KeyProviderClientArqitPy.start()` fail with the `FileNotFoundError`
+→ `AttributeError` cascade already documented — but when that happens
+inside one of two coroutines passed to `asyncio.gather()` (as in
+`client_multi_session.py`'s "Test A", 2 simultaneous sessions), the
+result isn't a clean crash: confirmed directly (while validating
+`samples/server/16_server_device_agent/`) that the whole script just
+**hangs indefinitely with no further output and no traceback** instead
+— consistent with `asyncio.gather()`'s default behavior of not
+cancelling sibling tasks when one raises, combined with Python's own
+"Task exception was never retrieved" becoming an easy-to-miss log
+warning rather than a visible failure.
+
+**Fix applied to `samples/server/16_server_device_agent/`'s own device
+pair**: `DEVICE_METADATA_FILEPATH`/`DEVICE_PROPERTIES_FILEPATH`/`DEVICE_POLICY_FILEPATH`
+in its `aq-sf-device-agent-16-{server,client}.json` are absolute paths,
+not the relative `./...` convention used elsewhere in this repo —
+sidesteps the whole cwd question regardless of which script's
+directory ends up being the process cwd. `samples/client/16_client_device_agent/client_session.py`
+(a new, minimal, single-session client — not `client_multi_session.py`'s
+always-2-concurrent-sessions "Test A") confirms this works end to end:
+real key resolution via the device-agent, then a real encrypted A2A
+call through a consumer-role replica, `HTTP 200 OK`.
+
+**Takeaway**: a silent hang in any `arqit_py` script that uses
+`asyncio.gather()` over multiple sessions is worth checking for this
+cwd mismatch FIRST, before suspecting a real concurrency bug or
+cloud-side rate-limiting — it produces no error at all, just nothing
+happening.
+
+## Follow-up (2026-11-19, same day): `ARQIT_PY_DEVICE_ROLE=consumer` confirmed through the Node sidecar path too
+
+Until now this was only reasoned about from reading the code (the
+sidecar's `"start"` RPC calls straight into
+`KeySessionProviderFactory.get_session_provider()` on the Python side,
+which already branches on `ARQIT_PY_DEVICE_ROLE` — see
+`stls_core_providers_factory.py`), never actually run. Ran it for
+real: one Python sidecar process (SERVER role,
+`ARQIT_PY_DEVICE_ROLE=consumer` on its own env) connected to from
+Node via `KeySessionProviderFactory.getSessionProvider()`
+(`node/stls-core/tests/interop/provider-factory-arqit-consumer-real.live.ts`),
+resolving a kid a real CLIENT had already negotiated against a real,
+separately-running `arqit_device_agent.py` — **confirmed**: Node
+correctly resolves the byte-identical key via `hintKid`, and the
+sidecar's own log shows no `uk.arqit.device.*` usage and no device
+authentication at all in this mode, exactly as the code reading
+predicted. No `node/stls-core` source changes were needed — the whole
+point of that code reading holding up.
+
+**Side finding, same session**: re-running `11_server_mcp_ms`/`12_server_mcp_ms`
+as a regression check (both roles, both `pqc` and `arqit_py`, genuine
+concurrency, all still PASS after today's changes) surfaced a real
+`SOCKET_LISTENING_PORT` collision — `16_server_device_agent`'s
+generated device had been given `8891`, already used by
+`11_server_mcp_ms/server_mcp_ms_1`'s device. Harmless as long as the
+two are never run at the same time (which never happened by luck, not
+by design), but worth avoiding — moved `16_server_device_agent`'s
+device to `8995`. Ports already claimed by existing samples, check
+before picking one for a new device:
+
+| Port(s) | Sample |
+|---|---|
+| 8881 / 8882 | `10_server_ms` / `10_client_ms` |
+| 8889 | `sofia-client-secure*`, `5_adk_doc_gen`, `server6` |
+| 8891 / 8892 | `11_server_mcp_ms` / `11_client_mcp_ms` |
+| 8911 / 8912 | `12_server_mcp_ms` / `12_client_mcp_ms` |
+| 8995 | `16_server_device_agent` / `16_client_device_agent` |
+| 8999 | `_arqit_race_fixtures` (stls-core's own test suite) |
+| 9001 / 9002 | `17_peer_a_core` / `17_peer_b_core` (pair 1 / pair 2) |
+| 9101, 9103, 9105, 9107 | `samples/peer/18_naas_federation` (A-B and A-C relationships, port shared per device PAIR, not per device -- see this sample's own README on why) |

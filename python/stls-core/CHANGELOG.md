@@ -7,6 +7,63 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.10] — 2026-11-19
+
+Adds a consumer-only role for `arqit_py` server-role sessions and a
+device-level owner lock (issue #38), prompted by directly bricking a
+real throwaway Arqit device while validating one device shared across
+Redis-backed replicas: two independent processes authenticating the
+same device identity at once — even sequentially, not just
+concurrently — got it "factory reset" and locked out entirely on the
+real cloud, requiring a manual deregister/re-register to recover.
+
+### Added
+
+- **`ARQIT_PY_DEVICE_ROLE=consumer`**: a new way to get a
+  `KeySessionProviderArqitPy` SERVER session bound directly to the
+  shared Redis-backed key store, without ever calling `start()` /
+  authenticating the device — for horizontally-scaled replicas that
+  should only read keys an `owner` process elsewhere already put in
+  Redis. Wired into `KeySessionProviderFactory.get_session_provider()`,
+  so `stls-a2a`/`stls-mcp` and the Node sidecar pick it up for free.
+  Default (`ARQIT_PY_DEVICE_ROLE` unset, or `"owner"`) is unchanged —
+  this is purely additive. Requires `KEY_STORE_BACKEND=redis`
+  (fails fast otherwise) and, deliberately, does NOT require the
+  `[arqit_py]` extra/wheels at all — nothing on this path imports
+  `uk.arqit.device.*`.
+- **Device-level owner lock**
+  (`ArqitKeyStoreFactory.build_owner_lock_store()`,
+  `stls:ks:{namespace}:device-lock:owner-lock`): a cheap safety net
+  (SET NX EX, not leader election) claimed by
+  `KeyProviderServerArqitPy.start()` (held and renewed for the life of
+  the process) and `KeyProviderClientArqitPy.start()` (held only for
+  that one call). A second process trying to authenticate the same
+  device identity while the lock is held fails fast with a clear
+  error instead of repeating the incident above. Scoped to the base
+  `KEY_STORE_REDIS_NAMESPACE`, independent of the CLIENT role's own
+  per-instance session-key namespace, so it actually catches two
+  CLIENT replicas for the same device — not just two SERVER ones.
+  `ARQIT_PY_DEVICE_ROLE=consumer` sessions never touch this lock.
+- New env var `ARQIT_PY_OWNER_LOCK_TTL` (default: 60 seconds).
+- **`sidecar/arqit_device_agent.py`**: a standalone process whose only
+  job is to own the device (call `start()`, feed Redis) — no
+  HTTP/A2A/MCP serving of its own, with `/healthz`/`/livez` for
+  Kubernetes probes. The actual runnable artifact for the "one owner,
+  N consumers" topology above. New
+  [`samples/server/16_server_device_agent/`](../../samples/server/16_server_device_agent/README.md)
+  demonstrates it end-to-end: one device-agent + two
+  `ARQIT_PY_DEVICE_ROLE=consumer` `server.py` replicas sharing one
+  device, with zero code changes to `server.py` itself.
+
+### Fixed
+
+- `KeyProviderClientArqitPy.start()`/`KeyProviderServerArqitPy.start()`
+  always passed `reprovision_handler=None` to
+  `AuthenticationSessionManager` — the one time the SDK's own
+  bootstrap→provisioned fallback is reached, it would crash with
+  `TypeError` instead of actually reprovisioning. Now wires the real
+  `ProvisioningClient.transition_provisioning_state`.
+
 ## [0.1.9] — 2026-11-17
 
 Widens the STLS handshake proof (issue #36): previously

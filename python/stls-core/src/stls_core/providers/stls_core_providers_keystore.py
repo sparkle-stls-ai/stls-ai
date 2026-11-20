@@ -35,6 +35,32 @@ are passively cleaned up via ZRANGEBYSCORE at polling time —
 wait_for_new_key() automatically filters out kids whose key_data is no
 longer present in Redis.
 
+Owner lock (device-level, issue #38)
+--------------------------------------
+    stls:ks:{base_ns}:device-lock:owner-lock   STRING  owner_id   TTL = ARQIT_PY_OWNER_LOCK_TTL
+
+Cheap safety net, not leader election, built via
+ArqitKeyStoreFactory.build_owner_lock_store() — deliberately a SEPARATE
+store from build()'s own per-role/per-instance one, scoped to just the
+base namespace so it's the SAME lock for every process authenticating
+one device identity, regardless of role:
+
+  - KeyProviderServerArqitPy.start() (ARQIT_PY_DEVICE_ROLE=owner, the
+    default) claims it via SET NX EX and renews it periodically for as
+    long as the process is alive — a second owner process for the same
+    device fails fast instead of both authenticating it at once.
+  - KeyProviderClientArqitPy.start() claims it too, but only for the
+    duration of that one call (released right after, no renewal) — a
+    CLIENT session is inherently short-lived, so different replicas can
+    take turns negotiating as long as they don't do it at the same time.
+  - ARQIT_PY_DEVICE_ROLE=consumer processes never touch this lock —
+    they only read keys an owner already put in the store.
+
+Confirmed directly (issue #38) that two independent processes
+authenticating the same Arqit device identity at once can lock it out
+entirely on the real cloud, requiring manual deregister/re-register to
+recover — this lock exists to fail fast instead of repeating that.
+
 Environment variables (Redis backend)
 --------------------------------------
     KEY_STORE_REDIS_URL           redis://... (default: redis://localhost:6379)
@@ -42,6 +68,7 @@ Environment variables (Redis backend)
     KEY_STORE_PENDING_TTL         pending key TTL in seconds (default: 300)
     KEY_STORE_SESSION_TTL         delivered key TTL in seconds (default: 3600)
     KEY_STORE_POLL_INTERVAL       wait_for_new_key polling interval (default: 0.3s)
+    ARQIT_PY_OWNER_LOCK_TTL       owner-lock TTL in seconds (default: 60)
     STLS_CORE_ATREST_KEY          base64-encoded 32-byte wrapping key (KEK).
                                    Unset (default): key_data is stored in
                                    the clear, as before this existed (a
@@ -161,6 +188,31 @@ class ArqitKeyStoreBase(ABC):
             namespace, always empty at startup since the namespace is new).
         """
 
+    def try_acquire_owner_lock(self, owner_id: str, ttl: int) -> Optional[str]:
+        """
+        Cheap safety net (NOT leader election) against two independent
+        ARQIT_PY_DEVICE_ROLE=owner processes authenticating the SAME
+        Arqit device at once — confirmed directly (issue #38) to lock
+        the device out entirely on the real Arqit cloud, requiring a
+        manual deregister/re-register to recover.
+
+        Default (this ABC, used as-is by InMemoryArqitKeyStore):
+        a no-op that always succeeds — an in-process store has no
+        cross-process sharing to protect in the first place. Overridden
+        by RedisArqitKeyStore, the only backend where two independent
+        owners can actually collide.
+
+        Returns None on success. On failure, returns the current
+        holder's owner_id so the caller can log a useful error.
+        """
+        return None
+
+    def renew_owner_lock(self, owner_id: str, ttl: int) -> None:
+        """Extends the owner lock's TTL. No-op here; see try_acquire_owner_lock()."""
+
+    def release_owner_lock(self, owner_id: str) -> None:
+        """Releases the owner lock. No-op here; see try_acquire_owner_lock()."""
+
 
 # ---------------------------------------------------------------------------
 # InMemoryArqitKeyStore
@@ -258,8 +310,9 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
     Requires redis>=7.4.0 installed in the virtualenv.
     """
 
-    _PREFIX_KEY     = "stls:ks:{ns}:key:{kid}"
-    _PREFIX_PENDING = "stls:ks:{ns}:pending"
+    _PREFIX_KEY        = "stls:ks:{ns}:key:{kid}"
+    _PREFIX_PENDING    = "stls:ks:{ns}:pending"
+    _PREFIX_OWNER_LOCK = "stls:ks:{ns}:owner-lock"
 
     def __init__(
         self,
@@ -315,6 +368,9 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
 
     def _pending(self) -> str:
         return self._PREFIX_PENDING.format(ns=self._ns)
+
+    def _owner_lock_key(self) -> str:
+        return self._PREFIX_OWNER_LOCK.format(ns=self._ns)
 
     # -- ABC implementation -----------------------------------------------------
 
@@ -452,6 +508,42 @@ class RedisArqitKeyStore(ArqitKeyStoreBase):
             )
             return set()
 
+    def try_acquire_owner_lock(self, owner_id: str, ttl: int) -> Optional[str]:
+        """
+        Atomic SET NX EX — succeeds only if no owner currently holds
+        this namespace's lock. See the ABC docstring for why this
+        exists: two independent ARQIT_PY_DEVICE_ROLE=owner processes
+        for the same device can lock it out on the real Arqit cloud.
+        """
+        acquired = self._r.set(self._owner_lock_key(), owner_id, nx=True, ex=ttl)
+        if acquired:
+            return None
+        current = self._r.get(self._owner_lock_key())
+        return current.decode() if isinstance(current, bytes) else current
+
+    def renew_owner_lock(self, owner_id: str, ttl: int) -> None:
+        """
+        SET ... XX EX: only overwrites (and refreshes the TTL) if the
+        key already exists, so a process that lost its lock (TTL
+        expired, e.g. after a long stall) doesn't silently reclaim it
+        out from under a new owner that acquired it meanwhile.
+        """
+        self._r.set(self._owner_lock_key(), owner_id, xx=True, ex=ttl)
+
+    def release_owner_lock(self, owner_id: str) -> None:
+        """
+        Best-effort release: GET-then-DEL, not an atomic compare-and-
+        delete (no Lua script for this). Acceptable for a safety net
+        whose job is catching an operator/config mistake, not
+        adjudicating a genuine race — the lock's own TTL is what
+        actually guarantees it never sticks forever if this is skipped
+        entirely (process killed, no graceful stop()).
+        """
+        current = self._r.get(self._owner_lock_key())
+        current_str = current.decode() if isinstance(current, bytes) else current
+        if current_str == owner_id:
+            self._r.delete(self._owner_lock_key())
+
     def wait_for_new_key(
         self, seen_key_ids: set[str], timeout: float = 30.0
     ) -> Optional[tuple[str, bytes]]:
@@ -565,4 +657,45 @@ class ArqitKeyStoreFactory:
         raise ValueError(
             f"KEY_STORE_BACKEND='{backend}' not recognized. "
             "Supported values: 'memory' (default), 'redis'."
+        )
+
+    @staticmethod
+    def build_owner_lock_store(namespace: Optional[str] = None) -> ArqitKeyStoreBase:
+        """
+        Builds the store used ONLY for the device-level owner lock
+        (issue #38) — deliberately independent of build()'s own
+        per-role/per-instance namespacing.
+
+        Scoped to just the base namespace (stls:ks:{base_ns}:device-lock),
+        shared by every KeyProviderClientArqitPy/KeyProviderServerArqitPy
+        process authenticating the SAME device, regardless of role.
+        Reusing build()'s own namespacing here would not work: the
+        CLIENT role deliberately gets a fresh random instance_id per
+        process (to isolate concurrent sessions' kid pools), so two
+        CLIENT replicas for the same device would never land on the
+        same lock key and the whole point of the lock — catching two
+        independent authenticate_device() callers for one device
+        identity — would be silently defeated.
+
+        Returns InMemoryArqitKeyStore (whose owner-lock methods are
+        no-ops — see its ABC docstring) when KEY_STORE_BACKEND isn't
+        "redis": no cross-process sharing is possible for that backend
+        in the first place, so there's nothing to guard.
+        """
+        backend = os.getenv("KEY_STORE_BACKEND", "memory").strip().lower()
+        if backend != "redis":
+            return InMemoryArqitKeyStore()
+
+        url = os.getenv("KEY_STORE_REDIS_URL", "redis://localhost:6379")
+        base_ns = namespace or os.getenv("KEY_STORE_REDIS_NAMESPACE", "default")
+        # pending_ttl/session_ttl/poll_interval/zrem_on_deliver are never
+        # exercised on this instance — only try/renew/release_owner_lock()
+        # are ever called on it — so their values here are irrelevant.
+        return RedisArqitKeyStore(
+            redis_url=url,
+            namespace=f"{base_ns}:device-lock",
+            pending_ttl=300,
+            session_ttl=3600,
+            poll_interval=0.3,
+            zrem_on_deliver=False,
         )

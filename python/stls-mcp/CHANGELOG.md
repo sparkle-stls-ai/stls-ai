@@ -7,6 +7,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.7] — 2026-11-19
+
+No code changes in this package. Documents the cross-process
+`arqit_py` device-identity conflict found and fixed in
+[`python/stls-core` 0.1.10](../stls-core/CHANGELOG.md) (issue #38) in
+this README's own Arqit notes — `SecureToolsetManager` picks up
+`ARQIT_PY_DEVICE_ROLE=consumer` and the new device-level owner lock
+automatically, since both live inside
+`KeySessionProviderFactory.get_session_provider()`.
+
 ## [0.1.6] — 2026-11-17
 
 No code changes in this package. Raises the `stls_core` dependency

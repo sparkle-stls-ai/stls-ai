@@ -1,0 +1,137 @@
+# company-a, arqit_py pass: buyer.ts owns 4 devices now (ab-rfq-client/
+# ac-rfq-client -- CLIENT role, send the two RFQs; ab-reply-server/
+# ac-reply-server -- SERVER role, receive the two replies), all
+# owner-mode sidecars in the SAME pod (arqit_sidecar.py is Unix-
+# socket-only, so each shares an emptyDir with the app container for
+# its socket file). Not replicated in this topology, so no consumer
+# split needed on this side.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: a-buyer
+  namespace: naas-company-a
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app: a-buyer
+    spec:
+      restartPolicy: OnFailure
+      volumes:
+        - name: sockets
+          emptyDir: {}
+        - name: devices-secret
+          secret:
+            secretName: p18-devices-a
+        - name: devices
+          persistentVolumeClaim:
+            claimName: p18-devices-a-pvc
+      initContainers:
+        - name: copy-devices
+          image: naas18-sidecar:dev
+          imagePullPolicy: IfNotPresent
+          # Per-FILE existence check, not "copy everything if anything
+          # is missing": found the hard way that the latter overwrites
+          # an EXISTING device's already-rotated, good PVC state with
+          # the Secret's (older) copy the moment a NEW device's files
+          # are first added to the same Secret/PVC (adding company-c's
+          # devices to this Secret re-bricked the already-working
+          # ab-reply-server this way). Copying file-by-file, each only
+          # if missing, never touches a file that's already there.
+          command: ["sh", "-c"]
+          args:
+            - |
+              for f in aq-sf-p18-ab-rfq-client.json aq-sf-p18-ab-rfq-client_metadata.json aq-sf-p18-ab-reply-server.json aq-sf-p18-ab-reply-server_metadata.json aq-sf-p18-ac-rfq-client.json aq-sf-p18-ac-rfq-client_metadata.json aq-sf-p18-ac-reply-server.json aq-sf-p18-ac-reply-server_metadata.json; do
+                test -f /devices/$f || cp /devices-secret/$f /devices/$f
+              done
+          volumeMounts:
+            - { name: devices-secret, mountPath: /devices-secret }
+            - { name: devices, mountPath: /devices }
+      containers:
+        - name: a-buyer
+          image: naas18-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["npx", "tsx", "buyer.ts"]
+          volumeMounts:
+            - { name: sockets, mountPath: /sockets }
+          env:
+            - { name: COMPANY_NAME, value: "company-a" }
+            - { name: PORT, value: "8601" }
+            - { name: KEY_PROVIDER_NAME, value: "arqit_py" }
+            # getTransport() (used by sendRfq()) has no per-call token
+            # override -- this process now has TWO CLIENT sidecars
+            # (ab-rfq-client, ac-rfq-client), so BOTH must share this
+            # ONE token (see 10-company-a.yaml's git history / this
+            # sample's README for the full explanation).
+            - { name: ARQIT_SIDECAR_TOKEN, value: "a-client-shared-token" }
+            - { name: TARGETS_COUNT, value: "2" }
+            - { name: TARGET_1_NAME, value: "company-b" }
+            - { name: TARGET_1_URL, value: "http://192.168.49.2:30604" }
+            - { name: TARGET_1_SOCKET_CLIENT, value: "/sockets/ab-rfq-client.sock" }
+            - { name: TARGET_1_TOKEN_CLIENT, value: "a-client-shared-token" }
+            - { name: TARGET_1_SOCKET_SERVER, value: "/sockets/ab-reply-server.sock" }
+            - { name: TARGET_1_TOKEN_SERVER, value: "a-ab-reply-server-token" }
+            - { name: TARGET_2_NAME, value: "company-c" }
+            - { name: TARGET_2_URL, value: "http://192.168.49.2:30606" }
+            - { name: TARGET_2_SOCKET_CLIENT, value: "/sockets/ac-rfq-client.sock" }
+            - { name: TARGET_2_TOKEN_CLIENT, value: "a-client-shared-token" }
+            - { name: TARGET_2_SOCKET_SERVER, value: "/sockets/ac-reply-server.sock" }
+            - { name: TARGET_2_TOKEN_SERVER, value: "a-ac-reply-server-token" }
+            - { name: CRASH_LOG_PATH, value: "/sockets/crash.log" }
+          ports:
+            - containerPort: 8601
+        - name: sidecar-ab-rfq-client
+          image: naas18-sidecar:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "arqit_sidecar.py", "--socket", "/sockets/ab-rfq-client.sock", "--token", "a-client-shared-token"]
+          volumeMounts:
+            - { name: sockets, mountPath: /sockets }
+            - { name: devices, mountPath: /home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices }
+          env:
+            - { name: KEY_PROVIDER_NAME, value: "arqit_py" }
+            - { name: ARQIT_PY_CLIENT_CONFIG, value: "/home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices/aq-sf-p18-ab-rfq-client.json" }
+        - name: sidecar-ab-reply-server
+          image: naas18-sidecar:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "arqit_sidecar.py", "--socket", "/sockets/ab-reply-server.sock", "--token", "a-ab-reply-server-token"]
+          volumeMounts:
+            - { name: sockets, mountPath: /sockets }
+            - { name: devices, mountPath: /home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices }
+          env:
+            - { name: KEY_PROVIDER_NAME, value: "arqit_py" }
+            - { name: ARQIT_PY_SERVER_CONFIG, value: "/home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices/aq-sf-p18-ab-reply-server.json" }
+        - name: sidecar-ac-rfq-client
+          image: naas18-sidecar:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "arqit_sidecar.py", "--socket", "/sockets/ac-rfq-client.sock", "--token", "a-client-shared-token"]
+          volumeMounts:
+            - { name: sockets, mountPath: /sockets }
+            - { name: devices, mountPath: /home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices }
+          env:
+            - { name: KEY_PROVIDER_NAME, value: "arqit_py" }
+            - { name: ARQIT_PY_CLIENT_CONFIG, value: "/home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices/aq-sf-p18-ac-rfq-client.json" }
+        - name: sidecar-ac-reply-server
+          image: naas18-sidecar:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "arqit_sidecar.py", "--socket", "/sockets/ac-reply-server.sock", "--token", "a-ac-reply-server-token"]
+          volumeMounts:
+            - { name: sockets, mountPath: /sockets }
+            - { name: devices, mountPath: /home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices }
+          env:
+            - { name: KEY_PROVIDER_NAME, value: "arqit_py" }
+            - { name: ARQIT_PY_SERVER_CONFIG, value: "/home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices/aq-sf-p18-ac-reply-server.json" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: a-buyer
+  namespace: naas-company-a
+spec:
+  type: NodePort
+  selector:
+    app: a-buyer
+  ports:
+    - port: 8601
+      targetPort: 8601
+      nodePort: 30601

@@ -1,0 +1,149 @@
+# Mirror of arqit_py/20-company-b.yaml for the A-C relationship -- see
+# that file's own comments for the full rationale. c-seller: 2
+# replicas, consumer sidecar for ac-rfq-server. c-reply-agent:
+# singleton, owns ac-reply-client directly.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: c-seller
+  namespace: naas-company-c
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: c-seller
+  template:
+    metadata:
+      labels:
+        app: c-seller
+    spec:
+      volumes:
+        - name: sockets
+          emptyDir: {}
+      containers:
+        - name: c-seller
+          image: naas18-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["npx", "tsx", "seller.ts"]
+          volumeMounts:
+            - { name: sockets, mountPath: /sockets }
+          env:
+            - { name: COMPANY_NAME, value: "company-c" }
+            - { name: PORT, value: "8606" }
+            - { name: KEY_PROVIDER_NAME, value: "arqit_py" }
+            - { name: SOURCES_COUNT, value: "1" }
+            - { name: SOURCE_1_NAME, value: "company-a" }
+            - { name: SOURCE_1_REPLY_URL, value: "http://192.168.49.2:30601" }
+            - { name: SOURCE_1_SOCKET_SERVER, value: "/sockets/ac-rfq-server.sock" }
+            - { name: SOURCE_1_TOKEN_SERVER, value: "c-ac-rfq-server-token" }
+            - { name: REPLY_MODE, value: "delegate" }
+            - { name: REPLY_AGENT_URL, value: "http://c-reply-agent:8607" }
+            - { name: SESSION_CACHE_BACKEND, value: "redis" }
+            - { name: SESSION_CACHE_REDIS_URL, value: "redis://redis:6379" }
+            - { name: CRASH_LOG_PATH, value: "/sockets/crash.log" }
+          ports:
+            - containerPort: 8606
+        - name: sidecar-ac-rfq-server-consumer
+          image: naas18-sidecar:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "arqit_sidecar.py", "--socket", "/sockets/ac-rfq-server.sock", "--token", "c-ac-rfq-server-token"]
+          volumeMounts:
+            - { name: sockets, mountPath: /sockets }
+          env:
+            - { name: KEY_PROVIDER_NAME, value: "arqit_py" }
+            - { name: ARQIT_PY_DEVICE_ROLE, value: "consumer" }
+            - { name: KEY_STORE_BACKEND, value: "redis" }
+            - { name: KEY_STORE_REDIS_URL, value: "redis://redis:6379" }
+            - { name: KEY_STORE_REDIS_NAMESPACE, value: "p18-ac-rfq" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: c-seller
+  namespace: naas-company-c
+spec:
+  type: NodePort
+  selector:
+    app: c-seller
+  ports:
+    - port: 8606
+      targetPort: 8606
+      nodePort: 30606
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: c-reply-agent
+  namespace: naas-company-c
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: c-reply-agent
+  template:
+    metadata:
+      labels:
+        app: c-reply-agent
+    spec:
+      volumes:
+        - name: sockets
+          emptyDir: {}
+        - name: devices-secret
+          secret:
+            secretName: p18-devices-c
+        - name: devices
+          persistentVolumeClaim:
+            claimName: p18-c-reply-agent-pvc
+      initContainers:
+        - name: copy-devices
+          image: naas18-sidecar:dev
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "test -f /devices/aq-sf-p18-ac-reply-client.json || cp /devices-secret/* /devices/"]
+          volumeMounts:
+            - { name: devices-secret, mountPath: /devices-secret }
+            - { name: devices, mountPath: /devices }
+      containers:
+        - name: c-reply-agent
+          image: naas18-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["npx", "tsx", "reply_agent.ts"]
+          volumeMounts:
+            - { name: sockets, mountPath: /sockets }
+          env:
+            - { name: COMPANY_NAME, value: "company-c" }
+            - { name: PORT, value: "8607" }
+            - { name: KEY_PROVIDER_NAME, value: "arqit_py" }
+            - { name: ARQIT_SIDECAR_TOKEN, value: "c-ac-reply-client-token" }
+            - { name: TARGETS_COUNT, value: "1" }
+            - { name: TARGET_1_NAME, value: "company-a" }
+            - { name: TARGET_1_REPLY_URL, value: "http://192.168.49.2:30601" }
+            - { name: TARGET_1_SOCKET_CLIENT, value: "/sockets/ac-reply-client.sock" }
+            - { name: TARGET_1_TOKEN_CLIENT, value: "c-ac-reply-client-token" }
+            - { name: CRASH_LOG_PATH, value: "/sockets/crash.log" }
+          ports:
+            - containerPort: 8607
+        - name: sidecar-ac-reply-client
+          image: naas18-sidecar:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "arqit_sidecar.py", "--socket", "/sockets/ac-reply-client.sock", "--token", "c-ac-reply-client-token"]
+          volumeMounts:
+            - { name: sockets, mountPath: /sockets }
+            - { name: devices, mountPath: /home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices }
+          env:
+            - { name: KEY_PROVIDER_NAME, value: "arqit_py" }
+            - { name: ARQIT_PY_CLIENT_CONFIG, value: "/home/anton/VSProjects/stls-ai/samples/peer/18_naas_federation/devices/aq-sf-p18-ac-reply-client.json" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: c-reply-agent
+  namespace: naas-company-c
+spec:
+  type: ClusterIP
+  selector:
+    app: c-reply-agent
+  ports:
+    - port: 8607
+      targetPort: 8607

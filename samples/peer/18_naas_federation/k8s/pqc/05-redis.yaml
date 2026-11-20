@@ -1,0 +1,50 @@
+# Redis for company-b's own namespace -- needed because of a finding
+# made while validating THIS sample's K8s mechanics: StlsCore's
+# SessionCache (the handshake-established transport, looked up by
+# session_id on every /notify call) defaults to an IN-MEMORY, per-
+# process cache (SESSION_CACHE_BACKEND=memory). With 2 seller replicas
+# behind one Service, a handshake and its follow-up /notify call can
+# land on DIFFERENT pods (plain Service load-balancing, no session
+# affinity) -- the second pod never saw that handshake, so it returns
+# "Unknown session_id". This is a SEPARATE concern from issue #38's
+# own Redis-backed KEY STORE (ArqitKeyStoreFactory) -- that one shares
+# the negotiated *key material* across replicas; THIS Redis shares the
+# established *StlsTransport* itself across replicas, via
+# SESSION_CACHE_BACKEND=redis (node/stls-core/src/session.ts's
+# SessionCacheFactory, already existed, just wasn't being used by this
+# sample yet). Both are needed together for a real multi-replica
+# seller, regardless of which key provider (base/pqc/arqit_py) is in
+# use -- this Redis is NOT specific to arqit_py.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: naas-company-b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: naas-company-b
+spec:
+  type: ClusterIP
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379

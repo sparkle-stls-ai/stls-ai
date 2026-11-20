@@ -1,0 +1,12 @@
+# Repo-root .dockerignore — needed because samples/peer/18_naas_federation's
+# Dockerfile build context is the repo root (it needs both node/stls-core and
+# the sample's own app/ directory). Keeps the build context small and avoids
+# shipping local venvs/node_modules/git history into any image built from here.
+.git/
+**/node_modules/
+**/dist/
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.pyc
+samples/**/aq-*.json

@@ -533,6 +533,16 @@ https://<random-name>.trycloudflare.com/mcp
   endpoint). See `python/stls-core/sidecar/ARQIT_PEERING_NOTES.md`'s
   "DeviceMetadata singleton race" follow-up for the full chain of
   fixes this was found alongside.
+- **Sharing ONE `arqit_py` device across horizontally-scaled replicas
+  (issue #38, `stls-core` 0.1.10)**: two independent processes
+  authenticating the same device identity at once — even sequentially
+  — can lock it out entirely on the real Arqit cloud. `SecureToolsetManager`
+  picks up `ARQIT_PY_DEVICE_ROLE=consumer` and the new device-level
+  owner lock automatically (both live inside
+  `KeySessionProviderFactory.get_session_provider()`), no code change
+  here. See `python/stls-core/README.md`'s `arqit_py` section and
+  `samples/server/16_server_device_agent/README.md` for the runnable
+  demo.
 
 ## Testing
 

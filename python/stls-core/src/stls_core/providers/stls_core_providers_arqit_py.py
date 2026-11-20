@@ -32,8 +32,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import socket
 import threading
 import time as _time
+import uuid as _uuid
 from typing import Optional
 
 from .stls_core_providers_base import (
@@ -365,6 +367,12 @@ class KeyProviderClientArqitPy(KeyProviderClient):
         self._instance_id = str(_uuid.uuid4())
         self._key_store = ArqitKeyStoreFactory.build(role="client", instance_id=self._instance_id)
         self._session: Optional[KeySessionProviderArqitPy] = None
+        # Owner lock (issue #38) — see ArqitKeyStoreFactory.build_owner_lock_store()'s
+        # docstring for why this is a separate, device-level store from
+        # self._key_store (which is deliberately per-instance/random here).
+        self._owner_lock_store = ArqitKeyStoreFactory.build_owner_lock_store()
+        self._owner_id = f"{socket.gethostname()}:{os.getpid()}:{_uuid.uuid4().hex[:8]}"
+        self._owner_lock_ttl = int(os.getenv("ARQIT_PY_OWNER_LOCK_TTL", "60"))
 
     def start(self) -> None:
         # See _ARQIT_PY_START_LOCK: serializes this whole method
@@ -373,114 +381,143 @@ class KeyProviderClientArqitPy(KeyProviderClient):
         # the confirmed DeviceMetadata-singleton deadlock in the
         # Arqit SDK under real concurrency.
         with _ARQIT_PY_START_LOCK:
-            from uk.arqit.device.common import QCConfig
-            from uk.arqit.device.peering.key_manager import KeyManager
-            from uk.arqit.device.peering.comms.mqtt import MqttClientInitiator
-            from uk.arqit.device.peering.comms.sockets import SocketClientInitiator
-            from uk.arqit.device.common.authentication.authentication_session_manager import (
-                AuthenticationSessionManager,
+            # Device-level owner lock (issue #38): see
+            # ArqitKeyStoreFactory.build_owner_lock_store()'s docstring.
+            # Checked first, before touching the SDK/real cloud at all —
+            # two independent CLIENT replicas authenticating the SAME
+            # device identity can lock it out entirely on the real Arqit
+            # cloud, exactly like the SERVER-role incident this issue is
+            # named after. Held only for the duration of this call
+            # (released in the finally below, NOT kept for the life of
+            # the process): unlike the SERVER role, a CLIENT session is
+            # inherently short-lived, so different replicas can take
+            # turns negotiating as long as they don't do it at the same
+            # time — no renewal thread needed, ARQIT_PY_OWNER_LOCK_TTL
+            # (default 60s) already comfortably covers the ≤30s
+            # negotiation window below.
+            conflicting_owner = self._owner_lock_store.try_acquire_owner_lock(
+                self._owner_id, self._owner_lock_ttl
             )
-            from uk.arqit.device.common.device_metadata import DeviceMetadata
-            from uk.arqit.device.provisioning.provisioning import ProvisioningClient
-
-            logger.info(
-                "[KeyProviderClientArqitPy] start config=%s transport=%s",
-                self._config_path, self._transport,
-            )
-
-            qc_config = QCConfig(self._config_path)
-            sdk_key_manager = KeyManager()
-            notifier = _ArqitPyKeyNotifier(
-                self._key_store, is_receiver=False, sdk_key_manager=sdk_key_manager
-            )
-
-            # reprovision_handler: AuthenticationSessionManager.authenticate_device()
-            # falls back to this when the device is still at the bootstrap
-            # stage (provisioning_state == "") and the plain re-auth also
-            # fails — it's meant to be ProvisioningClient.transition_provisioning_state,
-            # which does the one-time bootstrap -> provisioned transition and
-            # persists the new ratchet to the metadata file. Passing None here
-            # (as this provider always did until now) means that fallback
-            # crashes with TypeError instead of actually reprovisioning,
-            # the moment the SDK ever takes that branch.
-            auth_manager = AuthenticationSessionManager(
-                qc_config, reprovision_handler=ProvisioningClient(qc_config).transition_provisioning_state
-            )
-            auth_manager.set_auto_refresh(True)
-            auth_manager.authenticate_device()
-            logger.info("[KeyProviderClientArqitPy] authentication completed")
-
-            if self._transport == "mqtt":
-                client = MqttClientInitiator(qc_config)
-                client.connect_to_broker(auth_manager.get_authentication_session())
-            else:
-                client = SocketClientInitiator(qc_config)
-
-            # Built BEFORE starting the negotiation thread, not after:
-            # KeySessionProviderArqitPy.__init__() snapshots
-            # key_store.startup_seen_keys() to pre-seed
-            # _delivered_key_ids with whatever is already sitting in
-            # the store (stale leftovers from a previous process, for
-            # the Redis-backed store). With the negotiation thread now
-            # joined before returning (see below), building this
-            # *after* the join would snapshot the keys THIS SAME
-            # negotiation just delivered as "already seen" — silently
-            # discarding them and making every getSessionKeyIdentifier()
-            # call time out forever waiting for a "new" key that will
-            # never come (confirmed by direct reproduction, 2026-10-23,
-            # samples/client/10_client_ms/client_multi_server.py against
-            # its Redis-backed key store).
-            peer_identity = getattr(qc_config, "socket_receiver_ip_address", None)
-            self._session = KeySessionProviderArqitPy(
-                KeySessionProvider.KeySessionProviderType.CLIENT,
-                self._key_store,
-                peer_identity=peer_identity,
-            )
-
-            def _negotiate() -> None:
-                try:
-                    client.agree_bilocation_key(
-                        auth_manager.get_authentication_session, notifier
-                    )
-                    if notifier._last_typed_key is not None:
-                        for _ in range(10):
-                            client.agree_p2p_key(notifier._last_typed_key, notifier)
-                except Exception as exc:
-                    logger.error(
-                        "[KeyProviderClientArqitPy] negotiation error: %s",
-                        exc, exc_info=True,
-                    )
-
-            t = threading.Thread(
-                target=_negotiate, daemon=True, name="arqit-py-client-negotiate"
-            )
-            t.start()
-            logger.info("[KeyProviderClientArqitPy] negotiation thread started")
-
-            # Join (still holding _ARQIT_PY_START_LOCK) instead of
-            # returning immediately: confirmed by direct reproduction
-            # (2026-10-23) that letting a second start() call begin its
-            # own authentication while a first call's negotiation is
-            # still connecting makes the SDK's socket bilocation
-            # handshake fail outright (ConnectionRefusedError /
-            # PeerUnableToConnectException) for every session involved
-            # — the DeviceMetadata/AuthenticationClient race isn't
-            # confined to authenticate_device(), it extends through the
-            # whole negotiation. 30s matches this provider's own
-            # key-delivery timeout convention (see
-            # KeySessionProviderArqitPy.getSessionKeyIdentifier()); if
-            # negotiation is still running past it we log and move on
-            # rather than block the process forever on a stuck network
-            # call — the caller's own key-wait timeout still applies on
-            # top of this.
-            t.join(timeout=30.0)
-            if t.is_alive():
-                logger.warning(
-                    "[KeyProviderClientArqitPy] negotiation still running "
-                    "after 30s — releasing the process-wide arqit_py "
-                    "start() lock anyway so other sessions aren't blocked "
-                    "indefinitely by one slow negotiation"
+            if conflicting_owner is not None:
+                raise RuntimeError(
+                    "[KeyProviderClientArqitPy] refusing to start: this "
+                    f"device is currently being authenticated by "
+                    f"{conflicting_owner!r} (this process: {self._owner_id!r}). "
+                    "Two independent processes authenticating the same "
+                    "Arqit device at once can lock it out entirely (see "
+                    "issue #38) — retry once the other negotiation finishes."
                 )
+            try:
+                from uk.arqit.device.common import QCConfig
+                from uk.arqit.device.peering.key_manager import KeyManager
+                from uk.arqit.device.peering.comms.mqtt import MqttClientInitiator
+                from uk.arqit.device.peering.comms.sockets import SocketClientInitiator
+                from uk.arqit.device.common.authentication.authentication_session_manager import (
+                    AuthenticationSessionManager,
+                )
+                from uk.arqit.device.common.device_metadata import DeviceMetadata
+                from uk.arqit.device.provisioning.provisioning import ProvisioningClient
+
+                logger.info(
+                    "[KeyProviderClientArqitPy] start config=%s transport=%s",
+                    self._config_path, self._transport,
+                )
+
+                qc_config = QCConfig(self._config_path)
+                sdk_key_manager = KeyManager()
+                notifier = _ArqitPyKeyNotifier(
+                    self._key_store, is_receiver=False, sdk_key_manager=sdk_key_manager
+                )
+
+                # reprovision_handler: AuthenticationSessionManager.authenticate_device()
+                # falls back to this when the device is still at the bootstrap
+                # stage (provisioning_state == "") and the plain re-auth also
+                # fails — it's meant to be ProvisioningClient.transition_provisioning_state,
+                # which does the one-time bootstrap -> provisioned transition and
+                # persists the new ratchet to the metadata file. Passing None here
+                # (as this provider always did until now) means that fallback
+                # crashes with TypeError instead of actually reprovisioning,
+                # the moment the SDK ever takes that branch.
+                auth_manager = AuthenticationSessionManager(
+                    qc_config, reprovision_handler=ProvisioningClient(qc_config).transition_provisioning_state
+                )
+                auth_manager.set_auto_refresh(True)
+                auth_manager.authenticate_device()
+                logger.info("[KeyProviderClientArqitPy] authentication completed")
+
+                if self._transport == "mqtt":
+                    client = MqttClientInitiator(qc_config)
+                    client.connect_to_broker(auth_manager.get_authentication_session())
+                else:
+                    client = SocketClientInitiator(qc_config)
+
+                # Built BEFORE starting the negotiation thread, not after:
+                # KeySessionProviderArqitPy.__init__() snapshots
+                # key_store.startup_seen_keys() to pre-seed
+                # _delivered_key_ids with whatever is already sitting in
+                # the store (stale leftovers from a previous process, for
+                # the Redis-backed store). With the negotiation thread now
+                # joined before returning (see below), building this
+                # *after* the join would snapshot the keys THIS SAME
+                # negotiation just delivered as "already seen" — silently
+                # discarding them and making every getSessionKeyIdentifier()
+                # call time out forever waiting for a "new" key that will
+                # never come (confirmed by direct reproduction, 2026-10-23,
+                # samples/client/10_client_ms/client_multi_server.py against
+                # its Redis-backed key store).
+                peer_identity = getattr(qc_config, "socket_receiver_ip_address", None)
+                self._session = KeySessionProviderArqitPy(
+                    KeySessionProvider.KeySessionProviderType.CLIENT,
+                    self._key_store,
+                    peer_identity=peer_identity,
+                )
+
+                def _negotiate() -> None:
+                    try:
+                        client.agree_bilocation_key(
+                            auth_manager.get_authentication_session, notifier
+                        )
+                        if notifier._last_typed_key is not None:
+                            for _ in range(10):
+                                client.agree_p2p_key(notifier._last_typed_key, notifier)
+                    except Exception as exc:
+                        logger.error(
+                            "[KeyProviderClientArqitPy] negotiation error: %s",
+                            exc, exc_info=True,
+                        )
+
+                t = threading.Thread(
+                    target=_negotiate, daemon=True, name="arqit-py-client-negotiate"
+                )
+                t.start()
+                logger.info("[KeyProviderClientArqitPy] negotiation thread started")
+
+                # Join (still holding _ARQIT_PY_START_LOCK) instead of
+                # returning immediately: confirmed by direct reproduction
+                # (2026-10-23) that letting a second start() call begin its
+                # own authentication while a first call's negotiation is
+                # still connecting makes the SDK's socket bilocation
+                # handshake fail outright (ConnectionRefusedError /
+                # PeerUnableToConnectException) for every session involved
+                # — the DeviceMetadata/AuthenticationClient race isn't
+                # confined to authenticate_device(), it extends through the
+                # whole negotiation. 30s matches this provider's own
+                # key-delivery timeout convention (see
+                # KeySessionProviderArqitPy.getSessionKeyIdentifier()); if
+                # negotiation is still running past it we log and move on
+                # rather than block the process forever on a stuck network
+                # call — the caller's own key-wait timeout still applies on
+                # top of this.
+                t.join(timeout=30.0)
+                if t.is_alive():
+                    logger.warning(
+                        "[KeyProviderClientArqitPy] negotiation still running "
+                        "after 30s — releasing the process-wide arqit_py "
+                        "start() lock anyway so other sessions aren't blocked "
+                        "indefinitely by one slow negotiation"
+                    )
+            finally:
+                self._owner_lock_store.release_owner_lock(self._owner_id)
 
     def createProviderSession(self) -> KeySessionProvider:
         if self._session is None:
@@ -513,6 +550,17 @@ class KeyProviderServerArqitPy(KeyProviderServer):
         # MqttClientReceiver), needed in stop() to actually release the
         # listening socket via its end_key_negotiation() — see stop().
         self._sdk_receiver: Optional[object] = None
+        # Owner lock (issue #38): see
+        # ArqitKeyStoreFactory.build_owner_lock_store()'s docstring for
+        # why this is a SEPARATE store from self._key_store (device-level,
+        # not per-role/per-instance). owner_id just needs to be unique
+        # enough to be useful in an error message — it isn't load-bearing
+        # for correctness, SET NX already is.
+        self._owner_lock_store = ArqitKeyStoreFactory.build_owner_lock_store()
+        self._owner_id = f"{socket.gethostname()}:{os.getpid()}:{_uuid.uuid4().hex[:8]}"
+        self._owner_lock_ttl = int(os.getenv("ARQIT_PY_OWNER_LOCK_TTL", "60"))
+        self._owner_lock_stop = threading.Event()
+        self._owner_lock_thread: Optional[threading.Thread] = None
 
     async def start(self) -> BlockableResult:
         # See _ARQIT_PY_START_LOCK: same process-wide serialization as
@@ -520,6 +568,28 @@ class KeyProviderServerArqitPy(KeyProviderServer):
         # plain synchronous body (no internal await) that touches the
         # same DeviceMetadata/AuthenticationSessionManager singletons.
         with _ARQIT_PY_START_LOCK:
+            # Checked FIRST, before touching the SDK/real cloud at all: a
+            # second ARQIT_PY_DEVICE_ROLE=owner process for the same
+            # namespace must fail fast here, not after burning a real
+            # authenticate_device() call against Arqit (see issue #38 —
+            # two independent owners authenticating the same device
+            # identity locked it out entirely on the real cloud).
+            conflicting_owner = self._owner_lock_store.try_acquire_owner_lock(
+                self._owner_id, self._owner_lock_ttl
+            )
+            if conflicting_owner is not None:
+                raise RuntimeError(
+                    "[KeyProviderServerArqitPy] refusing to start as a second "
+                    f"owner: this namespace's device is already owned by "
+                    f"{conflicting_owner!r} (this process: {self._owner_id!r}). "
+                    "Two independent owners authenticating the same Arqit "
+                    "device can lock it out entirely (see issue #38). If "
+                    "this process is meant to be a read-only replica "
+                    "instead, set ARQIT_PY_DEVICE_ROLE=consumer and resolve "
+                    "sessions via KeySessionProviderFactory instead of "
+                    "starting this provider."
+                )
+
             from uk.arqit.device.common import QCConfig
             from uk.arqit.device.peering.key_manager import KeyManager
             from uk.arqit.device.peering.comms.mqtt import MqttClientReceiver
@@ -605,6 +675,21 @@ class KeyProviderServerArqitPy(KeyProviderServer):
                 self._key_store,
                 peer_identity=None,
             )
+
+            def _renew_owner_lock() -> None:
+                while not self._owner_lock_stop.wait(self._owner_lock_ttl / 3):
+                    try:
+                        self._owner_lock_store.renew_owner_lock(self._owner_id, self._owner_lock_ttl)
+                    except Exception as exc:
+                        logger.warning(
+                            "[KeyProviderServerArqitPy] owner-lock renewal failed: %s", exc,
+                        )
+
+            self._owner_lock_thread = threading.Thread(
+                target=_renew_owner_lock, daemon=True, name="arqit-py-owner-lock-renew",
+            )
+            self._owner_lock_thread.start()
+
             return BlockableResult()
 
     def createProviderSession(self) -> KeySessionProvider:
@@ -633,6 +718,8 @@ class KeyProviderServerArqitPy(KeyProviderServer):
         """
         logger.info("[KeyProviderServerArqitPy] stop()")
         self._is_cancel_ref[0] = True
+        self._owner_lock_stop.set()
+        self._owner_lock_store.release_owner_lock(self._owner_id)
         if self._sdk_receiver is not None:
             try:
                 self._sdk_receiver.end_key_negotiation()
@@ -691,4 +778,34 @@ class KeyProviderArqitPy(KeyProvider):
         )
         return KeyProviderServerArqitPy(
             config_path=config_path, transport=self._get_transport()
+        )
+
+    def create_consumer_session(self) -> KeySessionProvider:
+        """
+        For ARQIT_PY_DEVICE_ROLE=consumer (issue #38): builds a
+        KeySessionProviderArqitPy bound directly to the shared
+        Redis-backed server-role key store, WITHOUT owning the device —
+        no QCConfig, no AuthenticationSessionManager, no SDK negotiation
+        thread, and (deliberately) no dependency on the [arqit_py]
+        extra/wheels at all — nothing here imports uk.arqit.device.*.
+        That's what lets a pure-consumer replica run without the real
+        SDK installed at all.
+
+        Exactly one OTHER process (ARQIT_PY_DEVICE_ROLE=owner, the
+        default — see KeyProviderServerArqitPy.start()'s owner lock)
+        must already be authenticating the real device and feeding this
+        same KEY_STORE_REDIS_NAMESPACE, or every getSessionKeyIdentifier()
+        call here will just time out waiting for a key nobody is adding.
+        """
+        backend = os.getenv("KEY_STORE_BACKEND", "memory").strip().lower()
+        if backend != "redis":
+            raise ValueError(
+                "ARQIT_PY_DEVICE_ROLE=consumer requires KEY_STORE_BACKEND=redis "
+                f"(got {backend!r}) — a consumer replica has no negotiation "
+                "of its own, it only reads keys an owner process already "
+                "put in Redis."
+            )
+        key_store = ArqitKeyStoreFactory.build(role="server")
+        return KeySessionProviderArqitPy(
+            KeySessionProvider.KeySessionProviderType.SERVER, key_store, peer_identity=None,
         )
