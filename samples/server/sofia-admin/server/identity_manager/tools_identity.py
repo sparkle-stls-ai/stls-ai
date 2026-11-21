@@ -1073,6 +1073,33 @@ async def validate_operational_credential(
     except Exception as e:
         return {"valid": False, "reason": f"malformed credential: {e}"}
 
+    # d.sentinel (the shared module-level Sentinel) only knows the
+    # Governing Authority's own key — correct for validate_agent_identity_credential,
+    # but the OperationalCredential below is signed by the GRANTOR, not
+    # the Authority. Resolve the grantor's own verification key from its
+    # published DID Document (it's an agent of this platform, so
+    # d.did_store has it) and build a one-off Sentinel that trusts both
+    # keys — same pattern validate_external_operational_credential
+    # already uses for an external grantor, just resolved from our own
+    # did_store instead of a manually-supplied DID Document.
+    grantor_agent_id = grantor_id_cred.credential_subject.client_id
+    grantor_document = await d.did_store.get(grantor_agent_id)
+    if grantor_document is None:
+        return {
+            "valid": False,
+            "reason": f"grantor '{grantor_agent_id}' has no published DID — cannot resolve its signing key",
+        }
+    try:
+        grantor_vm = grantor_document.verification_method[0]
+        grantor_pub = decode_multibase_ed25519_public_key(grantor_vm.public_key_multibase)
+    except Exception as e:
+        return {"valid": False, "reason": f"malformed grantor DID Document: {e}"}
+
+    _, authority_pub, _ = bootstrap_signing_key(_GOVERNING_AUTHORITY_AGENT_ID, d.keystore)
+    delegation_sentinel = Sentinel(
+        trusted_issuer_keys={_AUTHORITY_VM_ID: authority_pub, grantor_vm.id: grantor_pub}
+    )
+
     now = dt.datetime.now(dt.timezone.utc)
     try:
         grantor_revoked = await d.status_list_manager.is_revoked(
@@ -1081,7 +1108,7 @@ async def validate_operational_credential(
         op_revoked = await d.status_list_manager.is_revoked(
             op.credential_status.status_list_index
         )
-        await d.sentinel.verify_delegation_chain(
+        await delegation_sentinel.verify_delegation_chain(
             op,
             grantor_identity_credential=grantor_id_cred,
             grantor_identity_fetch_time=now, grantor_identity_is_revoked=grantor_revoked,

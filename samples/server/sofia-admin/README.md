@@ -284,10 +284,13 @@ listed in the order you're likely to encounter them:
 | Symptom (server log) | Cause | Fix |
 |---|---|---|
 | `ApiKeyManager auth denied ... invalid` | `API_KEY_IDENTITY` in `coordinator/.env` doesn't match a real key provisioned via `sofia_api_keys_agent`/Postgres | Provision a real key for `sofia-identity`, set it in `coordinator/.env` |
-| `Identity challenge issued` then immediately a 401 | Expected on the very first call of a session when `identity_challenge_handler` is `None` (coordinator not bootstrapped yet) | Run step 2 above |
+| `Identity challenge issued` then immediately a 401 | `identity_challenge_handler` is `None` — either because the coordinator genuinely isn't bootstrapped yet, **or** because it is, but `coordinator/.env` is missing `IDENTITY_CREDENTIAL_CACHE_BACKEND=redis` (defaults to `"memory"`, a fresh empty per-process cache, so `load_identity_presenter()` never finds the credential `bootstrap_coordinator_identity.py` already cached in Redis) — hit for real after merging #45, same symptom either way | Run step 2 above; if already bootstrapped, check `coordinator/.env` has `IDENTITY_CREDENTIAL_CACHE_BACKEND=redis` (see `env.example`), then restart the coordinator |
 | `unknown or untrusted holder verification method` | The coordinator's DID Document was found... or wasn't — this exact message also came from a real bug (see below): `_build_identity_verifier()` resolved the coordinator's key with a throwaway `asyncio.run()` call *before* `uvicorn.run()` started the real event loop, poisoning `tools_identity._deps()`'s cached asyncpg pool for the rest of the process (silently breaking every later `did_store.get()` call). Fixed by moving that resolution into the FastAPI `lifespan` instead. If you still see this after restarting with the fix: check the startup log for `Identity verifier: trusted coordinator key loaded (...)` — its absence means the coordinator genuinely isn't bootstrapped yet (step 2) |
 | `presentation signature verification failed` (right after an `unknown holder` cycle) | Almost certainly a stale, long-running `coordinator` process still signing with code loaded before a fix landed (Python doesn't hot-reload) | Restart **both** `identity_manager` and `coordinator` |
 | `identity_verifier.verify_request() error: All connection attempts failed` → 503 | `identity_bridge` isn't running — `fetch_remote_credential_status` can't reach the status-list URL embedded in the credential | Start `identity_bridge` (step 1 above) |
+| `validate_operational_credential`/`validate_external_operational_credential` (external case): `unknown or untrusted verification method` for the Grantor's own key | Found while testing #48's delegation flows: `tools_identity.py`'s shared `d.sentinel` only ever held the Governing Authority's key — correct for a plain Identity Credential, but an Operational Credential is signed by the **Grantor**, not the Authority, and `Sentinel.verify_signature()` does no automatic DID-document resolution by design. The internal case (`validate_operational_credential`) never resolved the Grantor's key the way the external case already did | Fixed in both `identity_manager/tools_identity.py` and `operator-b/identity_manager/tools_identity.py` — the internal case now also resolves the Grantor's key from `did_store` before verifying |
+| `validate_external_operational_credential`/`validate_external_identity_credential`: `signature verification failed` for the external Grantor's own identity, even with the right code | The onboarded Trust Anchor Registry key for the external Authority is stale — its signing key drifted (e.g. a Redis reset on its keystore DB) since the DID Document was last fetched/onboarded | Re-fetch the external Authority's current DID Document and re-run `onboard_trust_anchor` with its current key — `PostgresTrustAnchorRegistryStore.put()` handles this as a rotation automatically, no manual revoke needed first |
+| `validate_external_operational_credential` (or any tool taking a large credential as an argument): `signature verification failed`, but the same data passes when validated directly via a script | Found while testing #48: pasting a large JSON credential as chat text makes the conversational agent *regenerate* it as tool-call arguments — a single-character drift anywhere in a long `proofValue` is enough to break RFC 8785 canonicalization, even though the content looks identical to a human. Not a bug in the verification logic | **Attach the credential as a file** instead of pasting it as text — resolved this reliably in testing |
 | The sub-agent's error never shows up in the chat UI at all | A real, general bug in `GoogleADKAdapter` (not identity-specific) — `event.is_error()` doesn't exist on `google.adk.events.Event`, so a failing sub-agent's error was silently dropped. Fixed in `stls_a2a_google_adapter.py` (see issue #45's GitHub comments for the full writeup) | Update `stls_a2a` to a version including that fix |
 
 ### Known limitation
@@ -297,6 +300,33 @@ per verification, no caching — fine for this sample, but a production
 deployment presenting many identity-checked calls per second would want a
 caching layer in front of it (the same MRI-bounded freshness window
 `Sentinel`/`StatusListManager` already assume elsewhere).
+
+### Testing delegation ([issue #48](https://github.com/sparkle-stls-ai/stls-ai/issues/48))
+
+`tools_identity.py` deliberately never issues an Operational Credential
+itself (see its own docstring, and [issue #51](https://github.com/sparkle-stls-ai/stls-ai/issues/51)
+for the open design question of whether that should ever change) — only
+`validate_operational_credential`/`validate_external_operational_credential`
+are exposed as tools. To produce a real delegation to validate:
+
+- `identity_manager/bootstrap_grantor_delegation.py` — internal Grantor
+  (bootstraps `grantor-demo`/`requestor-demo`, issues a real Operational
+  Credential via `DelegationManager` directly, prints what to feed into
+  `validate_operational_credential`).
+- `operator-b/identity_manager/bootstrap_grantor_delegation.py` — same,
+  for the external-Grantor case (`operator-b` as the other platform).
+- `operator-b/identity_manager/dump_external_delegation_fixture.py` +
+  `identity_manager/run_external_delegation_fixture.py` — paired
+  scripts that test `validate_external_operational_credential`
+  end to end in-process, no chat round trip — see the troubleshooting
+  table above for why that matters with large credentials.
+- `operator-b/identity_manager/revoke_grantor_identity.py` — revokes
+  the external Grantor's Identity Credential directly (`operator-b` has
+  no chat UI of its own).
+
+All four write into real Postgres/Redis, same posture as
+`bootstrap_coordinator_identity.py` — run them yourself, not something
+this sample runs automatically.
 
 ---
 

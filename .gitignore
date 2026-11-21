@@ -126,3 +126,6 @@ Thumbs.db
 
 # Previous versions of sofia-client-secure
 samples/client/sofia-client-secure_015/
+
+# issue #48 diagnostic fixture (dump_external_delegation_fixture.py / run_external_delegation_fixture.py)
+samples/server/sofia-admin/server/_external_delegation_fixture.json
