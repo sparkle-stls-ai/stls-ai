@@ -56,6 +56,7 @@ from stls_identity import (
     IdentityManager,
     NetworkAuthorityCredential,
     OperationalCredential,
+    OperationalCredentialCacheFactory,
     PostgresDIDDocumentStore,
     PostgresTrustAnchorRegistryStore,
     Sentinel,
@@ -118,12 +119,11 @@ _CREDENTIAL_LOG_DDL = """
     CREATE INDEX IF NOT EXISTS {table}_status_list_index_idx ON {table} (status_list_index);
     CREATE INDEX IF NOT EXISTS {table}_agent_id_idx ON {table} (agent_id);
 """
-# Operational Credential cache namespace — same Redis as the status
-# list, same trust perimeter reasoning. The Identity Credential's own
-# cache is now stls_identity.IdentityCredentialCache (issue #45) — see
-# cache_own_identity_credential/get_cached_identity_credential below.
-_OPCRED_KEY_PREFIX = "stls:identity:opcred"           # collection, Operational Credential
-_OPCRED_INDEX_PREFIX = "stls:identity:opcred_index"   # sorted set, score = validUntil epoch
+# Operational Credential cache: stls_identity.OperationalCredentialCache
+# (issue #54, promoted from this file's own hand-rolled Redis calls,
+# same promotion #45 already did for the Identity Credential's own
+# cache — see cache_own_identity_credential/get_cached_identity_credential
+# below).
 
 
 class _Deps:
@@ -133,13 +133,15 @@ class _Deps:
 
     __slots__ = (
         "keystore", "did_store", "status_list_manager", "identity_manager",
-        "sentinel", "cache_redis", "credential_cache", "pg_pool", "credential_log_table",
+        "sentinel", "cache_redis", "credential_cache", "operational_credential_cache",
+        "pg_pool", "credential_log_table",
         "trust_registry_store", "trust_registry_client",
     )
 
     def __init__(
         self, keystore, did_store, status_list_manager, identity_manager,
-        sentinel, cache_redis, credential_cache, pg_pool, credential_log_table,
+        sentinel, cache_redis, credential_cache, operational_credential_cache,
+        pg_pool, credential_log_table,
         trust_registry_store, trust_registry_client,
     ):
         self.keystore = keystore
@@ -149,6 +151,7 @@ class _Deps:
         self.sentinel = sentinel
         self.cache_redis = cache_redis
         self.credential_cache = credential_cache
+        self.operational_credential_cache = operational_credential_cache
         self.pg_pool = pg_pool
         self.credential_log_table = credential_log_table
         self.trust_registry_store = trust_registry_store
@@ -276,9 +279,15 @@ async def _deps() -> _Deps:
     # "startup/admin-tool call, not a hot request path" reasoning.
     credential_cache = IdentityCredentialCacheFactory.build()
 
+    # Issue #54: same promotion, for the Operational Credentials this
+    # agent RECEIVES via delegation (a collection, not a single slot —
+    # see OperationalCredentialCacheFactory's own docstring).
+    operational_credential_cache = OperationalCredentialCacheFactory.build()
+
     _deps_singleton = _Deps(
         keystore, did_store, status_list_manager, identity_manager, sentinel,
-        cache_redis, credential_cache, pool, _CREDENTIAL_LOG_TABLE, trust_registry_store,
+        cache_redis, credential_cache, operational_credential_cache,
+        pool, _CREDENTIAL_LOG_TABLE, trust_registry_store,
         trust_registry_client,
     )
     return _deps_singleton
@@ -687,12 +696,11 @@ async def cache_operational_credential(agent_id: str, credential: dict) -> dict:
         return {"error": "the credential is already expired, not saving it"}
 
     try:
-        key = f"{_OPCRED_KEY_PREFIX}:{agent_id}:{parsed.id}"
-        index_key = f"{_OPCRED_INDEX_PREFIX}:{agent_id}"
-        expires_at_epoch = parsed.valid_until.timestamp()
-
-        await d.cache_redis.set(key, json.dumps(credential), ex=ttl)
-        await d.cache_redis.zadd(index_key, {parsed.id: expires_at_epoch})
+        # Issue #54: the package primitive (stls_identity.OperationalCredentialCache)
+        # owns the actual storage/TTL/index decision now — same store
+        # load_delegation_presenter() reads from, so this and ANY other
+        # caller end up looking at the same cache.
+        d.operational_credential_cache.set(agent_id, parsed)
         return {"cached": True, "credential_id": parsed.id, "ttl_seconds": ttl}
     except Exception as e:
         logger.error("cache_operational_credential error: %s", e)
@@ -702,9 +710,9 @@ async def cache_operational_credential(agent_id: str, credential: dict) -> dict:
 async def list_cached_operational_credentials(agent_id: str) -> dict:
     """
     Lists the Operational Credentials currently valid (not expired) in
-    the cache for an agent. First cleans up expired entries from the
-    index — same self-cleaning pattern already used elsewhere in the
-    system (ZREMRANGEBYSCORE on expiry scores).
+    the cache for an agent. Self-cleaning: expired entries are dropped
+    from the index as a side effect of calling this (see
+    OperationalCredentialCacheBase.list_ids()).
 
     Args:
         agent_id: the agent to list cached delegations for.
@@ -714,12 +722,8 @@ async def list_cached_operational_credentials(agent_id: str) -> dict:
     """
     d = await _deps()
     try:
-        index_key = f"{_OPCRED_INDEX_PREFIX}:{agent_id}"
-        now_epoch = dt.datetime.now(dt.timezone.utc).timestamp()
-
-        await d.cache_redis.zremrangebyscore(index_key, "-inf", now_epoch)
-        credential_ids = await d.cache_redis.zrange(index_key, 0, -1)
-        return {"credential_ids": list(credential_ids), "count": len(credential_ids)}
+        credential_ids = d.operational_credential_cache.list_ids(agent_id)
+        return {"credential_ids": credential_ids, "count": len(credential_ids)}
     except Exception as e:
         logger.error("list_cached_operational_credentials error: %s", e)
         return {"error": str(e)}
@@ -740,10 +744,10 @@ async def get_cached_operational_credential(agent_id: str, credential_id: str) -
     """
     d = await _deps()
     try:
-        raw = await d.cache_redis.get(f"{_OPCRED_KEY_PREFIX}:{agent_id}:{credential_id}")
-        if raw is None:
+        credential = d.operational_credential_cache.get(agent_id, credential_id)
+        if credential is None:
             return {"found": False}
-        return {"found": True, "credential": json.loads(raw)}
+        return {"found": True, "credential": credential.model_dump(mode="json", by_alias=True, exclude_none=True)}
     except Exception as e:
         logger.error("get_cached_operational_credential error: %s", e)
         return {"error": str(e)}

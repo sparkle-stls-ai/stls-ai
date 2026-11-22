@@ -25,7 +25,7 @@ import base58
 import rfc8785
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from .stls_id_credential_cache import IdentityCredentialCacheFactory
+from .stls_id_credential_cache import IdentityCredentialCacheFactory, OperationalCredentialCacheFactory
 from .stls_id_did import domain_and_path_to_did
 from .stls_id_keystore import IdentityKeystoreFactory
 from .stls_id_models import (
@@ -199,6 +199,68 @@ def load_identity_presenter(
         holder_signing_key=holder_key,
         holder_verification_method_id=f"{holder_did}#key-1",
         credentials=[credential],
+    )
+
+
+def load_delegation_presenter(
+    agent_id: str,
+    operational_credential_id: str,
+    grantor_identity_credential: NetworkAuthorityCredential,
+    *,
+    governing_authority_host: str,
+) -> IdentityPresenter | None:
+    """
+    Loads an already-received Operational Credential (a delegation)
+    as a ready-to-present IdentityPresenter — issue #54's follow-up to
+    load_identity_presenter() above, for a Requestor presenting a
+    delegated permission instead of its own plain identity.
+
+    Deliberately does NOT resolve grantor_identity_credential itself —
+    the Requestor must already have it (e.g. via
+    get_cached_identity_credential(grantor_agent_id) on whichever
+    platform issued the delegation). This mirrors
+    validate_external_operational_credential's own design (issue #48):
+    the Grantor's identity is always a separately-supplied piece of
+    data, never auto-resolved by this package, since it isn't part of
+    "the Requestor's own identity" — the one thing this function's
+    sibling loaders are scoped to.
+
+    Args:
+        agent_id: the Requestor's own identifier — same one used to
+            bootstrap its identity (its signing key must already be in
+            IdentityKeystoreFactory's store).
+        operational_credential_id: which cached delegation to present —
+            an agent can hold several at once (OperationalCredentialCacheFactory
+            is a collection, not a single slot), so the caller must say
+            which one; there is no "the" delegation to default to.
+        grantor_identity_credential: the Grantor's own NetworkAuthorityCredential
+            that issued this delegation — resolved by the caller, not
+            here (see above).
+        governing_authority_host: the host segment of the Requestor's
+            own Governing Authority's did:web.
+
+    Returns:
+        None if agent_id has no signing key yet, or no cached
+        Operational Credential under operational_credential_id — the
+        caller should then fail the same way as if no handler were
+        configured at all, rather than present a half-built VP.
+    """
+    keystore = IdentityKeystoreFactory.build()
+    holder_key = keystore.get(agent_id)
+    if holder_key is None:
+        return None
+
+    cache = OperationalCredentialCacheFactory.build()
+    operational_credential = cache.get(agent_id, operational_credential_id)
+    if operational_credential is None:
+        return None
+
+    holder_did = domain_and_path_to_did(governing_authority_host, "agents", agent_id)
+    return IdentityPresenter(
+        holder_did=holder_did,
+        holder_signing_key=holder_key,
+        holder_verification_method_id=f"{holder_did}#key-1",
+        credentials=[operational_credential, grantor_identity_credential],
     )
 
 

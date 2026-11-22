@@ -2,6 +2,53 @@
 
 All relevant changes to this package, in reverse chronological order.
 
+## [0.1.4] — 2026-11-23
+
+Issue #54 — a Requestor-side loader to present a received delegation
+(Operational Credential), mirroring #45's `load_identity_presenter()`
+and #51's `load_delegation_manager()`.
+
+### Added
+
+- `OperationalCredentialCacheBase`/`OperationalCredentialCacheFactory`
+  (memory/redis backends) in `stls_id_credential_cache.py` — cache for
+  Operational Credentials an agent has RECEIVED via delegation. A
+  collection, not a single slot (an agent can hold several at once,
+  from different Grantors), promoted from
+  `samples/server/sofia-admin`'s own hand-rolled Redis calls
+  (`cache_operational_credential`/`get_cached_operational_credential`/
+  `list_cached_operational_credentials`), same promotion #45 already
+  did for the Identity Credential cache.
+- `load_delegation_presenter(agent_id, operational_credential_id,
+  grantor_identity_credential, *, governing_authority_host)` in
+  `stls_id_presentation.py` — resolves the Requestor's own key and a
+  specific cached Operational Credential, returns a ready-to-use
+  `IdentityPresenter` carrying both the Operational Credential and the
+  Grantor's Identity Credential. Deliberately does NOT resolve
+  `grantor_identity_credential` itself — the caller supplies it (e.g.
+  via `get_cached_identity_credential(grantor_agent_id)`), mirroring
+  `validate_external_operational_credential`'s own design (issue #48):
+  the Grantor's identity is always separately-supplied data, not
+  auto-resolved, since it isn't part of "the Requestor's own identity".
+
+### Fixed
+
+- `IDENTITY_CREDENTIAL_CACHE_BACKEND`/`_REDIS_URL`/`_REDIS_NAMESPACE`
+  (issue #45) were never documented in this package's own
+  `.env.example` — a real gap found while adding the equivalent section
+  for the new Operational Credential cache. Both are now documented.
+- Corrected `__version__` in `__init__.py`, which had drifted from
+  `pyproject.toml`'s actual version since 0.1.1.
+
+### Tests
+
+- 109 tests (was 99) — 10 new covering the Operational Credential
+  cache (roundtrip, expiry, multi-credential collection per agent,
+  delete) and `load_delegation_presenter()` end to end, including a
+  full real-crypto roundtrip verified via `Sentinel.unpack_presentation()`
+  dispatching to `verify_delegation_chain()` — the exact server-side
+  path a real `identity_verifier` would take.
+
 ## [0.1.3] — 2026-11-22
 
 Issue #51 — a generalized loader for a real Grantor agent, mirroring

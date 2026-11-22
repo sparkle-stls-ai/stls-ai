@@ -45,7 +45,11 @@ from .stls_id_credential_cache import (
     IdentityCredentialCacheBase,
     IdentityCredentialCacheFactory,
     InMemoryIdentityCredentialCache,
+    InMemoryOperationalCredentialCache,
+    OperationalCredentialCacheBase,
+    OperationalCredentialCacheFactory,
     RedisIdentityCredentialCache,
+    RedisOperationalCredentialCache,
 )
 from .stls_id_status import (
     MRI_SECONDS,
@@ -60,6 +64,7 @@ from .stls_id_presentation import (
     attach_identity_presentation_header,
     build_verifiable_presentation,
     identity_challenge_handler_from_env,
+    load_delegation_presenter,
     load_identity_presenter,
 )
 from .stls_id_verifier import CredentialVerificationError, Sentinel
@@ -88,7 +93,7 @@ from .stls_id_trust_registry_client import (
 )
 from .stls_id_trust_registry_bridge import create_trust_registry_router
 
-__version__ = "0.1.1"
+__version__ = "0.1.3"
 
 __all__ = [
     # models
@@ -124,6 +129,10 @@ __all__ = [
     "IdentityCredentialCacheFactory",
     "InMemoryIdentityCredentialCache",
     "RedisIdentityCredentialCache",
+    "OperationalCredentialCacheBase",
+    "OperationalCredentialCacheFactory",
+    "InMemoryOperationalCredentialCache",
+    "RedisOperationalCredentialCache",
     # status
     "MRI_SECONDS",
     "StatusListManager",
@@ -141,6 +150,7 @@ __all__ = [
     "attach_identity_presentation_header",
     "build_verifiable_presentation",
     "identity_challenge_handler_from_env",
+    "load_delegation_presenter",
     "load_identity_presenter",
     # verifier
     "CredentialVerificationError",

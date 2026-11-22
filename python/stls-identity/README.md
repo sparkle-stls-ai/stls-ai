@@ -27,6 +27,7 @@ parallel throughout the migration.
 | Identity Credential cache (issue #45) — `IdentityCredentialCacheBase`/`IdentityCredentialCacheFactory` (memory/redis), separate lifecycle from the signing-key keystore (TTL = the credential's own `validUntil`, no manual cleanup) | `stls_id_credential_cache.py` | ✅ tested |
 | Generalized identity loader (issue #45) — `load_identity_presenter()`/`identity_challenge_handler_from_env()`: one call, driven by `IDENTITY_AGENT_ID`, builds a `stls-a2a` `identity_challenge_handler` from whatever's already in the keystore/credential cache — promoted from a hand-rolled pattern first written for `samples/server/sofia-admin`'s coordinator | `stls_id_presentation.py` | ✅ tested |
 | Generalized delegation loader (issue #51) — `load_delegation_manager()`: same pattern as `load_identity_presenter()`, but returns a ready-to-use `DelegationManager` for an already-bootstrapped, already-"grantor"-role agent instead of something that presents an identity — built for a real Grantor agent service, not just validation scripts | `stls_id_delegation.py` | ✅ tested |
+| Requestor-side delegation presenter (issue #54) — `OperationalCredentialCacheFactory` (a collection, not a single slot) + `load_delegation_presenter()`: builds an `IdentityPresenter` carrying a received Operational Credential alongside the Grantor's own Identity Credential (supplied by the caller, not auto-resolved), ready to attach to a real A2A call | `stls_id_credential_cache.py`, `stls_id_presentation.py` | ✅ tested |
 
 Canonicalization: real RFC 8785 (JCS) via the `rfc8785` library, not an
 approximation — necessary so that bridges implemented independently on
@@ -104,9 +105,9 @@ the variables (`IDENTITY_TEST_PG_DSN`, `STATUS_LIST_TEST_REDIS_URL`,
 loaded automatically by `tests/conftest.py`). Tests that don't touch
 external infrastructure still run with nothing configured.
 
-68 tests as of 0.1.0, 91 as of 0.1.1, 95 as of 0.1.2, 99 as of 0.1.3, all
-against real crypto/DB/cache where relevant — never against Python
-stubs for the parts that matter (signing, canonicalization,
+68 tests as of 0.1.0, 91 as of 0.1.1, 95 as of 0.1.2, 99 as of 0.1.3,
+109 as of 0.1.4, all against real crypto/DB/cache where relevant —
+never against Python stubs for the parts that matter (signing, canonicalization,
 persistence, revocation).
 
 ## Structure
@@ -116,7 +117,7 @@ src/stls_identity/
     stls_id_models.py              Pydantic models (DID, VC, VP, TrustAnchorEntry)
     stls_id_did.py                 DID Document, key bootstrap, multibase encode/decode
     stls_id_keystore.py            signing-key persistence (no-TTL, not ArqitKeyStoreBase), optional AtRestCipher encryption (issue #49)
-    stls_id_credential_cache.py    agent's own Identity Credential cache (issue #45)
+    stls_id_credential_cache.py    agent's own Identity Credential cache (#45) + received Operational Credential cache (#54)
     stls_id_issuer.py              IdentityManager — Identity Credential issuance
     stls_id_delegation.py          DelegationManager — Operational Credential, depth-1
     stls_id_status.py              status list (Redis bitstring, MRI) + remote fetch/check over HTTP
@@ -128,7 +129,7 @@ src/stls_identity/
     stls_id_trust_registry_store.py    Trust Anchor Registry, key history (Postgres)
     stls_id_trust_registry_client.py   cache/TTL, historical fallback for the Sentinel
     stls_id_trust_registry_bridge.py   read-only HTTP endpoint for the registry
-tests/       99 tests, same "against real infrastructure" discipline as the rest of the monorepo
+tests/       109 tests, same "against real infrastructure" discipline as the rest of the monorepo
 ```
 
 ## License
