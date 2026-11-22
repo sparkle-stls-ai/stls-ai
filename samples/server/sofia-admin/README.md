@@ -1,16 +1,16 @@
 # Sofia Admin — Multi-Agent Administration Example
 
 A Google ADK **coordinator agent** that administers the Sofia Platform by
-delegating to four specialized **sub-agents**, each exposed as its own
+delegating to specialized **sub-agents**, each exposed as its own
 independent STLS-A2A service. The example demonstrates agent-to-agent
 orchestration over A2A, with three different transport-security postures
 depending on how sensitive each sub-agent's domain is — up to requiring
 the caller to prove its own verifiable identity (issue #45), not just an
-API key, for the most sensitive one.
+API key, for the most sensitive ones.
 
 ---
 
-## The five agents
+## The six agents
 
 | Agent | Role | Port (local) | A2A endpoint |
 |---|---|---|---|
@@ -19,6 +19,7 @@ API key, for the most sensitive one.
 | `sofia_api_keys_agent` | API key lifecycle: create, revoke, update scopes, usage stats | `8012` | `/agents/sofia-api-keys/secure-a2a` |
 | `sofia_redis_agent` | Redis internals: A2A task store, STLS session cache, API key cache, revocation set | `8013` | `/agents/sofia-redis/secure-a2a` |
 | `sofia_identity_agent` | W3C DID/Verifiable Credential identities: bootstrap/issue/revoke, trust anchors, delegation checks | `8014` | `/agents/sofia-identity/secure-a2a` |
+| `sofia_grantor_agent` | Issues real delegations (Operational Credentials) under its own Grantor identity — issue #51 | `8016` | `/agents/sofia-grantor/secure-a2a` |
 
 Each agent is its own process with its own `server.py`, `.env`, and
 PostgreSQL-backed API key manager (`create_secure_a2a_endpoint` +
@@ -32,6 +33,9 @@ them other than the Postgres/Redis backends they each read from.
 - `server/identity_manager/` — `agent_identity.py` + `tools_identity.py` + `server.py`
   (plus `bootstrap_coordinator_identity.py`, see
   [Identity-compliant sub-agents](#identity-compliant-sub-agents-issue-45) below)
+- `server/grantor_agent/` — `agent_identity.py` + `tools_delegation.py` + `server.py` — generic,
+  configured entirely via `IDENTITY_AGENT_ID` (one running copy = one specific
+  Grantor); see [Delegation with a real Grantor agent](#delegation-with-a-real-grantor-agent-issue-51) below
 
 > `identity_bridge/`, `identity_trust_registry/` and `operator-b/` in this
 > same sample folder belong to a separate, standalone identity-federation
@@ -41,7 +45,9 @@ them other than the Postgres/Redis backends they each read from.
 > running for `sofia_identity_agent`'s own revocation checks to succeed
 > (see below). `identity_manager/` itself now serves double duty: the
 > standalone conversational identity example it always was, *and* the
-> coordinator's 4th sub-agent.
+> coordinator's 4th sub-agent — and so does `operator-b/`, which now also
+> hosts its own `grantor_agent/` deployment (issue #51's inter-operator
+> scenario, see [Delegation with a real Grantor agent](#delegation-with-a-real-grantor-agent-issue-51)).
 
 ---
 
@@ -60,6 +66,7 @@ flowchart TB
         KEYS["sofia_api_keys_agent\nContextualSecureRemoteA2aAgent\n+ X-API-Key header + STLS encrypted session (PQC)\n:8012  /agents/sofia-api-keys/secure-a2a\ntools_keys_mgmt.py → API keys (PG+Redis)"]
         RED["sofia_redis_agent\nRemoteA2aAgent + X-API-Key header\n:8013  /agents/sofia-redis/secure-a2a\ntools_redis.py → TaskStore (Redis)\n→ STLS session cache (Redis)\n→ key cache / revocation SET (Redis)"]
         ID["sofia_identity_agent\nContextualSecureRemoteA2aAgent\n+ X-API-Key header + STLS encrypted session (PQC)\n+ identity_verifier (issue #45)\n:8014  /agents/sofia-identity/secure-a2a\ntools_identity.py → DID/VC (PG+Redis)"]
+        GRANT["sofia_grantor_agent (issue #51)\nContextualSecureRemoteA2aAgent + X-API-Key header\n:8016  /agents/sofia-grantor/secure-a2a\ntools_delegation.py → load_delegation_manager()\n→ keystore + credential cache (Redis, SHARED with ID)"]
     end
 
     BRIDGE["identity_bridge\n:8000  GET /identity/status-list\n(separate process, must be running\nfor ID's own revocation checks)"]
@@ -69,7 +76,9 @@ flowchart TB
     CO -->|"delegates to"| KEYS
     CO -->|"delegates to"| RED
     CO -->|"delegates to,\npresenting a VerifiablePresentation"| ID
+    CO -->|"delegates to"| GRANT
     ID -->|"fetch_remote_credential_status"| BRIDGE
+    GRANT -.->|"reads the SAME\nkeystore/credential cache"| ID
 ```
 
 ---
@@ -77,7 +86,7 @@ flowchart TB
 ## How the A2A interaction works
 
 The coordinator is a plain Google ADK `Agent` whose `sub_agents=[...]` list
-holds four **remote** A2A agents. At startup/first call, ADK fetches each
+holds five **remote** A2A agents. At startup/first call, ADK fetches each
 sub-agent's agent card from `{BASE_URL_*}/.well-known/agent-card.json`
 (`AGENT_CARD_WELL_KNOWN_PATH`), learns its skills, and routes the LLM's tool
 calls to it as standard A2A `messages/send` requests over HTTP. From the
@@ -99,29 +108,39 @@ sofia_api_keys_agent = ContextualSecureRemoteA2aAgent(
 The system prompt in `agent_coordinator.py` gives the LLM explicit routing
 hints ("which agents are running" → monitoring, "create/revoke keys" →
 api-keys, "tasks"/"cache entries" → redis, "identity/DID/VC/trust anchors" →
-identity), plus a rule to coordinate both `sofia_api_keys_agent` and
-`sofia_redis_agent` for cross-domain questions such as "is the key for
-agent X still cached in Redis?".
+identity, "grant/authorize/delegate a permission" → grantor), plus a rule
+to coordinate both `sofia_api_keys_agent` and `sofia_redis_agent` for
+cross-domain questions such as "is the key for agent X still cached in
+Redis?".
 
 ### Three transport-security postures, by design
 
-All four sub-agents sit behind `create_secure_a2a_endpoint`, so every call
+All five sub-agents sit behind `create_secure_a2a_endpoint`, so every call
 is authenticated with a per-agent static `X-API-Key` (issued and checked via
 each sub-agent's own `PostgresLoader` + `ApiKeyManager`). On top of that,
-**two sub-agents get an extra layer**: `sofia_api_keys_agent`, because it is
+**three sub-agents get an extra layer**: `sofia_api_keys_agent`, because it is
 the one that creates, reads and revokes the credentials every other agent
-relies on, and `sofia_identity_agent` — the most sensitive one on the
+relies on; `sofia_grantor_agent`, because it mints real delegated permissions
+(issue #51); and `sofia_identity_agent` — the most sensitive one on the
 platform (bootstraps/issues/revokes identities, onboards trust anchors) —
 which additionally requires the caller to prove its *own* verifiable
 identity, not just present a static key (issue #15/#45):
 
-| | `sofia_monitoring_agent` / `sofia_redis_agent` | `sofia_api_keys_agent` | `sofia_identity_agent` |
+| | `sofia_monitoring_agent` / `sofia_redis_agent` | `sofia_api_keys_agent` / `sofia_grantor_agent` | `sofia_identity_agent` |
 |---|---|---|---|
 | ADK wrapper | `RemoteA2aAgent` | `ContextualSecureRemoteA2aAgent` | `ContextualSecureRemoteA2aAgent` |
 | Auth | `X-API-Key` header, plain `httpx.AsyncClient` | `X-API-Key` header **+** STLS encrypted session | `X-API-Key` header **+** STLS encrypted session **+** `identity_verifier` |
 | Payload encryption | none (relies on transport/network security) | AES-256-GCM over a PQC-derived session key (hybrid X25519 + ML-KEM-768 by default), transparent to the ADK | same as `sofia_api_keys_agent` |
 | Session/user context propagation | n/a | supported via `context_keys` (disabled here — `context_keys=[]` — since this sample has no per-user session state to forward) | same (disabled) |
 | Identity presentation | n/a | n/a | the coordinator must present a signed `VerifiablePresentation` of its own, verified server-side via `RequestPresentationVerifier` — see [Identity-compliant sub-agents](#identity-compliant-sub-agents-issue-45) |
+
+`sofia_grantor_agent` is deliberately *not* at the `sofia_identity_agent` tier
+yet — it only protects its own endpoint with an API key, same as
+`sofia_api_keys_agent`. Requiring a `VerifiablePresentation` from whoever
+calls it too (so "which human/process asked for this" is cryptographically
+tied to the issued delegation, not just "held a valid API key") is a natural
+hardening step, not yet built — see
+[Delegation with a real Grantor agent](#delegation-with-a-real-grantor-agent-issue-51).
 
 This mirrors the general STLS-A2A security layering: `create_secure_a2a_endpoint`
 on the server side always requires API-key authorization, while the
@@ -292,6 +311,7 @@ listed in the order you're likely to encounter them:
 | `validate_external_operational_credential`/`validate_external_identity_credential`: `signature verification failed` for the external Grantor's own identity, even with the right code | The onboarded Trust Anchor Registry key for the external Authority is stale — its signing key drifted (e.g. a Redis reset on its keystore DB) since the DID Document was last fetched/onboarded | Re-fetch the external Authority's current DID Document and re-run `onboard_trust_anchor` with its current key — `PostgresTrustAnchorRegistryStore.put()` handles this as a rotation automatically, no manual revoke needed first |
 | `validate_external_operational_credential` (or any tool taking a large credential as an argument): `signature verification failed`, but the same data passes when validated directly via a script | Found while testing #48: pasting a large JSON credential as chat text makes the conversational agent *regenerate* it as tool-call arguments — a single-character drift anywhere in a long `proofValue` is enough to break RFC 8785 canonicalization, even though the content looks identical to a human. Not a bug in the verification logic | **Attach the credential as a file** instead of pasting it as text — resolved this reliably in testing |
 | The sub-agent's error never shows up in the chat UI at all | A real, general bug in `GoogleADKAdapter` (not identity-specific) — `event.is_error()` doesn't exist on `google.adk.events.Event`, so a failing sub-agent's error was silently dropped. Fixed in `stls_a2a_google_adapter.py` (see issue #45's GitHub comments for the full writeup) | Update `stls_a2a` to a version including that fix |
+| `sofia_grantor_agent`: `400 INVALID_ARGUMENT ... Unknown name "additional_properties" at 'tools[0].function_declarations[0].parameters.properties[...].value'` | Found while testing #51: a `dict`-typed tool parameter (tried both bare `dict` and `dict[str, str]`) makes `google-adk` generate a function-declaration schema that Gemini's function-calling API rejects outright — same `google-genai` version this sample already uses successfully elsewhere for other agents' `dict`-typed tool parameters, so this isn't a blanket "dict never works" issue; it reproduced consistently for this specific tool regardless, root cause not fully isolated | Avoid a `dict` parameter type entirely for `delegate_to_agent`'s `scope` — it now takes `scope_json: str` (a JSON-encoded object) and parses it with `json.loads()` inside the tool. A plain string parameter never triggers the problematic schema path |
 
 ### Known limitation
 
@@ -347,6 +367,132 @@ turned on, so start from a clean slate rather than migrate them.
 
 ---
 
+## Delegation with a real Grantor agent ([issue #51](https://github.com/sparkle-stls-ai/stls-ai/issues/51))
+
+#48 tested delegation with standalone scripts, deliberately not changing
+`identity_manager`'s own provisioning-only boundary (it never calls
+`DelegationManager` itself — see its own docstring). This section wires
+delegation into the actual coordinator/chat flow instead, via a new,
+*separate* sub-agent — `sofia_grantor_agent` — rather than adding a
+delegation tool to `identity_manager`.
+
+### Why a separate agent, not a new `identity_manager` tool
+
+Discussed at length in #51: making `identity_manager` able to issue
+delegations on behalf of *any* Grantor would mean anyone who can talk to
+`sofia_identity_agent` could mint a real permission for any Grantor on the
+platform, without that Grantor's own logic being involved at call time.
+Different facilities/network segments/business units can have different
+human owners who need to control their own delegations independently —
+one platform-wide chokepoint doesn't fit that. `sofia_grantor_agent`
+resolves this by construction: **it is its own service, with its own API
+key, and can only ever act as the ONE Grantor identity it was deployed
+as.** "Can talk to this specific Grantor agent" *is* the authorization
+check — no extra binding logic needed, consistent with how every other
+sub-agent here already has its own independent protection.
+
+### Two concrete scenarios this is built for
+
+- **Intra-platform**: a facility's Grantor (e.g. `grantor-mi1`, representing
+  authority over site MI1) is asked, via the coordinator, to "authorize
+  agent X to activate cross-connects at facility MI1 for 24 hours" — it
+  issues a real Operational Credential with
+  `scope={"action": "cross-connect-activate", "facility_code": "MI1"}`.
+  Agent X later presents that credential to whatever system performs the
+  activation, which validates the chain before acting.
+- **Inter-operator (federation)** — the same mechanism #48 already tested
+  manually (`validate_external_operational_credential`), now issued live.
+  `operator-b/grantor_agent/` is a second deployment of the exact same code
+  (`IDENTITY_AGENT_ID=grantor-b-segment`, its own port `8017`, rooted in
+  `b.example.com` instead of Sparkle's own Governing Authority), able to
+  delegate to one of Sparkle's agents the permission to act on operator-b's
+  own network segment.
+
+### How one Grantor agent is generic, not scenario-specific
+
+`grantor_agent/` has no facility/scope baked in anywhere — `IDENTITY_AGENT_ID`
+(which identity this process presents and delegates as) and the
+`scope_json` object passed to `delegate_to_agent` at call time are both
+fully free-form (a JSON-encoded string, not a `dict` parameter — see the
+troubleshooting table below for why).
+"The MI1 facility Grantor" is just one *deployment* of this same generic
+code (one `.env`, one bootstrapped identity) — exactly how `operator-b` is
+a second deployment of `identity_manager`'s own code, not a fork of it.
+
+### Setting it up
+
+1. **Provision the Grantor's identity** (administrative, stays on
+   `identity_manager` — see #51's resolved design): from
+   `identity_manager/`, run
+   `python bootstrap_grantor_agent_identity.py grantor-mi1` (pick any
+   `agent_id` that identifies what this Grantor is authority *over*, not a
+   placeholder). This bootstraps its DID and issues it an Identity
+   Credential with `roles=["grantor"]`.
+2. **Configure `grantor_agent/.env`** from `grantor_agent/env.example` —
+   `IDENTITY_AGENT_ID` must match step 1 exactly, and the keystore/
+   credential-cache/status-list variables must point at the SAME Redis as
+   `identity_manager`'s own `.env` (shared stores, not a separate keystore
+   per Grantor).
+3. **Start `grantor_agent/server.py`** — it loads the identity from step 1
+   at startup via `stls_identity.load_delegation_manager()` (the same
+   primitive #45 built for `load_identity_presenter()`, just loading
+   something that can *act* as a Grantor instead of *presenting* an
+   identity). It refuses the first `delegate_to_agent` call with a clear
+   error if steps 1–2 weren't done first.
+4. **Configure `coordinator/.env`** — `BASE_URL_GRANTOR`/`API_KEY_GRANTOR`
+   (provision the real key the same way as every other sub-agent's,
+   via `sofia_api_keys_agent`/Postgres). Restart the coordinator.
+5. Ask the coordinator, via `sofia-client-secure`, to delegate something —
+   e.g. *"authorize agent requestor-demo to activate cross-connects at
+   facility MI1 for the next 24 hours"*.
+
+### Setting up the inter-operator deployment
+
+Exactly the same steps as above, run under `operator-b/` instead:
+
+1. From `operator-b/identity_manager/`, run
+   `python bootstrap_grantor_agent_identity.py grantor-b-segment` (same
+   script, copied verbatim — it's generic, nothing Sparkle-specific in it).
+2. Configure `operator-b/grantor_agent/.env` from its own `env.example` —
+   already defaults to `IDENTITY_AGENT_ID=grantor-b-segment`,
+   `GOVERNING_AUTHORITY_HOST=b.example.com`, Redis DB `/1` (not `/0`,
+   Sparkle's own), port `8017`.
+3. Start `operator-b/grantor_agent/server.py`.
+4. This agent isn't wired into Sparkle's coordinator's `sub_agents=[...]`
+   — but `sofia-client-secure` can reach **any** agent directly, not only
+   the coordinator (see
+   [Testing through sofia-client-secure](#testing-through-sofia-client-secure)
+   below). Two ways to do that, no coordinator involved either way:
+   - **Debug mode** (`VITE_MODE=debug`, the simplest for a one-off test
+     like this): `sofia-client-secure`'s `/api/proxy/direct/send`/`/stream`
+     take the agent's `url` and `apiKey` directly in the request — no
+     `sf_agents_config` row needed at all (just a one-off
+     `assertSafeDebugUrl` safety check: http/https only, rejects
+     link-local targets, loopback/private stays allowed for local
+     agents). This is how the inter-operator scenario was actually
+     tested live, end to end (issue #51, 2026-11-22).
+   - **Register it** in `sf_agents_config` (`agent_name`, its own `url`,
+     a dedicated `api_key` — same shape as any other key, inserted into
+     `sf_api_keys` with `endpoints` matching this agent's own path) if
+     you want it to stay directly selectable in the normal chat UI
+     across sessions, not just for one debug-mode call.
+
+### Known simplification
+
+All Operational Credentials issued by any Grantor share the SAME
+platform-wide status list `identity_manager` already publishes
+(`IDENTITY_AUTHORITY_ID`/`STATUS_LIST_PUBLISH_URL`), rather than each
+Grantor getting its own separately-published list. The package's own
+module docstring (`stls_id_delegation.py`) describes per-Grantor
+namespacing as the intended shape; building that fully would also mean
+extending `identity_bridge` to publish more than one authority's status
+list over HTTP — a real piece of follow-up work, not done here. Indices
+still uniquely identify each credential either way, so revocation itself
+is not broken by this simplification — it is a co-mingling/organizational
+concern, not a correctness one.
+
+---
+
 ## Testing through sofia-client-secure
 
 This example can be exercised end-to-end from
@@ -356,11 +502,15 @@ encrypted transport. To point it at this coordinator:
 
 1. Start `sofia-client-secure` (Python secure-transport service, Express
    backend, React dev server — see its own README).
-2. Register the coordinator in `sf_agents_config`:
+2. Register the coordinator in `sf_agents_config` — `url` is the agent's
+   **base** URL only, no path (`sofia-client-secure`'s own server resolves
+   the actual A2A endpoint itself, same as every other row already in
+   this table — confirmed directly against real data, the opposite of
+   what an earlier version of this example showed):
 
    ```sql
    INSERT INTO sf_agents_config (agent_name, url, api_key)
-   VALUES ('sofia-admin', 'http://localhost:8010/agents/sofia-admin-coordinator/secure-a2a', '<coordinator API key>');
+   VALUES ('sofia-admin', 'http://localhost:8010', '<coordinator API key>');
    ```
 
 3. Grant a user access to it via `sf_agents_access` (optionally with a
@@ -369,6 +519,17 @@ encrypted transport. To point it at this coordinator:
    the coordinator exactly as described above, and the client's "secure"
    proxy path is what lets you drive `sofia_api_keys_agent`'s PQC-encrypted
    leg of the conversation without any special handling on the frontend.
+
+This isn't coordinator-specific: **any** agent can be reached this way,
+bypassing the coordinator entirely — including a `grantor_agent`
+deployment (see
+[Delegation with a real Grantor agent](#delegation-with-a-real-grantor-agent-issue-51)).
+Registering a permanent `sf_agents_config` row (as above) is one way; for
+a one-off test, `sofia-client-secure`'s debug mode
+(`VITE_MODE=debug`) is simpler — `/api/proxy/direct/send`/`/stream` take
+the target's `url`/`apiKey` directly in the request, no DB row needed at
+all. This is exactly how `operator-b/grantor_agent/` was tested live,
+since it has no coordinator of its own to route through.
 
 ---
 

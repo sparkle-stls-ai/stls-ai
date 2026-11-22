@@ -54,7 +54,7 @@ from .stls_id_status import (
     fetch_status_bit,
 )
 from .stls_id_issuer import DEFAULT_VALIDITY, IdentityManager
-from .stls_id_delegation import DEFAULT_OPERATIONAL_VALIDITY, DelegationManager
+from .stls_id_delegation import DEFAULT_OPERATIONAL_VALIDITY, DelegationManager, load_delegation_manager
 from .stls_id_presentation import (
     IdentityPresenter,
     attach_identity_presentation_header,
@@ -135,6 +135,7 @@ __all__ = [
     # delegation
     "DEFAULT_OPERATIONAL_VALIDITY",
     "DelegationManager",
+    "load_delegation_manager",
     # presentation
     "IdentityPresenter",
     "attach_identity_presentation_header",

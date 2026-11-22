@@ -2,6 +2,32 @@
 
 All relevant changes to this package, in reverse chronological order.
 
+## [0.1.3] — 2026-11-22
+
+Issue #51 — a generalized loader for a real Grantor agent, mirroring
+issue #45's `load_identity_presenter()`.
+
+### Added
+
+- `load_delegation_manager(agent_id, *, governing_authority_host,
+  status_list_manager, status_list_publish_url, audit_hook=None)` in
+  `stls_id_delegation.py` — loads an already-bootstrapped,
+  already-issued-with-`roles=["grantor"]` agent's own identity and
+  returns a ready-to-use `DelegationManager`. Returns `None` if the
+  agent has no signing key yet, no cached Identity Credential yet, or
+  its credential doesn't declare the `"grantor"` role — same
+  off-by-default posture as every other loader in this package.
+  Status-list wiring (which Redis/HTTP endpoint publishes revocations)
+  stays the caller's responsibility, passed through unchanged, since
+  it's shared platform infrastructure, not part of "my own identity".
+
+### Tests
+
+- 99 tests (was 95) — 4 new covering `load_delegation_manager()`: no
+  key, no cached credential, credential without the grantor role, and
+  a full roundtrip that actually issues a real Operational Credential
+  with it.
+
 ## [0.1.2] — 2026-11-22
 
 Issue #49 — encryption at rest for the Redis-backed signing-key
