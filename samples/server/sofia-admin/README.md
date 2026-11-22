@@ -328,6 +328,23 @@ All four write into real Postgres/Redis, same posture as
 `bootstrap_coordinator_identity.py` — run them yourself, not something
 this sample runs automatically.
 
+### Resetting identity data
+
+After enough manual testing, `identity_manager/reset_identity_data.py`
+and `operator-b/identity_manager/reset_identity_data.py` clear every
+identity-specific Postgres table and Redis key for each platform
+(DID documents, credential log, keystore, credential cache, status
+list; the Trust Anchor Registry too, from the Sparkle-side script
+only — it's the same physical table, shared with `operator-b` by
+design). Both print exactly what they're about to touch and require
+typing `yes` before doing anything; neither ever runs `FLUSHDB` (the
+shared Redis DB also holds the task store/API-key cache on this
+platform — see the test-fixture incident this project already hit
+once for why that distinction matters). Worth running before changing
+how the keystore itself persists data (e.g. issue #49's at-rest
+encryption) — existing plaintext keys won't decrypt once encryption is
+turned on, so start from a clean slate rather than migrate them.
+
 ---
 
 ## Testing through sofia-client-secure
