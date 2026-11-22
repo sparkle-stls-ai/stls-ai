@@ -24,7 +24,10 @@ Environment variables:
 
 Redis structure (backend=redis):
     {namespace}:{agent_id}  ->  STRING, raw Ed25519 private key bytes
-                                 (32 bytes). No TTL — persistent by design.
+                                 (32 bytes) if STLS_CORE_ATREST_KEY is
+                                 unset, or an AtRestCipher-sealed blob
+                                 (nonce || ciphertext || tag) if set.
+                                 No TTL — persistent by design.
 
 Production note: for GCP deployments, the natural home for this secret
 is Secret Manager (same as other long-lived credentials in the stack),
@@ -32,17 +35,33 @@ not Redis. RedisIdentityKeystore is provided for parity with the rest
 of stls-core's Redis-backed components and for local/dev use;
 swap in a SecretManagerIdentityKeystore before this goes to production
 on GCP — the ABC is the extension point for that.
+
+Encryption at rest (issue #49): opt-in via STLS_CORE_ATREST_KEY (the
+SAME KEK stls-core's own RedisKeyStore already reads — see
+stls_core_atrest.py, issue #20), domain-separated with its own label
+so the two stores never share a derived key. Unset: keys are stored in
+plaintext, same as before this fix, with a one-time warning logged at
+construction. Set: every private key is sealed with AES-256-GCM before
+SET and opened after GET — raw bytes, no base64, same wire shape
+stls-core's own keystore already uses (dropped the base64 encoding
+this module had before: no deployment of this early-stage package
+needs it preserved across the change, and it adds nothing AtRestCipher
+doesn't already handle — see reset_identity_data.py if migrating an
+existing deployment's keys).
 """
 
 from __future__ import annotations
 
-import base64
+import logging
 import os
 from abc import ABC, abstractmethod
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
 )
+from stls_core import AtRestCipher
+
+logger = logging.getLogger(__name__)
 from cryptography.hazmat.primitives import serialization
 
 
@@ -113,6 +132,13 @@ class RedisIdentityKeystore(IdentityKeystoreBase):
         self._r = redis_lib.Redis.from_url(redis_url, decode_responses=False)
         self._ns = namespace
 
+        self._cipher = AtRestCipher.from_env(label=b"stls-identity/keystore")
+        if self._cipher is None:
+            logger.warning(
+                "[RedisIdentityKeystore] STLS_CORE_ATREST_KEY is not set — "
+                "signing private keys are stored in plaintext (see issue #49)."
+            )
+
     def _key(self, agent_id: str) -> str:
         return f"{self._ns}:{agent_id}"
 
@@ -120,7 +146,21 @@ class RedisIdentityKeystore(IdentityKeystoreBase):
         raw = self._r.get(self._key(agent_id))  # plain GET — no TTL, no GETEX
         if raw is None:
             return None
-        return Ed25519PrivateKey.from_private_bytes(base64.b64decode(raw))
+        if self._cipher is None:
+            return Ed25519PrivateKey.from_private_bytes(bytes(raw))
+        try:
+            key_bytes = self._cipher.open(bytes(raw))
+        except Exception as exc:
+            # Same fail-closed-but-logged posture as stls-core's own
+            # RedisKeyStore.get() — a wrong/rotated STLS_CORE_ATREST_KEY
+            # must not raise out to the caller or return garbage key
+            # material, just "no key found".
+            logger.error(
+                "[RedisIdentityKeystore] get: decryption failed for agent_id=%s: %s",
+                agent_id, exc,
+            )
+            return None
+        return Ed25519PrivateKey.from_private_bytes(key_bytes)
 
     def put(self, agent_id: str, private_key: Ed25519PrivateKey) -> None:
         raw = private_key.private_bytes(
@@ -128,8 +168,11 @@ class RedisIdentityKeystore(IdentityKeystoreBase):
             format=serialization.PrivateFormat.Raw,
             encryption_algorithm=serialization.NoEncryption(),
         )
+        # Envelope-encrypted at rest when STLS_CORE_ATREST_KEY is set —
+        # independent of Redis's own at-rest settings. See issue #49.
+        stored = self._cipher.seal(raw) if self._cipher is not None else raw
         # plain SET — deliberately no `ex=`: persistent, not a cache entry.
-        self._r.set(self._key(agent_id), base64.b64encode(raw))
+        self._r.set(self._key(agent_id), stored)
 
 
 class IdentityKeystoreFactory:

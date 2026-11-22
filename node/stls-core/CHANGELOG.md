@@ -9,6 +9,18 @@ of which this package is the TypeScript port.
 
 ---
 
+## [0.1.11] — 2026-11-22
+
+Mirrors [`python/stls-core` 0.1.11](../../python/stls-core/CHANGELOG.md)
+— no `.ts` source changes beyond exporting `AtRestCipher` from this
+package's own public entry point (`index.ts`): it already existed
+(`atrest.ts`, issue #20) and was already used internally by
+`session-redis.ts`, but wasn't importable by sibling packages, same
+gap the Python side just fixed. Needed for a future Node port of
+`stls-identity`'s own at-rest keystore encryption (issue #47/#49).
+Also corrects `STLS_CORE_NODE_VERSION`, which had drifted from
+`package.json`'s actual version since 0.1.8.
+
 ## [0.1.10] — 2026-11-19
 
 Mirrors [`python/stls-core` 0.1.10](../../python/stls-core/CHANGELOG.md)

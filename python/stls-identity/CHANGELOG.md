@@ -2,6 +2,45 @@
 
 All relevant changes to this package, in reverse chronological order.
 
+## [0.1.2] — 2026-11-22
+
+Issue #49 — encryption at rest for the Redis-backed signing-key
+keystore.
+
+### Security
+
+- `RedisIdentityKeystore` now seals every private key with AES-256-GCM
+  before `SET` and opens it after `GET`, when `STLS_CORE_ATREST_KEY`
+  is set — reuses `stls_core.AtRestCipher` (issue #20) with its own
+  domain-separation label (`b"stls-identity/keystore"`), so the same
+  KEK can safely serve both stores without key reuse across them.
+  Opt-in: unset, keys are stored in plaintext exactly as before this
+  release, with a one-time warning logged at construction.
+- Dropped the base64 encoding this module previously used for the
+  plaintext case — raw bytes now, same wire shape `stls_core`'s own
+  `RedisKeyStore` already uses. Not backward-compatible with
+  previously-written plaintext entries from 0.1.1 or earlier; see
+  `samples/server/sofia-admin/server/*/identity_manager/reset_identity_data.py`
+  if migrating an existing deployment's keys.
+- `get()` now fails closed (returns `None`, logs the error) on a
+  decryption failure (e.g. a rotated/wrong KEK) instead of raising —
+  same posture as `stls_core.providers.RedisKeyStore.get()`.
+
+### Dependencies
+
+- Raised the `stls_core` dependency floor to `>=0.1.11` (was `>=0.1.1`)
+  — needed `AtRestCipher` exported from `stls_core`'s own `__init__.py`
+  (it existed since issue #20 but wasn't importable by sibling
+  packages until now).
+
+### Tests
+
+- 95 tests (was 91) — 4 new covering `RedisIdentityKeystore` end to
+  end against a real Redis (previously untested: only
+  `InMemoryIdentityKeystore` had any coverage at all): plaintext
+  roundtrip, encrypted roundtrip, stored-bytes-differ-from-plaintext,
+  and fail-closed behavior on a wrong KEK.
+
 ## [0.1.1] — 2026-11-20
 
 Issue #15 gap #1 — connects this package's DID/VC/Verifiable-Presentation

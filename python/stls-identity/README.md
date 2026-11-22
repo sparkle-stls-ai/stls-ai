@@ -15,7 +15,7 @@ parallel throughout the migration.
 
 | Capability | Module | Status |
 |---|---|---|
-| DID Document (`did:web`), Ed25519 key bootstrap | `stls_id_did.py` | ✅ tested |
+| DID Document (`did:web`), Ed25519 key bootstrap, optional encryption at rest for the Redis-backed keystore (issue #49, opt-in via `STLS_CORE_ATREST_KEY`) | `stls_id_did.py`, `stls_id_keystore.py` | ✅ tested |
 | Identity Credential (`NetworkAuthorityCredential`) | `stls_id_issuer.py` | ✅ tested |
 | Operational Credential — Grantor → Requestor delegation, depth-limit 1 | `stls_id_delegation.py` | ✅ tested |
 | Revocation via status list (bitstring on Redis, 5 min MRI), + remote fetch/check over HTTP (`fetch_remote_credential_status`) for a verifying bridge | `stls_id_status.py` | ✅ tested (real Redis + real HTTP) |
@@ -42,7 +42,8 @@ Listed explicitly so it doesn't look like it was forgotten:
   rotates its own key doesn't have the same mechanism (its DID
   Documents have no history).
 - **Hardware-backed keystore** — `IdentityKeystoreBase` only has
-  software backends (`memory`, `redis`); every credential honestly
+  software backends (`memory`, `redis`, the latter optionally
+  encrypted at rest since issue #49); every credential honestly
   declares `keyStorageTier: TIER_1_SOFTWARE`, never a higher tier.
 - **Registry governance beyond Option A** — only the centralized
   registry (operated by an anchor member) is implemented. Quorum
@@ -102,9 +103,9 @@ the variables (`IDENTITY_TEST_PG_DSN`, `STATUS_LIST_TEST_REDIS_URL`,
 loaded automatically by `tests/conftest.py`). Tests that don't touch
 external infrastructure still run with nothing configured.
 
-68 tests as of 0.1.0, 91 as of 0.1.1, all against real crypto/DB/cache
-where relevant — never against Python stubs for the parts that matter
-(signing, canonicalization, persistence, revocation).
+68 tests as of 0.1.0, 91 as of 0.1.1, 95 as of 0.1.2, all against real
+crypto/DB/cache where relevant — never against Python stubs for the
+parts that matter (signing, canonicalization, persistence, revocation).
 
 ## Structure
 
@@ -112,7 +113,8 @@ where relevant — never against Python stubs for the parts that matter
 src/stls_identity/
     stls_id_models.py              Pydantic models (DID, VC, VP, TrustAnchorEntry)
     stls_id_did.py                 DID Document, key bootstrap, multibase encode/decode
-    stls_id_keystore.py            signing-key persistence (no-TTL, not ArqitKeyStoreBase)
+    stls_id_keystore.py            signing-key persistence (no-TTL, not ArqitKeyStoreBase), optional AtRestCipher encryption (issue #49)
+    stls_id_credential_cache.py    agent's own Identity Credential cache (issue #45)
     stls_id_issuer.py              IdentityManager — Identity Credential issuance
     stls_id_delegation.py          DelegationManager — Operational Credential, depth-1
     stls_id_status.py              status list (Redis bitstring, MRI) + remote fetch/check over HTTP
@@ -124,7 +126,7 @@ src/stls_identity/
     stls_id_trust_registry_store.py    Trust Anchor Registry, key history (Postgres)
     stls_id_trust_registry_client.py   cache/TTL, historical fallback for the Sentinel
     stls_id_trust_registry_bridge.py   read-only HTTP endpoint for the registry
-tests/       81 tests, same "against real infrastructure" discipline as the rest of the monorepo
+tests/       95 tests, same "against real infrastructure" discipline as the rest of the monorepo
 ```
 
 ## License
