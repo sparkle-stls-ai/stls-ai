@@ -104,7 +104,7 @@ stls-ai/
 | Package | Language | Version | What it provides |
 |---|---|---|---|
 | [`stls-core`](python/stls-core) | Python ≥3.12 | 0.1.11 | Protocol-agnostic crypto, session cache, handshake, key providers, API-key auth. The common foundation. |
-| [`stls-identity`](python/stls-identity) | Python ≥3.12 | 0.1.2 | DID documents, Identity/Operational Verifiable Credentials, delegation, revocation, Trust Anchor Registry, Sentinel verifier. |
+| [`stls-identity`](python/stls-identity) | Python ≥3.12 | 0.1.3 | DID documents, Identity/Operational Verifiable Credentials, delegation, revocation, Trust Anchor Registry, Sentinel verifier. |
 | [`stls-a2a`](python/stls-a2a) | Python ≥3.12 | 0.1.11 | Secure A2A transport, framework adapters (Google ADK, LangChain, Semantic Kernel, custom), task lifecycle, agent cards, agent registry. |
 | [`stls-mcp`](python/stls-mcp) | Python ≥3.12 | 0.1.7 | Encrypted MCP endpoint (`/mcp-stls`) alongside a 100%-standard MCP endpoint (`/mcp`), built on the official MCP SDK. |
 | [`stls-core`](node/stls-core) | Node.js ≥20 / TS | 0.1.11 | TypeScript port of `python/stls-core` — bit-compatible wire format, cross-language tested. |

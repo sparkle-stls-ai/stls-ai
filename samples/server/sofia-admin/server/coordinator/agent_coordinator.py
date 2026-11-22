@@ -47,6 +47,9 @@ API_KEY_MONITORING=os.getenv("API_KEY_MONITORING", "")
 BASE_URL_IDENTITY=os.getenv("BASE_URL_IDENTITY", "http://localhost:8014").rstrip("/")
 API_KEY_IDENTITY=os.getenv("API_KEY_IDENTITY", "")
 
+BASE_URL_GRANTOR=os.getenv("BASE_URL_GRANTOR", "http://localhost:8015").rstrip("/")
+API_KEY_GRANTOR=os.getenv("API_KEY_GRANTOR", "")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # COORDINATOR'S OWN IDENTITY (issue #45) — optional, off until bootstrapped
@@ -139,6 +142,26 @@ sofia_identity_agent = ContextualSecureRemoteA2aAgent(
 )
 
 
+sofia_grantor_agent = ContextualSecureRemoteA2aAgent(
+    name="sofia_grantor_agent",
+    description=(
+        "Agent that issues real Operational Credentials (delegated "
+        "permissions) under its own Grantor identity — issue #51. "
+        "One running copy = one specific Grantor (e.g. a facility's "
+        "authority); which one is a deployment detail (BASE_URL_GRANTOR), "
+        "not something the coordinator decides."
+    ),
+    agent_card=f"{BASE_URL_GRANTOR}{AGENT_CARD_WELL_KNOWN_PATH}",
+    extra_headers={"X-API-Key": API_KEY_GRANTOR},
+    context_keys=[],
+    # No identity_challenge_handler here (yet): sofia_grantor_agent/server.py
+    # only protects itself with an API key today, not identity_verifier —
+    # unlike sofia_identity_agent, which required issue #45's VP flow.
+    # Add one here the same way _identity_challenge_handler was wired
+    # above if the Grantor's own endpoint ever requires it too.
+)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ROOT AGENT
 # ══════════════════════════════════════════════════════════════════════════════
@@ -159,15 +182,27 @@ root_agent = Agent(
         "inspect API key cache, check revocation SET, monitor server health.\n"
         "4. 'sofia_identity_agent' — manage W3C DID / Verifiable Credential identities: "
         "bootstrap/issue/revoke an agent's identity, onboard/list/revoke trust anchors, "
-        "validate identity or operational (delegated) credentials.\n\n"
+        "validate identity or operational (delegated) credentials.\n"
+        "5. 'sofia_grantor_agent' — issue a real, signed delegation (Operational "
+        "Credential) to another agent, under this Grantor's own authority (e.g. "
+        "'authorize agent X to activate cross-connects at facility MI1 for 24 "
+        "hours'). This agent can only delegate on behalf of the ONE Grantor "
+        "identity it was deployed as — it never provisions new identities "
+        "(that's sofia_identity_agent's job) and never decides who gets to be "
+        "a Grantor.\n\n"
         "Routing hints:\n"
         "- Questions about 'which agents are running' or 'is agent X healthy' → sofia_monitoring_agent\n"
         "- Requests to 'create/revoke/list API keys' → sofia_api_keys_agent\n"
         "- Questions about 'tasks', 'Redis memory', 'cache entries' → sofia_redis_agent\n"
         "- Questions about identity, DID, Verifiable Credentials, trust anchors or "
-        "delegation → sofia_identity_agent\n"
+        "validating a delegation → sofia_identity_agent\n"
+        "- Requests to actually GRANT/AUTHORIZE/DELEGATE a permission to an agent → "
+        "sofia_grantor_agent\n"
         "- For cross-domain questions (e.g. 'is the key for agent X in Redis?') "
         "coordinate both sofia_api_keys_agent and sofia_redis_agent."
     ),
-    sub_agents=[sofia_monitoring_agent, sofia_api_keys_agent, sofia_redis_agent, sofia_identity_agent],
+    sub_agents=[
+        sofia_monitoring_agent, sofia_api_keys_agent, sofia_redis_agent,
+        sofia_identity_agent, sofia_grantor_agent,
+    ],
 )

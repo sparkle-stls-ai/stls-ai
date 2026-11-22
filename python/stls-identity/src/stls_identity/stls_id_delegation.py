@@ -63,6 +63,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from stls_core.auth import AuditEntry, AuthResult, default_audit_hook
 from stls_core.auth.stls_core_auth_manager import AuditHook
 
+from .stls_id_credential_cache import IdentityCredentialCacheFactory
+from .stls_id_did import domain_and_path_to_did
+from .stls_id_keystore import IdentityKeystoreFactory
 from .stls_id_models import (
     CredentialProof,
     CredentialStatus,
@@ -233,3 +236,66 @@ class DelegationManager:
             proof_value="z" + base58.b58encode(signature).decode("ascii"),
         )
         return credential
+
+
+def load_delegation_manager(
+    agent_id: str,
+    *,
+    governing_authority_host: str,
+    status_list_manager: StatusListManager,
+    status_list_publish_url: str,
+    audit_hook: AuditHook | None = None,
+) -> DelegationManager | None:
+    """
+    Loads an already-bootstrapped-and-issued agent's own identity as a
+    ready-to-use DelegationManager — mirrors
+    stls_id_presentation.load_identity_presenter() exactly (same two
+    stores, same resolution), except it returns something that can
+    ACT as a Grantor rather than something that can PRESENT an
+    identity. Written for a real Grantor agent (issue #51) that needs
+    to build its own DelegationManager at startup, the same way the
+    sofia-admin coordinator already loads its own IdentityPresenter.
+
+    status_list_manager/status_list_publish_url are NOT resolved here
+    — they're shared platform infrastructure (which Redis/HTTP
+    endpoint publishes revocations), not part of "my own identity",
+    so the caller passes them in exactly as it would to
+    DelegationManager's own constructor.
+
+    Args:
+        agent_id: the Grantor's own identifier — same one passed to
+            bootstrap_agent_identity()/issue_identity_credential_for_agent(roles=["grantor"])
+            when it was provisioned.
+        governing_authority_host: the host segment of the Governing
+            Authority's own did:web — used to recompute this agent's
+            DID locally (domain_and_path_to_did() is a pure function,
+            no I/O).
+
+    Returns:
+        None if the agent has no signing key yet, no cached credential
+        yet, or its cached credential doesn't declare the "grantor"
+        role — the caller should then refuse to start up as a Grantor
+        rather than silently accept delegation requests it has no
+        standing to issue.
+    """
+    keystore = IdentityKeystoreFactory.build()
+    holder_key = keystore.get(agent_id)
+    if holder_key is None:
+        return None
+
+    cache = IdentityCredentialCacheFactory.build()
+    credential = cache.get(agent_id)
+    if credential is None:
+        return None
+    if "grantor" not in credential.credential_subject.roles:
+        return None
+
+    holder_did = domain_and_path_to_did(governing_authority_host, "agents", agent_id)
+    return DelegationManager(
+        grantor_did=holder_did,
+        grantor_signing_key=holder_key,
+        grantor_verification_method_id=f"{holder_did}#key-1",
+        status_list_manager=status_list_manager,
+        status_list_publish_url=status_list_publish_url,
+        audit_hook=audit_hook,
+    )
