@@ -310,6 +310,7 @@ listed in the order you're likely to encounter them:
 | `validate_operational_credential`/`validate_external_operational_credential` (external case): `unknown or untrusted verification method` for the Grantor's own key | Found while testing #48's delegation flows: `tools_identity.py`'s shared `d.sentinel` only ever held the Governing Authority's key — correct for a plain Identity Credential, but an Operational Credential is signed by the **Grantor**, not the Authority, and `Sentinel.verify_signature()` does no automatic DID-document resolution by design. The internal case (`validate_operational_credential`) never resolved the Grantor's key the way the external case already did | Fixed in both `identity_manager/tools_identity.py` and `operator-b/identity_manager/tools_identity.py` — the internal case now also resolves the Grantor's key from `did_store` before verifying |
 | `validate_external_operational_credential`/`validate_external_identity_credential`: `signature verification failed` for the external Grantor's own identity, even with the right code | The onboarded Trust Anchor Registry key for the external Authority is stale — its signing key drifted (e.g. a Redis reset on its keystore DB) since the DID Document was last fetched/onboarded | Re-fetch the external Authority's current DID Document and re-run `onboard_trust_anchor` with its current key — `PostgresTrustAnchorRegistryStore.put()` handles this as a rotation automatically, no manual revoke needed first |
 | `validate_external_operational_credential` (or any tool taking a large credential as an argument): `signature verification failed`, but the same data passes when validated directly via a script | Found while testing #48: pasting a large JSON credential as chat text makes the conversational agent *regenerate* it as tool-call arguments — a single-character drift anywhere in a long `proofValue` is enough to break RFC 8785 canonicalization, even though the content looks identical to a human. Not a bug in the verification logic | **Attach the credential as a file** instead of pasting it as text — resolved this reliably in testing |
+| `cache_operational_credential`'s own cached copy fails `validate_operational_credential` with `"credential is unsigned"` (`proof` missing), even though `delegate_to_agent` issued it correctly | Extends #48's finding (issue #54): the corruption doesn't need a human paste — it also happens when the chat agent itself re-emits its **own prior tool-call result** as the argument to a *new* tool call (here: `delegate_to_agent`'s JSON output relayed into `cache_operational_credential`). Confirmed via `grantor_agent/dump_delegation_fixture.py` + `identity_manager/run_delegation_fixture.py` (same no-chat-relay-anywhere pattern as #48's own fixture scripts): `proof` survives intact at every stage when chat never touches the credential in between | Same fix as #48 — route large signed credentials through a file or a direct script/A2A call between tool invocations, never through the model re-typing one as another tool's argument |
 | The sub-agent's error never shows up in the chat UI at all | A real, general bug in `GoogleADKAdapter` (not identity-specific) — `event.is_error()` doesn't exist on `google.adk.events.Event`, so a failing sub-agent's error was silently dropped. Fixed in `stls_a2a_google_adapter.py` (see issue #45's GitHub comments for the full writeup) | Update `stls_a2a` to a version including that fix |
 | `sofia_grantor_agent`: `400 INVALID_ARGUMENT ... Unknown name "additional_properties" at 'tools[0].function_declarations[0].parameters.properties[...].value'` | Found while testing #51: a `dict`-typed tool parameter (tried both bare `dict` and `dict[str, str]`) makes `google-adk` generate a function-declaration schema that Gemini's function-calling API rejects outright — same `google-genai` version this sample already uses successfully elsewhere for other agents' `dict`-typed tool parameters, so this isn't a blanket "dict never works" issue; it reproduced consistently for this specific tool regardless, root cause not fully isolated | Avoid a `dict` parameter type entirely for `delegate_to_agent`'s `scope` — it now takes `scope_json: str` (a JSON-encoded object) and parses it with `json.loads()` inside the tool. A plain string parameter never triggers the problematic schema path |
 
@@ -324,10 +325,12 @@ caching layer in front of it (the same MRI-bounded freshness window
 ### Testing delegation ([issue #48](https://github.com/sparkle-stls-ai/stls-ai/issues/48))
 
 `tools_identity.py` deliberately never issues an Operational Credential
-itself (see its own docstring, and [issue #51](https://github.com/sparkle-stls-ai/stls-ai/issues/51)
-for the open design question of whether that should ever change) — only
-`validate_operational_credential`/`validate_external_operational_credential`
-are exposed as tools. To produce a real delegation to validate:
+itself (see its own docstring) — resolved by
+[issue #51](https://github.com/sparkle-stls-ai/stls-ai/issues/51) as
+staying that way permanently (a real `grantor_agent/` deployment does it
+instead, see [Delegation with a real Grantor agent](#delegation-with-a-real-grantor-agent-issue-51)
+below) — only `validate_operational_credential`/`validate_external_operational_credential`
+are exposed as tools here. To produce a real delegation to validate:
 
 - `identity_manager/bootstrap_grantor_delegation.py` — internal Grantor
   (bootstraps `grantor-demo`/`requestor-demo`, issues a real Operational
@@ -343,8 +346,15 @@ are exposed as tools. To produce a real delegation to validate:
 - `operator-b/identity_manager/revoke_grantor_identity.py` — revokes
   the external Grantor's Identity Credential directly (`operator-b` has
   no chat UI of its own).
+- `grantor_agent/dump_delegation_fixture.py` + `identity_manager/run_delegation_fixture.py`
+  (issue #54) — same no-chat-relay pattern, for
+  `cache_operational_credential`/`get_cached_operational_credential`/
+  `validate_operational_credential`'s own round trip through
+  `OperationalCredentialCacheFactory` — confirms a chat-cached credential
+  keeps its `proof` intact when nothing in the pipeline goes through the
+  model twice.
 
-All four write into real Postgres/Redis, same posture as
+All six write into real Postgres/Redis, same posture as
 `bootstrap_coordinator_identity.py` — run them yourself, not something
 this sample runs automatically.
 
@@ -490,6 +500,30 @@ list over HTTP — a real piece of follow-up work, not done here. Indices
 still uniquely identify each credential either way, so revocation itself
 is not broken by this simplification — it is a co-mingling/organizational
 concern, not a correctness one.
+
+### The Requestor side: presenting a delegation ([issue #54](https://github.com/sparkle-stls-ai/stls-ai/issues/54))
+
+Everything above is the Grantor's side (issuing). The Requestor's side —
+actually *using* a received Operational Credential in a real A2A call —
+is a package-level primitive, `stls_identity.load_delegation_presenter()`,
+mirroring `load_identity_presenter()` (#45) and `load_delegation_manager()`
+(#51). It resolves the Requestor's own key and a specific cached
+Operational Credential (`OperationalCredentialCacheFactory` — a
+collection, not a single slot, since an agent can hold several
+delegations at once), and returns an `IdentityPresenter` carrying both
+the Operational Credential and the Grantor's own Identity Credential —
+the Requestor must already have the latter (e.g. via
+`get_cached_identity_credential(grantor_agent_id)`), it is never
+auto-resolved, same design as `validate_external_operational_credential`
+(#48).
+
+`identity_manager/tools_identity.py`'s own `cache_operational_credential`/
+`get_cached_operational_credential`/`list_cached_operational_credentials`
+(both the Sparkle and `operator-b` copies) are now backed by this same
+package primitive instead of hand-rolled Redis calls — same promotion
+#45 already did for the Identity Credential cache. `OPERATIONAL_CREDENTIAL_CACHE_BACKEND=redis`
+is required for this to work across processes (see the troubleshooting
+table above — hit for real while live-testing this).
 
 ---
 

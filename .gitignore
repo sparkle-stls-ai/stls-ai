@@ -129,3 +129,6 @@ samples/client/sofia-client-secure_015/
 
 # issue #48 diagnostic fixture (dump_external_delegation_fixture.py / run_external_delegation_fixture.py)
 samples/server/sofia-admin/server/_external_delegation_fixture.json
+
+# issue #54 diagnostic fixture (dump_delegation_fixture.py / run_delegation_fixture.py)
+samples/server/sofia-admin/server/identity_manager/_delegation_fixture.json
