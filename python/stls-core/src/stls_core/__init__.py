@@ -30,6 +30,7 @@ from .stls_core_constants import (
     HKDF_INFO_HMAC,
     STLS_VERSION,
 )
+from .stls_core_atrest import AtRestCipher
 from .stls_core_crypto import StlsEnvelope, StlsTransport
 from .stls_core_session import (
     SessionCache,
@@ -102,7 +103,7 @@ from .auth import (
     hash_key,
 )
 
-__version__ = "0.1.8"
+__version__ = "0.1.11"
 
 __all__ = [
     # constants
@@ -128,6 +129,7 @@ __all__ = [
     "ENV_AUTH_KEY_TTL",
     "ENV_AUTH_REFRESH_INTERVAL",
     # crypto
+    "AtRestCipher",
     "StlsEnvelope",
     "StlsTransport",
     # session

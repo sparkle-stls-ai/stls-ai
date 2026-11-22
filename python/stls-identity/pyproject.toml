@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stls-identity"
-version = "0.1.1"
+version = "0.1.2"
 description = "DID + Verifiable Credential identity layer for the STLS AI ecosystem"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,7 +13,7 @@ classifiers = [
     "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
 ]
 dependencies = [
-    "stls_core>=0.1.1",
+    "stls_core>=0.1.11",
     "pydantic>=2",
     "cryptography>=42",
     "base58>=2.1",
@@ -40,8 +40,10 @@ where = ["src"]
 #
 # Used for: stls_core.auth (AuditEntry, AuthResult, default_audit_hook) —
 # issuer.py writes VC issuance/revocation to the same audit stream as
-# ApiKeyManager. NOT used for the keystore (see keystore.py: ArqitKeyStoreBase
-# has the wrong TTL/ephemeral semantics for a persistent signing key).
+# ApiKeyManager. Also stls_core.AtRestCipher (issue #49), reused by
+# keystore.py to encrypt signing keys at rest — NOT ArqitKeyStoreBase
+# itself, which has the wrong TTL/ephemeral semantics for a persistent
+# signing key.
 [tool.uv.sources]
 stls_core = { path = "../stls-core" }
 

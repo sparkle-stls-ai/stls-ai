@@ -7,6 +7,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.11] — 2026-11-22
+
+Exports `AtRestCipher` (issue #20) from the package's public `__init__.py`
+— it already existed and was already used internally by
+`RedisKeyStore`, but wasn't importable by sibling packages. Needed by
+`stls-identity` (issue #49) to encrypt its own Redis-backed signing-key
+keystore at rest, reusing the same KEK/domain-separation-label pattern
+instead of duplicating the implementation. No behavior change for any
+existing caller. Also corrects `__version__` in `__init__.py`, which
+had drifted from `pyproject.toml`'s actual version since 0.1.8.
+
 ## [0.1.10] — 2026-11-19
 
 Adds a consumer-only role for `arqit_py` server-role sessions and a
