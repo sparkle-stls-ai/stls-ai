@@ -13,6 +13,18 @@ name: Node package tests
 # node/stls-identity and node/stls-a2a don't exist yet (see issues
 # #30/#47), so this is scoped to the two Node packages that do.
 #
+# Sequential, not matrix: node/stls-mcp depends on node/stls-core via
+# "stls-core": "file:../stls-core" in its package.json (a local, not
+# published, dependency), so node/stls-core must be built FIRST in the
+# same job — running the two as independent parallel matrix jobs (the
+# first version of this workflow) left node/stls-mcp's job with an
+# unbuilt ../stls-core (no dist/), which TypeScript can't resolve at
+# all (TS2307), cascading into "exc is of type unknown" (TS18046) on
+# every `catch (exc) { if (exc instanceof HandshakeError) ... }` block
+# once `HandshakeError` itself fails to resolve and can no longer
+# narrow the catch variable. Same build order
+# stls-mcp-node-interop.yml already uses for the same reason.
+#
 # A single Redis service container is needed: node/stls-core's
 # auth/session smoke scripts dial a real Redis (TEST_REDIS_URL) to
 # exercise RedisKeyCache/RedisSessionCache directly — same container
@@ -38,10 +50,6 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        dir: [node/stls-core, node/stls-mcp]
 
     services:
       redis:
@@ -64,12 +72,22 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install + build
-        working-directory: ${{ matrix.dir }}
+      - name: Install + build stls-core (Node)
+        working-directory: node/stls-core
         run: |
           npm install
           npm run build
 
-      - name: Run tests
-        working-directory: ${{ matrix.dir }}
+      - name: Run stls-core's own test suite
+        working-directory: node/stls-core
+        run: npm run test
+
+      - name: Install + build stls-mcp (Node)
+        working-directory: node/stls-mcp
+        run: |
+          npm install
+          npm run build
+
+      - name: Run stls-mcp's own test suite
+        working-directory: node/stls-mcp
         run: npm run test
