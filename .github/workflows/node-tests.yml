@@ -10,38 +10,47 @@ name: Node package tests
 # provider-factory/postgres-loader smoke tests for stls-core;
 # transport-retry smoke test for stls-mcp) never ran here at all.
 #
-# node/stls-identity and node/stls-a2a don't exist yet (see issues
-# #30/#47), so this is scoped to the two Node packages that do.
+# node/stls-identity now exists (issue #47); node/stls-a2a still
+# doesn't (issue #30), so this is scoped to the three Node packages
+# that do.
 #
-# Sequential, not matrix: node/stls-mcp depends on node/stls-core via
-# "stls-core": "file:../stls-core" in its package.json (a local, not
-# published, dependency), so node/stls-core must be built FIRST in the
-# same job — running the two as independent parallel matrix jobs (the
-# first version of this workflow) left node/stls-mcp's job with an
-# unbuilt ../stls-core (no dist/), which TypeScript can't resolve at
-# all (TS2307), cascading into "exc is of type unknown" (TS18046) on
-# every `catch (exc) { if (exc instanceof HandshakeError) ... }` block
-# once `HandshakeError` itself fails to resolve and can no longer
-# narrow the catch variable. Same build order
-# stls-mcp-node-interop.yml already uses for the same reason.
+# Sequential, not matrix: node/stls-mcp and node/stls-identity both
+# depend on node/stls-core via "stls-core": "file:../stls-core" in
+# their package.json (a local, not published, dependency), so
+# node/stls-core must be built FIRST in the same job — running them as
+# independent parallel matrix jobs (the first version of this
+# workflow) left the dependent packages' jobs with an unbuilt
+# ../stls-core (no dist/), which TypeScript can't resolve at all
+# (TS2307), cascading into "exc is of type unknown" (TS18046) on every
+# `catch (exc) { if (exc instanceof HandshakeError) ... }` block once
+# `HandshakeError` itself fails to resolve and can no longer narrow the
+# catch variable. Same build order stls-mcp-node-interop.yml already
+# uses for the same reason. node/stls-identity doesn't itself depend on
+# node/stls-mcp, but runs after it anyway to keep this file's job order
+# matching the packages' own dependency chain at a glance.
 #
 # A single Redis service container is needed: node/stls-core's
-# auth/session smoke scripts dial a real Redis (TEST_REDIS_URL) to
-# exercise RedisKeyCache/RedisSessionCache directly — same container
-# convention (port 6399) stls-core-node-interop.yml already uses.
-# Everything else in both packages' `npm run test` chains is either
-# pure in-process logic or deliberately checks the soft-fail path with
-# no real backend reachable (e.g. postgres-loader.smoke.ts).
+# auth/session smoke scripts, and node/stls-identity's keystore/
+# credential-cache/status smoke scripts, all dial a real Redis
+# (TEST_REDIS_URL) directly — same container convention (port 6399)
+# stls-core-node-interop.yml already uses. Everything else in every
+# package's `npm run test` chain is either pure in-process logic or
+# deliberately checks the soft-fail path with no real backend reachable
+# (e.g. postgres-loader.smoke.ts, node/stls-identity's
+# postgres-store.smoke.ts/trust-registry.smoke.ts — no Postgres service
+# container is needed here for the same reason).
 on:
   push:
     paths:
       - "node/stls-core/**"
       - "node/stls-mcp/**"
+      - "node/stls-identity/**"
       - ".github/workflows/node-tests.yml"
   pull_request:
     paths:
       - "node/stls-core/**"
       - "node/stls-mcp/**"
+      - "node/stls-identity/**"
       - ".github/workflows/node-tests.yml"
 
 permissions:
@@ -90,4 +99,14 @@ jobs:
 
       - name: Run stls-mcp's own test suite
         working-directory: node/stls-mcp
+        run: npm run test
+
+      - name: Install + build stls-identity (Node)
+        working-directory: node/stls-identity
+        run: |
+          npm install
+          npm run build
+
+      - name: Run stls-identity's own test suite
+        working-directory: node/stls-identity
         run: npm run test

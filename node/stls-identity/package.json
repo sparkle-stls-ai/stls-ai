@@ -1,0 +1,56 @@
+{
+  "name": "stls-identity",
+  "version": "0.1.4",
+  "description": "DID + Verifiable Credential identity layer for the STLS AI ecosystem (Node.js port of python/stls-identity)",
+  "license": "(AGPL-3.0-or-later OR LicenseRef-Commercial)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sparkle-stls-ai/stls-ai.git",
+    "directory": "node/stls-identity"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run test:jcs-canonicalization-smoke && npm run test:did-smoke && npm run test:presentation-smoke && npm run test:golden-vector-interop && npm run test:verifier-smoke && npm run test:request-verifier-smoke && npm run test:keystore-smoke && npm run test:credential-cache-smoke && npm run test:status-smoke && npm run test:postgres-store-smoke && npm run test:trust-registry-smoke && npm run test:issuer-smoke && npm run test:delegation-smoke",
+    "test:jcs-canonicalization-smoke": "tsx tests/jcs-canonicalization.smoke.ts",
+    "test:did-smoke": "tsx tests/did.smoke.ts",
+    "test:presentation-smoke": "tsx tests/presentation.smoke.ts",
+    "test:verifier-smoke": "tsx tests/verifier.smoke.ts",
+    "test:request-verifier-smoke": "tsx tests/request-verifier.smoke.ts",
+    "test:keystore-smoke": "tsx tests/keystore.smoke.ts",
+    "test:credential-cache-smoke": "tsx tests/credential-cache.smoke.ts",
+    "test:status-smoke": "tsx tests/status.smoke.ts",
+    "test:postgres-store-smoke": "tsx tests/postgres-store.smoke.ts",
+    "test:trust-registry-smoke": "tsx tests/trust-registry.smoke.ts",
+    "test:issuer-smoke": "tsx tests/issuer.smoke.ts",
+    "test:delegation-smoke": "tsx tests/delegation.smoke.ts",
+    "test:golden-vector-interop": "tsx tests/interop/golden-vector.smoke.ts"
+  },
+  "dependencies": {
+    "stls-core": "file:../stls-core",
+    "@noble/curves": "^2.4.0",
+    "bs58": "^6.0.0",
+    "canonicalize": "^4.0.0",
+    "redis": "^5.12.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "optionalDependencies": {
+    "pg": "^8.23.1"
+  }
+}

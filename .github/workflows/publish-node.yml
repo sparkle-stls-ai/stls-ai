@@ -5,22 +5,26 @@ name: Publish Node packages
 # currently live on npm. Bumping the version is the release trigger; an
 # unchanged version is a silent no-op.
 #
-# stls-mcp depends on stls-core via "file:../stls-core" in the committed
-# package.json, so that local dev and the interop CI always exercise the
-# sibling package's current working-tree state rather than whatever is
-# already on npm. That path has no meaning on a consumer's machine, so
-# the stls-mcp job rewrites it to a real semver range on its checked-out
-# copy only, right before publishing — never committed back. This is why
-# stls-mcp's job runs after (needs:) stls-core's: so it picks up a
-# same-push stls-core version bump instead of racing it.
+# stls-mcp and stls-identity both depend on stls-core via
+# "file:../stls-core" in their committed package.json, so that local
+# dev and the interop CI always exercise the sibling package's current
+# working-tree state rather than whatever is already on npm. That path
+# has no meaning on a consumer's machine, so each dependent job
+# rewrites it to a real semver range on its checked-out copy only,
+# right before publishing — never committed back. This is why each
+# depends (needs:) on publish-stls-core: so it picks up a same-push
+# stls-core version bump instead of racing it. stls-identity does NOT
+# depend on stls-mcp, so its job runs in parallel with
+# publish-stls-mcp, not after it.
 #
 # Test gate (issue #56): each job runs `npm test` (its package.json's own,
 # no-external-infra-required smoke tests) before Build/Publish/Tag. A
 # plain `if:` condition implies success() of earlier steps, so a failing
 # "Run tests" step here already skips the rest without extra wiring.
-# stls-core's auth/session smoke tests need a real Redis (fakeredis has
-# no Node equivalent in this codebase), hence the service container in
-# that job only; stls-mcp's single smoke test is self-contained.
+# stls-core's auth/session smoke tests and stls-identity's keystore/
+# credential-cache/status smoke tests each need a real Redis (fakeredis
+# has no Node equivalent in this codebase), hence the service container
+# in those two jobs; stls-mcp's single smoke test is self-contained.
 # Cross-language interop tests and anything needing real Postgres/Arqit
 # credentials stay out of this gate (see #57 for a possible future
 # infra-backed one).
@@ -30,6 +34,7 @@ on:
     paths:
       - "node/stls-core/**"
       - "node/stls-mcp/**"
+      - "node/stls-identity/**"
       - ".github/workflows/publish-node.yml"
 
 permissions:
@@ -227,5 +232,116 @@ jobs:
         if: steps.version.outputs.changed == 'true'
         run: |
           tag="stls-mcp-node-v${{ steps.version.outputs.local }}"
+          git tag "$tag"
+          git push origin "$tag"
+
+  publish-stls-identity:
+    needs: publish-stls-core
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # Must match the npm Trusted Publisher's configured environment name
+    # (one-time setup per package on npmjs.com).
+    environment:
+      name: npm-stls-identity
+    # Only for the test gate's keystore/credential-cache/status smoke
+    # tests (TEST_REDIS_URL below) — same port convention as
+    # stls-core-node-interop.yml and this file's own publish-stls-core job.
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6399:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_REDIS_URL: redis://localhost:6399
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      # npm Trusted Publishing (OIDC) needs npm >=11.5.1; the version
+      # bundled with actions/setup-node's Node 20 is older. Pinned to the
+      # 11.x line, not "latest" — npm 12 requires Node >=22, which this
+      # Node 20 runner doesn't satisfy.
+      - name: Update npm for OIDC Trusted Publishing support
+        run: npm install -g npm@11
+
+      - name: Check whether this package's version changed
+        id: version
+        working-directory: node/stls-identity
+        run: |
+          local_version=$(node -p "require('./package.json').version")
+          published_version=$(npm view stls-identity version 2>/dev/null || echo "")
+          echo "local=$local_version" >> "$GITHUB_OUTPUT"
+          if [ "$local_version" != "$published_version" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Point at the published stls-core before building
+        if: steps.version.outputs.changed == 'true'
+        working-directory: node/stls-identity
+        run: |
+          # Same wait-for-propagation loop as stls-mcp's own job above —
+          # see its comments for why both the version AND the tarball
+          # must be checked, not just a non-empty `npm view` response.
+          expected_version=$(node -p "require('../stls-core/package.json').version")
+          core_version=""
+          for i in $(seq 1 30); do
+            seen_version=$(npm view stls-core version 2>/dev/null || echo "")
+            if [ "$seen_version" != "$expected_version" ]; then
+              echo "stls-core $expected_version not visible on the registry yet (saw '${seen_version:-<empty>}'), retrying in 10s..."
+              sleep 10
+              continue
+            fi
+            tarball_url=$(npm view "stls-core@$expected_version" dist.tarball 2>/dev/null || echo "")
+            if [ -n "$tarball_url" ] && curl -o /dev/null -sf --head "$tarball_url"; then
+              core_version="$seen_version"
+              break
+            fi
+            echo "stls-core $expected_version visible but its tarball isn't fetchable yet, retrying in 10s..."
+            sleep 10
+          done
+          if [ -z "$core_version" ]; then
+            echo "::error::stls-core $expected_version never became fully available (version + tarball) on the registry (npm propagation delay?)"
+            exit 1
+          fi
+          echo "Pinning stls-core to ^$core_version"
+          npm pkg set "dependencies.stls-core=^$core_version"
+          # Same reasoning as stls-mcp's own job: force a full re-resolve
+          # from the package.json we just rewrote, this checkout's copy
+          # only, never committed back.
+          rm -f package-lock.json
+
+      - name: Install and build
+        if: steps.version.outputs.changed == 'true'
+        working-directory: node/stls-identity
+        run: |
+          npm install
+          ls node_modules/stls-core/dist/index.js
+          npm run build
+
+      - name: Run tests
+        if: steps.version.outputs.changed == 'true'
+        working-directory: node/stls-identity
+        run: npm test
+
+      - name: Publish to npm
+        if: steps.version.outputs.changed == 'true'
+        working-directory: node/stls-identity
+        run: npm publish --provenance --access public
+
+      - name: Tag the release
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          tag="stls-identity-node-v${{ steps.version.outputs.local }}"
           git tag "$tag"
           git push origin "$tag"
