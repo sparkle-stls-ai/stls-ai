@@ -13,6 +13,17 @@ name: Publish Node packages
 # copy only, right before publishing — never committed back. This is why
 # stls-mcp's job runs after (needs:) stls-core's: so it picks up a
 # same-push stls-core version bump instead of racing it.
+#
+# Test gate (issue #56): each job runs `npm test` (its package.json's own,
+# no-external-infra-required smoke tests) before Build/Publish/Tag. A
+# plain `if:` condition implies success() of earlier steps, so a failing
+# "Run tests" step here already skips the rest without extra wiring.
+# stls-core's auth/session smoke tests need a real Redis (fakeredis has
+# no Node equivalent in this codebase), hence the service container in
+# that job only; stls-mcp's single smoke test is self-contained.
+# Cross-language interop tests and anything needing real Postgres/Arqit
+# credentials stay out of this gate (see #57 for a possible future
+# infra-backed one).
 on:
   push:
     branches: [main]
@@ -32,6 +43,20 @@ jobs:
     # (one-time setup per package on npmjs.com).
     environment:
       name: npm-stls-core
+    # Only for the test gate's auth/session smoke tests (TEST_REDIS_URL
+    # below) — same port convention as stls-core-node-interop.yml.
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6399:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_REDIS_URL: redis://localhost:6399
     steps:
       - uses: actions/checkout@v4
 
@@ -66,6 +91,11 @@ jobs:
         run: |
           npm install
           npm run build
+
+      - name: Run tests
+        if: steps.version.outputs.changed == 'true'
+        working-directory: node/stls-core
+        run: npm test
 
       - name: Publish to npm
         if: steps.version.outputs.changed == 'true'
@@ -182,6 +212,11 @@ jobs:
           npm install
           ls node_modules/stls-core/dist/index.js
           npm run build
+
+      - name: Run tests
+        if: steps.version.outputs.changed == 'true'
+        working-directory: node/stls-mcp
+        run: npm test
 
       - name: Publish to npm
         if: steps.version.outputs.changed == 'true'
