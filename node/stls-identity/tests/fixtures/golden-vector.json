@@ -1,0 +1,100 @@
+{
+  "authorityPublicKeyMultibase": "z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd",
+  "credential": {
+    "@context": [
+      "https://www.w3.org/ns/credentials/v2"
+    ],
+    "credentialStatus": {
+      "id": "https://sofia.sparkle.example.com/identity/status-list#0",
+      "statusListCredential": "https://sofia.sparkle.example.com/identity/status-list",
+      "statusListIndex": 0,
+      "statusPurpose": "revocation",
+      "type": "BitstringStatusListEntry"
+    },
+    "credentialSubject": {
+      "clientId": "golden-vector-agent",
+      "id": "did:web:sofia.sparkle.example.com:agents:golden-vector-agent",
+      "keyStorageTier": "TIER_1_SOFTWARE",
+      "roles": [
+        "grantor"
+      ]
+    },
+    "id": "urn:uuid:00000000-0000-4000-8000-000000000001",
+    "issuer": "did:web:sofia.sparkle.example.com",
+    "proof": {
+      "created": "2026-01-15T12:00:00Z",
+      "cryptosuite": "eddsa-jcs-2022",
+      "proofPurpose": "assertionMethod",
+      "proofValue": "z2xASdNVrGbhLWM3eS7B75MN68G8nJ3mzSFA25auy4aTMj5h5k4FvZg2FeXDP3penYUEQeVpmjFmod6mMpT9CWPjv",
+      "type": "DataIntegrityProof",
+      "verificationMethod": "did:web:sofia.sparkle.example.com#key-1"
+    },
+    "schemaVersion": "1.0",
+    "type": [
+      "VerifiableCredential",
+      "NetworkAuthorityCredential"
+    ],
+    "validFrom": "2026-01-15T12:00:00Z",
+    "validUntil": "2026-04-15T12:00:00Z"
+  },
+  "credentialUnsignedCanonicalBytes": "{\"@context\":[\"https://www.w3.org/ns/credentials/v2\"],\"credentialStatus\":{\"id\":\"https://sofia.sparkle.example.com/identity/status-list#0\",\"statusListCredential\":\"https://sofia.sparkle.example.com/identity/status-list\",\"statusListIndex\":0,\"statusPurpose\":\"revocation\",\"type\":\"BitstringStatusListEntry\"},\"credentialSubject\":{\"clientId\":\"golden-vector-agent\",\"id\":\"did:web:sofia.sparkle.example.com:agents:golden-vector-agent\",\"keyStorageTier\":\"TIER_1_SOFTWARE\",\"roles\":[\"grantor\"]},\"id\":\"urn:uuid:00000000-0000-4000-8000-000000000001\",\"issuer\":\"did:web:sofia.sparkle.example.com\",\"schemaVersion\":\"1.0\",\"type\":[\"VerifiableCredential\",\"NetworkAuthorityCredential\"],\"validFrom\":\"2026-01-15T12:00:00Z\",\"validUntil\":\"2026-04-15T12:00:00Z\"}",
+  "holderPublicKeyMultibase": "z6Mks3B96D2HSijA2uLmVSpqN1SwVxWgowZ4k1RtA64oSMwb",
+  "presentation": {
+    "@context": [
+      "https://www.w3.org/ns/credentials/v2"
+    ],
+    "holder": "did:web:sofia.sparkle.example.com:agents:golden-vector-agent",
+    "proof": {
+      "challenge": "golden-vector-challenge-0001",
+      "created": "2026-01-15T12:00:00Z",
+      "cryptosuite": "eddsa-jcs-2022",
+      "proofPurpose": "authentication",
+      "proofValue": "z3MJKfDkrQ4oa4NfsywMShGxLSEDoFPPprftdHNAy1jzQidKS69TcN6Tq9WDH9m4fwv7fbm2q7EfY4jVoBBLBHBh9",
+      "type": "DataIntegrityProof",
+      "verificationMethod": "did:web:sofia.sparkle.example.com:agents:golden-vector-agent#key-1"
+    },
+    "type": [
+      "VerifiablePresentation"
+    ],
+    "verifiableCredential": [
+      {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2"
+        ],
+        "credentialStatus": {
+          "id": "https://sofia.sparkle.example.com/identity/status-list#0",
+          "statusListCredential": "https://sofia.sparkle.example.com/identity/status-list",
+          "statusListIndex": 0,
+          "statusPurpose": "revocation",
+          "type": "BitstringStatusListEntry"
+        },
+        "credentialSubject": {
+          "clientId": "golden-vector-agent",
+          "id": "did:web:sofia.sparkle.example.com:agents:golden-vector-agent",
+          "keyStorageTier": "TIER_1_SOFTWARE",
+          "roles": [
+            "grantor"
+          ]
+        },
+        "id": "urn:uuid:00000000-0000-4000-8000-000000000001",
+        "issuer": "did:web:sofia.sparkle.example.com",
+        "proof": {
+          "created": "2026-01-15T12:00:00Z",
+          "cryptosuite": "eddsa-jcs-2022",
+          "proofPurpose": "assertionMethod",
+          "proofValue": "z2xASdNVrGbhLWM3eS7B75MN68G8nJ3mzSFA25auy4aTMj5h5k4FvZg2FeXDP3penYUEQeVpmjFmod6mMpT9CWPjv",
+          "type": "DataIntegrityProof",
+          "verificationMethod": "did:web:sofia.sparkle.example.com#key-1"
+        },
+        "schemaVersion": "1.0",
+        "type": [
+          "VerifiableCredential",
+          "NetworkAuthorityCredential"
+        ],
+        "validFrom": "2026-01-15T12:00:00Z",
+        "validUntil": "2026-04-15T12:00:00Z"
+      }
+    ]
+  },
+  "presentationMinusProofValueCanonicalBytes": "{\"@context\":[\"https://www.w3.org/ns/credentials/v2\"],\"holder\":\"did:web:sofia.sparkle.example.com:agents:golden-vector-agent\",\"proof\":{\"challenge\":\"golden-vector-challenge-0001\",\"created\":\"2026-01-15T12:00:00Z\",\"cryptosuite\":\"eddsa-jcs-2022\",\"proofPurpose\":\"authentication\",\"type\":\"DataIntegrityProof\",\"verificationMethod\":\"did:web:sofia.sparkle.example.com:agents:golden-vector-agent#key-1\"},\"type\":[\"VerifiablePresentation\"],\"verifiableCredential\":[{\"@context\":[\"https://www.w3.org/ns/credentials/v2\"],\"credentialStatus\":{\"id\":\"https://sofia.sparkle.example.com/identity/status-list#0\",\"statusListCredential\":\"https://sofia.sparkle.example.com/identity/status-list\",\"statusListIndex\":0,\"statusPurpose\":\"revocation\",\"type\":\"BitstringStatusListEntry\"},\"credentialSubject\":{\"clientId\":\"golden-vector-agent\",\"id\":\"did:web:sofia.sparkle.example.com:agents:golden-vector-agent\",\"keyStorageTier\":\"TIER_1_SOFTWARE\",\"roles\":[\"grantor\"]},\"id\":\"urn:uuid:00000000-0000-4000-8000-000000000001\",\"issuer\":\"did:web:sofia.sparkle.example.com\",\"proof\":{\"created\":\"2026-01-15T12:00:00Z\",\"cryptosuite\":\"eddsa-jcs-2022\",\"proofPurpose\":\"assertionMethod\",\"proofValue\":\"z2xASdNVrGbhLWM3eS7B75MN68G8nJ3mzSFA25auy4aTMj5h5k4FvZg2FeXDP3penYUEQeVpmjFmod6mMpT9CWPjv\",\"type\":\"DataIntegrityProof\",\"verificationMethod\":\"did:web:sofia.sparkle.example.com#key-1\"},\"schemaVersion\":\"1.0\",\"type\":[\"VerifiableCredential\",\"NetworkAuthorityCredential\"],\"validFrom\":\"2026-01-15T12:00:00Z\",\"validUntil\":\"2026-04-15T12:00:00Z\"}]}"
+}
