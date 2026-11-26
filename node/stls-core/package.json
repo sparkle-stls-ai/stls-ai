@@ -22,6 +22,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "npm run test:crypto-smoke && npm run test:auth-smoke && npm run test:handshake-smoke && npm run test:atrest-smoke && npm run test:session-smoke && npm run test:provider-factory-smoke && npm run test:postgres-loader-smoke",
     "test:auth-smoke": "tsx tests/auth.smoke.ts",
     "test:crypto-smoke": "tsx tests/crypto.smoke.ts",
     "test:handshake-smoke": "tsx tests/handshake.smoke.ts",

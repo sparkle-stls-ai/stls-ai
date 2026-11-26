@@ -1,12 +1,22 @@
 """
-test_pg_quick.py
-----------------
-Verifica rapida: connessione PostgreSQL + chiave TEST_PG_KEY.
+pg_quick_check.py
+------------------
+Quick manual check: PostgreSQL connection + TEST_PG_KEY lookup.
+
+Manual script, NOT a pytest test: it runs immediately at module level
+(`asyncio.run(main())` at the bottom of the file) a real connection to
+AUTH_PG_DSN and an INSERT into the configured table. Deliberately
+renamed out of pytest's collection pattern (`test_*.py` / `*_test.py`)
+— it used to be test_pg_quick.py, and pytest ran it just by collecting
+it, with no guard/skip: with AUTH_PG_DSN pointed (even by mistake) at a
+real database, a plain `pytest` in this package's directory would have
+written real data. See the 2026-11-20 incident
+(project_test_fixture_prod_data_incident memory) for an analogous case.
 
     source .venv/bin/activate
     export AUTH_PG_DSN="postgresql://user:pass@host:5432/dbname"
-    export TEST_PG_KEY="stls-pg_..."     # opzionale, verifica la chiave
-    python3 test_pg_quick.py
+    export TEST_PG_KEY="stls-pg_..."     # optional, verifies the key
+    python3 pg_quick_check.py
 """
 
 import asyncio, os
