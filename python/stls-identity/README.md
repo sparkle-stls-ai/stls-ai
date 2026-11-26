@@ -110,6 +110,14 @@ external infrastructure still run with nothing configured.
 never against Python stubs for the parts that matter (signing, canonicalization,
 persistence, revocation).
 
+Runs automatically on every push/PR via
+[`python-tests.yml`](../../.github/workflows/python-tests.yml) — the
+five Postgres/Redis-backed files listed above are `--ignore`'d there
+(no service containers in that workflow) — and again as a release gate
+before publishing via
+[`publish-python.yml`](../../.github/workflows/publish-python.yml),
+with the same exclusion.
+
 ## Structure
 
 ```

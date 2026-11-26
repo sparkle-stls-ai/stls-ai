@@ -251,6 +251,28 @@ See `.env.example` for the full list, organized into 9 sections (Key
 Provider, Arqit, Session Cache, Auth, Redis, PostgreSQL, Symmetric Key
 Store, Session Store, Encryption at Rest).
 
+## Testing
+
+```bash
+uv pip install -e ".[dev]"
+pytest
+```
+
+Real crypto/session-cache/provider/auth logic, no stubs for the parts
+that matter. `fakeredis` (included in the `dev` extra) stands in for
+Redis in the keystore/session-cache tests — no real server needed for
+the default run. A few `test_arqit_py_*_real.py` / `test_pqc.py` cases
+are skipped automatically (`skipif`) when the `[arqit_py]` wheels or
+`liboqs-python` aren't installed.
+
+Runs automatically on every push/PR via
+[`python-tests.yml`](../../.github/workflows/python-tests.yml) (this
+package's own suite), and again as a release gate before publishing
+via [`publish-python.yml`](../../.github/workflows/publish-python.yml).
+[`stls-core-node-interop.yml`](../../.github/workflows/stls-core-node-interop.yml)
+separately covers cross-language compatibility with `node/stls-core`
+(Redis + Postgres service containers, real `liboqs`).
+
 ## License
 
 Dual-licensed under the [GNU AGPLv3](LICENSE) and a

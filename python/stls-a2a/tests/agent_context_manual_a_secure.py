@@ -1,7 +1,7 @@
 """
-agent_context_test_a_secure.py
+agent_context_manual_a_secure.py
 -------------------------------
-ENCRYPTED variant of agent_context_test_a.py — the exact same scenario
+ENCRYPTED variant of agent_context_manual_a.py — the exact same scenario
 (root agent A delegates to B, user_id/profile propagation), but the
 delegation to B goes over /secure-a2a (AES-256-GCM via PQC handshake)
 instead of the plain, unencrypted /a2a.
@@ -10,8 +10,8 @@ Only difference from the original: ContextualRemoteA2aAgent →
 ContextualSecureRemoteA2aAgent, and no explicit httpx_client (the
 class itself builds one with the STLSHttpxTransport injected).
 
-Use as a test bench: point this file and agent_context_test_a.py at
-the same agent_context_test_b.py (which must expose the PQC handshake
+Use as a test bench: point this file and agent_context_manual_a.py at
+the same agent_context_manual_b.py (which must expose the PQC handshake
 endpoint, i.e. run with KEY_PROVIDER_NAME=pqc) and compare the observed
 traffic — expect /secure-a2a with an encrypted body instead of plain
 /a2a, with the same application-level result (identical user_id/profile

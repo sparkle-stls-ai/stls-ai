@@ -440,6 +440,14 @@ requires `python/stls-core/.venv` with `pip install -e ".[dev,pqc]"` —
 see [python/stls-core/README.md](../../python/stls-core/README.md) —
 and `npm install && npm run build` already run in this directory.
 
+This package's own suite (`npm run test` — the smoke scripts below,
+chained) runs on every push/PR via
+[`node-tests.yml`](../../.github/workflows/node-tests.yml), separately
+from the interop workflow above — a single Redis service container is
+enough (`auth.smoke.ts`/`session.smoke.ts` dial it directly; everything
+else is pure in-process logic or a deliberate soft-fail-path check with
+no backend reachable).
+
 ### Node-only functional tests
 
 ```bash

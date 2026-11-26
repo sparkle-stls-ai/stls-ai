@@ -1,5 +1,5 @@
 """
-key_providers_test.py
+key_providers_manual.py
 =====================
 Test of the KeyProvider arqit_py with:
   - parallel key provisioning (N simultaneous sessions, same device_id)
@@ -7,7 +7,7 @@ Test of the KeyProvider arqit_py with:
   - 24 total calls in groups of 6 (4 rounds)
 
 Usage:
-    python key_providers_test.py
+    python key_providers_manual.py
 
 Expected environment variables:
     KEY_PROVIDER_NAME=arqit_py
@@ -391,7 +391,7 @@ async def test_stress():
 
 async def main():
     print("="*70)
-    print(f"key_providers_test.py  —  {KEY_PROVIDER_NAME} stress test")
+    print(f"key_providers_manual.py  —  {KEY_PROVIDER_NAME} stress test")
     print("="*70)
     print(f"  KEY_PROVIDER_NAME = {KEY_PROVIDER_NAME}")
     print(f"  BASE_URL          = {BASE_URL}")

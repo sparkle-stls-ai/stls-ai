@@ -42,25 +42,14 @@ Covers:
      together with a non-None base_url used to raise TypeError
      ("can only concatenate str (not 'NoneType') to str") building the
      AgentCard's plain url. Tracked and fixed in this same issue/branch.
+  7. _check_auth_async's refactor must not change the api_key_manager-
+     success path when identity_verifier is None.
 """
 
-import asyncio
-import os
-import sys
 from typing import Any
 
-os.environ.setdefault("KEY_PROVIDER_NAME", "base")
-os.environ.setdefault("TASK_STORE_BACKEND", "memory")
-os.environ["AUTH_PG_DSN"] = ""
-# Force in-memory SessionCache regardless of a local .env pointing at
-# Redis (python-dotenv's load_dotenv(), called at stls_a2a import time,
-# won't override an already-set key) — this suite only exercises the
-# pre-decryption identity-check hook, no real infra needed for it.
-os.environ["SESSION_CACHE_BACKEND"] = "memory"
-
-sys.path.insert(0, os.path.dirname(__file__))  # for `import mock_agent`
-
 import httpx
+import pytest
 from fastapi import FastAPI
 
 from stls_a2a import (
@@ -73,19 +62,6 @@ from stls_a2a import (
 from stls_a2a.stls_a2a_adapters_model import ERR_IDENTITY_CHALLENGE_REQUIRED
 from stls_a2a.stls_a2a_secure_remote import STLSHttpxTransport
 from mock_agent import MockAgent
-
-import logging
-
-logging.basicConfig(level=logging.WARNING)
-logger = logging.getLogger(__name__)
-
-
-def _ok(label: str, detail: str = "") -> None:
-    print(f"  ✅ {label}{': ' + detail if detail else ''}")
-
-
-def _fail(label: str, detail: str = "") -> None:
-    print(f"  ❌ {label}{': ' + detail if detail else ''}")
 
 
 def _error_info(body: dict) -> tuple[Any, str]:
@@ -155,10 +131,8 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
 
-async def test_off_by_default() -> bool:
-    print("\n── Test 1: no identity_verifier configured — off by default ──")
+async def test_off_by_default():
     app = _build_app(identity_verifier=None)
-    ok = True
     async with _client(app) as client:
         resp = await client.post(
             "/secure-a2a",
@@ -167,19 +141,12 @@ async def test_off_by_default() -> bool:
         )
         body = resp.json()
         code, _ = _error_info(body)
-        if code == ERR_IDENTITY_CHALLENGE_REQUIRED:
-            _fail("identity check fired with no identity_verifier configured", str(body))
-            ok = False
-        else:
-            _ok("identity check never fired", f"got unrelated error code {code} instead")
-    return ok
+        assert code != ERR_IDENTITY_CHALLENGE_REQUIRED, body
 
 
-async def test_challenge_required() -> bool:
-    print("\n── Test 2: identity_verifier configured, no presentation header ──")
+async def test_challenge_required():
     verifier = FakeIdentityVerifier(ok=True)
     app = _build_app(identity_verifier=verifier)
-    ok = True
     async with _client(app) as client:
         resp = await client.post(
             "/secure-a2a",
@@ -188,24 +155,16 @@ async def test_challenge_required() -> bool:
         )
         body = resp.json()
         error = body.get("error", {})
-        if resp.status_code == 401 and error.get("code") == ERR_IDENTITY_CHALLENGE_REQUIRED and error.get("challenge"):
-            _ok("challenge required", f"challenge={error['challenge'][:12]}...")
-        else:
-            _fail("challenge required", f"status={resp.status_code} body={body}")
-            ok = False
-        if verifier.calls:
-            _fail("verifier called before a presentation was ever sent", str(verifier.calls))
-            ok = False
-        else:
-            _ok("verifier not called yet", "challenge issuance doesn't need the verifier")
-    return ok
+        assert resp.status_code == 401
+        assert error.get("code") == ERR_IDENTITY_CHALLENGE_REQUIRED
+        assert error.get("challenge")
+        # Challenge issuance doesn't need the verifier at all.
+        assert verifier.calls == []
 
 
-async def test_accepted_presentation_passes_identity_check() -> bool:
-    print("\n── Test 3: presentation header present, verifier accepts ──")
+async def test_accepted_presentation_passes_identity_check():
     verifier = FakeIdentityVerifier(ok=True)
     app = _build_app(identity_verifier=verifier)
-    ok = True
     async with _client(app) as client:
         # First call: get the challenge for this session.
         resp1 = await client.post(
@@ -227,37 +186,21 @@ async def test_accepted_presentation_passes_identity_check() -> bool:
         )
         body2 = resp2.json()
         code2, message2 = _error_info(body2)
-        if code2 == ERR_IDENTITY_CHALLENGE_REQUIRED:
-            _fail("identity check still blocking after an accepted presentation", str(body2))
-            ok = False
-        elif message2 == "Unauthorized: invalid identity presentation":
-            _fail("identity check rejected an accepted presentation", str(body2))
-            ok = False
-        else:
-            _ok(
-                "identity check passed",
-                f"proceeded to unrelated error (no real session/crypto in this suite): {message2}",
-            )
-        if verifier.calls == [challenge]:
-            _ok("verifier called once with the right challenge")
-        else:
-            _fail("verifier not called with the expected challenge", f"calls={verifier.calls} expected=[{challenge}]")
-            ok = False
-    return ok
+        assert code2 != ERR_IDENTITY_CHALLENGE_REQUIRED, body2
+        assert message2 != "Unauthorized: invalid identity presentation", body2
+        assert verifier.calls == [challenge]
 
 
-async def test_rejected_presentation_is_denied() -> bool:
-    print("\n── Test 4: presentation header present, verifier rejects ──")
+async def test_rejected_presentation_is_denied():
     verifier = FakeIdentityVerifier(ok=False)
     app = _build_app(identity_verifier=verifier)
-    ok = True
     async with _client(app) as client:
         resp1 = await client.post(
             "/secure-a2a",
             json={"session_id": "sess-C", "ciphertext": "irrelevant"},
             headers={"X-A2A-Session-ID": "sess-C"},
         )
-        _ = resp1.json()["error"]["challenge"]
+        assert resp1.json()["error"]["challenge"]
 
         resp2 = await client.post(
             "/secure-a2a",
@@ -269,12 +212,9 @@ async def test_rejected_presentation_is_denied() -> bool:
         )
         body2 = resp2.json()
         error2 = body2.get("error", {})
-        if resp2.status_code == 401 and error2.get("code") != ERR_IDENTITY_CHALLENGE_REQUIRED and "identity" in error2.get("message", ""):
-            _ok("rejected presentation denied", error2.get("message"))
-        else:
-            _fail("rejected presentation not denied as expected", f"status={resp2.status_code} body={body2}")
-            ok = False
-    return ok
+        assert resp2.status_code == 401
+        assert error2.get("code") != ERR_IDENTITY_CHALLENGE_REQUIRED
+        assert "identity" in error2.get("message", "")
 
 
 # ---------------------------------------------------------------------------
@@ -294,10 +234,8 @@ class _FakeApiKeyManager:
         return _Result()
 
 
-async def test_api_key_manager_success_still_falls_through_cleanly() -> bool:
-    print("\n── Test: api_key_manager success + no identity_verifier — unchanged ──")
+async def test_api_key_manager_success_still_falls_through_cleanly():
     app = _build_app(identity_verifier=None, api_key_manager=_FakeApiKeyManager())
-    ok = True
     async with _client(app) as client:
         resp = await client.post(
             "/secure-a2a",
@@ -305,12 +243,7 @@ async def test_api_key_manager_success_still_falls_through_cleanly() -> bool:
             headers={"X-A2A-Session-ID": "sess-km"},
         )
         code, _ = _error_info(resp.json())
-        if code == ERR_IDENTITY_CHALLENGE_REQUIRED:
-            _fail("identity check fired even though identity_verifier is None", resp.text)
-            ok = False
-        else:
-            _ok("api_key_manager success path unaffected", f"got unrelated error code {code} instead")
-    return ok
+        assert code != ERR_IDENTITY_CHALLENGE_REQUIRED, resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -339,8 +272,8 @@ class _FakeAdapter:
     """Stands in for SecureA2ATransportAdapter: fails with the
     challenge-required shape exactly `fail_times` times, then succeeds
     — isolates STLSHttpxTransport's retry orchestration from real
-    crypto/network (covered elsewhere: Steps 2-4's tests, and the
-    sample for the genuine end-to-end round trip)."""
+    crypto/network (covered elsewhere: the earlier tests in this file,
+    and the sample for the genuine end-to-end round trip)."""
 
     def __init__(self, fail_times: int = 1):
         self.fail_times = fail_times
@@ -379,8 +312,7 @@ class _FakeSessionManager:
         self.invalidate_calls.append(base_url)
 
 
-async def test_client_retries_once_on_identity_challenge_sync() -> bool:
-    print("\n── Test 5a: STLSHttpxTransport retries once on challenge (sync) ──")
+async def test_client_retries_once_on_identity_challenge_sync():
     adapter = _FakeAdapter(fail_times=1)
     manager = _FakeSessionManager(adapter)
     seen_challenges: list[str] = []
@@ -396,25 +328,14 @@ async def test_client_retries_once_on_identity_challenge_sync() -> bool:
     )
 
     resp = await transport.handle_async_request(request)
-    ok = True
-    if resp.status_code == 200 and seen_challenges == ["chal-xyz"] and adapter.sync_calls == 2:
-        _ok("retried exactly once with the right challenge", f"calls={adapter.sync_calls}")
-    else:
-        _fail(
-            "retry did not happen as expected",
-            f"status={resp.status_code} challenges={seen_challenges} calls={adapter.sync_calls}",
-        )
-        ok = False
-    if "X-STLS-Identity-Presentation" in adapter.sync_headers_seen[-1]:
-        _ok("retried request carried the presentation header")
-    else:
-        _fail("retried request missing the presentation header", str(adapter.sync_headers_seen))
-        ok = False
-    return ok
+
+    assert resp.status_code == 200
+    assert seen_challenges == ["chal-xyz"]
+    assert adapter.sync_calls == 2
+    assert "X-STLS-Identity-Presentation" in adapter.sync_headers_seen[-1]
 
 
-async def test_client_retries_once_on_identity_challenge_stream() -> bool:
-    print("\n── Test 5b: STLSHttpxTransport retries once on challenge (SSE) ──")
+async def test_client_retries_once_on_identity_challenge_stream():
     adapter = _FakeAdapter(fail_times=1)
     manager = _FakeSessionManager(adapter)
     seen_challenges: list[str] = []
@@ -431,90 +352,35 @@ async def test_client_retries_once_on_identity_challenge_stream() -> bool:
     )
 
     resp = await transport.handle_async_request(request)
-    ok = True
-    if resp.status_code == 200 and seen_challenges == ["chal-xyz"] and adapter.stream_calls == 2:
-        _ok("retried exactly once with the right challenge", f"calls={adapter.stream_calls}")
-    else:
-        _fail(
-            "retry did not happen as expected",
-            f"status={resp.status_code} challenges={seen_challenges} calls={adapter.stream_calls}",
-        )
-        ok = False
-    if "X-STLS-Identity-Presentation" in adapter.stream_headers_seen[-1]:
-        _ok("retried stream carried the presentation header")
-    else:
-        _fail("retried stream missing the presentation header", str(adapter.stream_headers_seen))
-        ok = False
-    return ok
+
+    assert resp.status_code == 200
+    assert seen_challenges == ["chal-xyz"]
+    assert adapter.stream_calls == 2
+    assert "X-STLS-Identity-Presentation" in adapter.stream_headers_seen[-1]
 
 
 # ---------------------------------------------------------------------------
 # Regression: enable_plain_endpoint=False + base_url used to crash
 # ---------------------------------------------------------------------------
 
-async def test_enable_plain_endpoint_false_with_base_url_does_not_crash() -> bool:
-    print("\n── Test 6: enable_plain_endpoint=False + base_url (unrelated regression) ──")
-    ok = True
-    try:
-        app = FastAPI(title="regression test app")
-        start_task_store_cleanup(app=app)
+async def test_enable_plain_endpoint_false_with_base_url_does_not_crash():
+    app = FastAPI(title="regression test app")
+    start_task_store_cleanup(app=app)
 
-        async def handler(request):
-            return AgentResponse(result={}, id=request.id)
+    async def handler(request):
+        return AgentResponse(result={}, id=request.id)
 
-        path = "/agents/no-plain/secure-a2a"
-        create_secure_a2a_endpoint(
-            app=app,
-            agent=handler,
-            key_session_provider=_KEY_SESSION_PROVIDER,
-            path=path,
-            base_url="http://localhost:9999",
-            framework="custom",
-            enable_plain_endpoint=False,
-        )
-    except TypeError as exc:
-        _fail("create_secure_a2a_endpoint crashed", str(exc))
-        return False
+    path = "/agents/no-plain/secure-a2a"
+    create_secure_a2a_endpoint(
+        app=app,
+        agent=handler,
+        key_session_provider=_KEY_SESSION_PROVIDER,
+        path=path,
+        base_url="http://localhost:9999",
+        framework="custom",
+        enable_plain_endpoint=False,
+    )
 
     card = app._a2a_agent_registry[path]
-    if card.url is None and card.secure_url == "http://localhost:9999/agents/no-plain/secure-a2a":
-        _ok("no crash, card.url is None, secure_url set correctly")
-    else:
-        _fail("card built with unexpected url/secure_url", f"url={card.url!r} secure_url={card.secure_url!r}")
-        ok = False
-    return ok
-
-
-async def main() -> None:
-    print("\n" + "=" * 70)
-    print("Identity Presentation hook (issue #15, gap #1)")
-    print("=" * 70)
-
-    results: dict[str, bool] = {}
-    results["1 — off by default"]            = await test_off_by_default()
-    results["2 — challenge required"]        = await test_challenge_required()
-    results["3 — accepted presentation"]     = await test_accepted_presentation_passes_identity_check()
-    results["4 — rejected presentation"]      = await test_rejected_presentation_is_denied()
-    results["5a — client retry (sync)"]       = await test_client_retries_once_on_identity_challenge_sync()
-    results["5b — client retry (SSE)"]        = await test_client_retries_once_on_identity_challenge_stream()
-    results["6 — plain-endpoint-off regression"] = await test_enable_plain_endpoint_false_with_base_url_does_not_crash()
-    results["7 — api_key_manager success unaffected"] = await test_api_key_manager_success_still_falls_through_cleanly()
-
-    print("\n" + "=" * 70)
-    print("Summary")
-    print("=" * 70)
-    all_ok = True
-    for label, ok in results.items():
-        print(f"  {'✅' if ok else '❌'}  Test {label}")
-        all_ok = all_ok and ok
-
-    print()
-    print("  🎉 All tests passed." if all_ok else "  ⚠️  Some tests failed — check the logs above.")
-    print("=" * 70 + "\n")
-
-    if not all_ok:
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert card.url is None
+    assert card.secure_url == "http://localhost:9999/agents/no-plain/secure-a2a"

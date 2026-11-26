@@ -547,6 +547,18 @@ https://<random-name>.trycloudflare.com/mcp
 ## Testing
 
 ```bash
+uv pip install -e ".[dev]"
+pytest
+```
+
+A real, assert-based `pytest` suite (`tests/test_stls_mcp_transport_retry.py`)
+— no infra, no real key provider — covering the client-side
+session-expired retry-once logic. Runs automatically on every push/PR
+via [`python-tests.yml`](../../.github/workflows/python-tests.yml), and
+again as a release gate before publishing via
+[`publish-python.yml`](../../.github/workflows/publish-python.yml).
+
+```bash
 # Manual E2E example — base (default)
 python tests/vault_server.py     # terminal 1
 python tests/vault_client.py     # terminal 2
@@ -564,9 +576,10 @@ through `/mcp-stls`.
 
 - Chunk-by-chunk encrypted SSE streaming on `/mcp-stls`
 - stdio support (if a real use case emerges)
-- Automated pytest test suite for `stls-mcp` (currently none — only
-  manual `vault_*.py` scripts), including E2E coverage with `arqit_py`
-  against real Arqit infrastructure
+- Broader automated `pytest` coverage for `stls-mcp` beyond the
+  transport-retry suite (currently the only automated case — everything
+  else is still manual `vault_*.py` scripts), including E2E coverage
+  with `arqit_py` against real Arqit infrastructure
 - Publishing `stls-core` to a private index, to remove the dependency on
   the local monorepo path in production
 

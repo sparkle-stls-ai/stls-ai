@@ -118,8 +118,8 @@ Gap #9 — ListTasks result not wrapped (the one non-additive fix here)
   it, not just a soft degradation. Unlike every other fix in this
   suite, JSON can't be an array AND an object with a "tasks" key at
   once, so the old bare-array shape is genuinely gone, not kept
-  alongside. Grep-verified the only in-repo consumer
-  (tests/task_test.py) before changing it, and updated it to match.
+  alongside. Grep-verified the only in-repo consumer (tests/task_manual.py)
+  before changing it, and updated it to match.
 
 Gap #10 — GetTask/CancelTask/SubscribeToTask reject every real client
   Their proto request field for the task identifier is "id" (spec
@@ -161,28 +161,11 @@ via httpx.ASGITransport (no server process, no network):
   2. 1.0 names / card fields produce the spec-conformant shape.
   3. An unrecognized method name still gets -32601 (the alias map must
      not swallow real errors).
-
-Run directly:
-    python a2a_protocol_conformance_test.py
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-import sys
-
-# The agent registry and Redis session cache are irrelevant to this
-# suite (plain endpoint only) and must not require real infrastructure.
-# Set BEFORE importing stls_a2a: python-dotenv's load_dotenv() (called at
-# import time by several stls_a2a modules) won't override a key that's
-# already present in os.environ, even if empty — so this sticks.
-os.environ.setdefault("KEY_PROVIDER_NAME", "base")
-os.environ.setdefault("TASK_STORE_BACKEND", "memory")
-os.environ["AUTH_PG_DSN"] = ""
-
-sys.path.insert(0, os.path.dirname(__file__))  # for `import mock_agent`
 
 import httpx
 from fastapi import FastAPI
@@ -195,22 +178,6 @@ from stls_a2a import (
     start_task_store_cleanup,
 )
 from mock_agent import MockAgent
-
-import logging
-
-logging.basicConfig(level=logging.WARNING)
-logger = logging.getLogger(__name__)
-
-
-# ── Helper output (same convention as client_context_test.py) ──────────────
-
-def _ok(label: str, detail: str = "") -> None:
-    print(f"  ✅ {label}{': ' + detail if detail else ''}")
-
-
-def _fail(label: str, detail: str = "") -> None:
-    print(f"  ❌ {label}{': ' + detail if detail else ''}")
-
 
 # ── App builder ──────────────────────────────────────────────────────────
 
@@ -282,25 +249,15 @@ async def _sse_events(client: httpx.AsyncClient, method: str, params: dict, rpc_
 
 # ── Test 1: 0.3 names still work (backward-compat guard) ──────────────────
 
-async def test_0_3_names_unchanged() -> bool:
-    print("\n── Test 1: A2A 0.3 method names (backward-compat guard) ─────────")
+async def test_0_3_names_unchanged():
     app = _build_app()
-    ok = True
     async with _client(app) as client:
         send = await _rpc(client, "messages/send", {"message": {"parts": [{"type": "text", "text": "add(2,3)"}]}})
-        if send.get("result", {}).get("status", {}).get("state") == "completed":
-            _ok("messages/send", "task completed")
-        else:
-            _fail("messages/send", json.dumps(send))
-            ok = False
+        assert send.get("result", {}).get("status", {}).get("state") == "completed", send
         task_id = send["result"]["taskId"]
 
         get = await _rpc(client, "tasks/get", {"taskId": task_id})
-        if get.get("result", {}).get("id") == task_id:
-            _ok("tasks/get")
-        else:
-            _fail("tasks/get", json.dumps(get))
-            ok = False
+        assert get.get("result", {}).get("id") == task_id, get
 
         lst = await _rpc(client, "tasks/list", {})
         # result is {"tasks": [...], "pageSize": ...} (spec §9.4.4), not
@@ -308,63 +265,34 @@ async def test_0_3_names_unchanged() -> bool:
         # a real a2a-sdk 1.3.0 Client hard-failed trying to parse the old
         # bare-array shape; JSON can't be an array AND an object with a
         # "tasks" key at once, so there was no way to keep both).
-        if isinstance(lst.get("result"), dict) and isinstance(lst["result"].get("tasks"), list):
-            _ok("tasks/list", f"{len(lst['result']['tasks'])} task(s)")
-        else:
-            _fail("tasks/list", json.dumps(lst))
-            ok = False
+        assert isinstance(lst.get("result"), dict), lst
+        assert isinstance(lst["result"].get("tasks"), list), lst
 
         cancel = await _rpc(client, "tasks/cancel", {"taskId": task_id})
-        if cancel.get("error", {}).get("code") == -32002:
-            _ok("tasks/cancel", "correctly rejected (task already completed)")
-        else:
-            _fail("tasks/cancel", json.dumps(cancel))
-            ok = False
+        assert cancel.get("error", {}).get("code") == -32002, cancel  # already completed
 
         push = await _rpc(client, "tasks/pushNotificationConfig/set", {})
-        if push.get("error", {}).get("code") == -32003:
-            _ok("tasks/pushNotificationConfig/set", "correctly reports unsupported")
-        else:
-            _fail("tasks/pushNotificationConfig/set", json.dumps(push))
-            ok = False
-    return ok
+        assert push.get("error", {}).get("code") == -32003, push  # unsupported
 
 
 # ── Test 2: 1.0 names produce the same outcome as their 0.3 equivalent ────
 
-async def test_1_0_names_match_0_3() -> bool:
-    print("\n── Test 2: A2A 1.0 method names (spec §9.4) ──────────────────────")
+async def test_1_0_names_match_0_3():
     app = _build_app()
-    ok = True
     async with _client(app) as client:
         send = await _rpc(client, "SendMessage", {"message": {"parts": [{"type": "text", "text": "add(2,3)"}]}})
-        if send.get("result", {}).get("status", {}).get("state") == "completed":
-            _ok("SendMessage", "-> same outcome as messages/send")
-        else:
-            _fail("SendMessage", json.dumps(send))
-            ok = False
+        assert send.get("result", {}).get("status", {}).get("state") == "completed", send
         task_id = send["result"]["taskId"]
 
         get = await _rpc(client, "GetTask", {"taskId": task_id})
-        if get.get("result", {}).get("id") == task_id:
-            _ok("GetTask", "-> same outcome as tasks/get")
-        else:
-            _fail("GetTask", json.dumps(get))
-            ok = False
+        assert get.get("result", {}).get("id") == task_id, get
 
         lst = await _rpc(client, "ListTasks", {})
-        if isinstance(lst.get("result"), dict) and isinstance(lst["result"].get("tasks"), list):
-            _ok("ListTasks", "-> same outcome as tasks/list")
-        else:
-            _fail("ListTasks", json.dumps(lst))
-            ok = False
+        assert isinstance(lst.get("result"), dict), lst
+        assert isinstance(lst["result"].get("tasks"), list), lst
 
         cancel = await _rpc(client, "CancelTask", {"taskId": task_id})
-        if cancel.get("error", {}).get("code") == -32002:
-            _ok("CancelTask", "-> same outcome as tasks/cancel")
-        else:
-            _fail("CancelTask", json.dumps(cancel))
-            ok = False
+        assert cancel.get("error", {}).get("code") == -32002, cancel
 
         for method in (
             "CreateTaskPushNotificationConfig",
@@ -373,94 +301,60 @@ async def test_1_0_names_match_0_3() -> bool:
             "DeleteTaskPushNotificationConfig",
         ):
             resp = await _rpc(client, method, {})
-            if resp.get("error", {}).get("code") == -32003:
-                _ok(method, "-> correctly reports unsupported (not -32601)")
-            else:
-                _fail(method, json.dumps(resp))
-                ok = False
-    return ok
+            # -32003 (unsupported), not -32601 (unknown method) — the
+            # alias map must recognize these names even though they're
+            # never actually implemented.
+            assert resp.get("error", {}).get("code") == -32003, (method, resp)
 
 
 # ── Test 3: SSE — 1.0 streaming names match their 0.3 equivalent ──────────
 
-async def test_1_0_sse_names() -> bool:
-    print("\n── Test 3: A2A 1.0 SSE method names ──────────────────────────────")
+async def test_1_0_sse_names():
     app = _build_app()
-    ok = True
     async with _client(app) as client:
         events = await _sse_events(
             client, "SendStreamingMessage",
             {"message": {"parts": [{"type": "text", "text": "add(2,3)"}]}, "expression": "add(2,3)"},
         )
         states = [e["result"]["status"]["state"] for e in events if e["result"]["kind"] == "status-update"]
-        if states == ["submitted", "working", "completed"]:
-            _ok("SendStreamingMessage", f"lifecycle={states}")
-        else:
-            _fail("SendStreamingMessage", f"lifecycle={states}")
-            ok = False
+        assert states == ["submitted", "working", "completed"], states
         task_id = next(e["result"]["taskId"] for e in events)
 
         sub_events = await _sse_events(client, "SubscribeToTask", {"taskId": task_id})
         sub_states = [e["result"]["status"]["state"] for e in sub_events if e["result"]["kind"] == "status-update"]
-        if sub_states == ["completed"]:
-            _ok("SubscribeToTask", f"on completed task -> immediate {sub_states}")
-        else:
-            _fail("SubscribeToTask", f"lifecycle={sub_states}")
-            ok = False
-    return ok
+        assert sub_states == ["completed"], sub_states  # already-completed task -> immediate
 
 
 # ── Test 4: unknown methods are still rejected (no over-broad aliasing) ───
 
-async def test_unknown_method_still_rejected() -> bool:
-    print("\n── Test 4: unrecognized method name guard ────────────────────────")
+async def test_unknown_method_still_rejected():
     app = _build_app()
     async with _client(app) as client:
         resp = await _rpc(client, "TotallyMadeUpMethod", {})
-        if resp.get("error", {}).get("code") == -32601:
-            _ok("TotallyMadeUpMethod", "-32601 as expected")
-            return True
-        _fail("TotallyMadeUpMethod", json.dumps(resp))
-        return False
+        assert resp.get("error", {}).get("code") == -32601, resp
 
 
 # ── Test 5: AgentCard — old fields unchanged, new 1.0 fields correct ──────
 
-async def test_agent_card_schema() -> bool:
-    print("\n── Test 5: AgentCard schema (gap #2) ─────────────────────────────")
+async def test_agent_card_schema():
     app = _build_app()
-    ok = True
     async with _client(app) as client:
         resp = await client.get("/.well-known/agent-card.json")
         resp.raise_for_status()
         card = resp.json()
 
         # Backward compat: pre-existing fields untouched.
-        if card.get("url") and card.get("secureUrl"):
-            _ok("url / secureUrl", "unchanged")
-        else:
-            _fail("url / secureUrl", json.dumps(card))
-            ok = False
+        assert card.get("url") and card.get("secureUrl"), card
 
         old_scheme = card.get("securityScheme")
-        if isinstance(old_scheme, dict) and "type" in old_scheme:
-            _ok("securityScheme (singular)", f"unchanged, type={old_scheme['type']!r}")
-        else:
-            _fail("securityScheme (singular)", json.dumps(card))
-            ok = False
+        assert isinstance(old_scheme, dict) and "type" in old_scheme, card
 
         # New A2A 1.0 fields: present, correctly shaped, and derived from
         # the same values as the fields above (not independently wrong).
         interfaces = card.get("supportedInterfaces")
-        if (
-            isinstance(interfaces, list) and interfaces
-            and interfaces[0].get("url") == card.get("url")
-            and interfaces[0].get("protocolBinding") == "JSONRPC"
-        ):
-            _ok("supportedInterfaces", f"array, derived from url: {interfaces}")
-        else:
-            _fail("supportedInterfaces", json.dumps(card))
-            ok = False
+        assert isinstance(interfaces, list) and interfaces, card
+        assert interfaces[0].get("url") == card.get("url"), card
+        assert interfaces[0].get("protocolBinding") == "JSONRPC", card
 
         # securitySchemes is a CLOSED union in both 0.3 and 1.0
         # (apiKey/http/oauth2/openIdConnect/mutualTLS — no custom
@@ -473,11 +367,8 @@ async def test_agent_card_schema() -> bool:
         # is checked directly below, since this test app's scheme is
         # always the non-standard one.
         schemes = card.get("securitySchemes")
-        if old_scheme and old_scheme.get("type") == "stls_key_exchange" and schemes == {}:
-            _ok("securitySchemes", "correctly omitted for our non-standard scheme type")
-        else:
-            _fail("securitySchemes", f"expected {{}} for a non-standard scheme, got {json.dumps(schemes)}")
-            ok = False
+        assert old_scheme.get("type") == "stls_key_exchange", old_scheme
+        assert schemes == {}, schemes
 
         # Positive case: an OFFICIAL scheme type must still populate
         # securitySchemes (the gating is type-specific, not "never").
@@ -488,17 +379,12 @@ async def test_agent_card_schema() -> bool:
             name="x", description="x", url="http://x/a2a",
             security_scheme=HTTPSecurityScheme(scheme="bearer"),
         )
-        if official_card.security_schemes.get("http") is not None:
-            _ok("securitySchemes (official type)", "populated for an officially-recognized scheme")
-        else:
-            _fail("securitySchemes (official type)", f"got {official_card.security_schemes}")
-            ok = False
-    return ok
+        assert official_card.security_schemes.get("http") is not None, official_card.security_schemes
 
 
 # ── Test 6: capability flag matches actual behavior (gap #3) ─────────────
 
-async def test_streaming_capability_matches_reality() -> bool:
+async def test_streaming_capability_matches_reality():
     """
     _card_from_adk/_card_from_langgraph/_card_generic used to hardcode
     capabilities.streaming=False even though every adapter (native
@@ -509,35 +395,22 @@ async def test_streaming_capability_matches_reality() -> bool:
     claim and the actual behavior agree, for the 'custom' framework
     this test app uses (_card_generic's code path).
     """
-    print("\n── Test 6: streaming capability flag matches reality (gap #3) ───")
     app = _build_app()
-    ok = True
     async with _client(app) as client:
         card = (await client.get("/.well-known/agent-card.json")).json()
-        declared_streaming = card.get("capabilities", {}).get("streaming")
-        if declared_streaming is True:
-            _ok("capabilities.streaming", "declared True")
-        else:
-            _fail("capabilities.streaming", f"declared {declared_streaming!r}, expected True")
-            ok = False
+        assert card.get("capabilities", {}).get("streaming") is True, card
 
         events = await _sse_events(
             client, "messages/sendStream",
             {"message": {"parts": [{"type": "text", "text": "add(2,3)"}]}, "expression": "add(2,3)"},
         )
         states = [e["result"]["status"]["state"] for e in events if e["result"]["kind"] == "status-update"]
-        actually_streams = states == ["submitted", "working", "completed"]
-        if actually_streams:
-            _ok("SSE lifecycle", f"matches declared capability: {states}")
-        else:
-            _fail("SSE lifecycle", f"declared streaming=True but got lifecycle={states}")
-            ok = False
-    return ok
+        assert states == ["submitted", "working", "completed"], states
 
 
 # ── Test 7: generic card name isn't the useless "function" (gap #4) ──────
 
-async def test_card_name_not_generic() -> bool:
+async def test_card_name_not_generic():
     """
     _card_generic() used to report type(agent).__name__ as a last
     resort, which for a plain function handler (this test app's
@@ -546,21 +419,16 @@ async def test_card_name_not_generic() -> bool:
     distinguishing identifier. Now falls back to the function's own
     __name__ first.
     """
-    print("\n── Test 7: generic card name (gap #4) ────────────────────────────")
     app = _build_app()
     async with _client(app) as client:
         card = (await client.get("/.well-known/agent-card.json")).json()
         name = card.get("name")
-        if name and name != "function":
-            _ok("AgentCard.name", f"{name!r} (not the generic 'function')")
-            return True
-        _fail("AgentCard.name", f"got {name!r}")
-        return False
+        assert name and name != "function", name
 
 
 # ── Test 8: SendMessage result is oneof-wrapped (gap #5) ─────────────────
 
-async def test_send_message_result_is_task_wrapped() -> bool:
+async def test_send_message_result_is_task_wrapped():
     """
     A2A 1.0's SendMessageResponse is a oneof {task, message} (spec
     §9.4.1) — a strict proto-JSON client expects the result wrapped
@@ -575,29 +443,19 @@ async def test_send_message_result_is_task_wrapped() -> bool:
     (stls_a2a_client.py, ADK's RemoteA2aAgent) read it directly and
     must keep working unchanged.
     """
-    print("\n── Test 8: SendMessage result is task-wrapped (gap #5) ──────────")
     app = _build_app()
     async with _client(app) as client:
         resp = await _rpc(client, "messages/send", {"message": {"parts": [{"type": "text", "text": "add(2,3)"}]}})
         result = resp.get("result", {})
         task_id = result.get("taskId")
 
-        if "task" in result and result["task"].get("id") == task_id:
-            _ok("result.task", f"present, matches flat taskId={task_id!r}")
-        else:
-            _fail("result.task", json.dumps(result))
-            return False
-
-        if result.get("id") == task_id and result.get("status"):
-            _ok("flat Task fields", "still present (0.3/existing consumers unaffected)")
-            return True
-        _fail("flat Task fields", json.dumps(result))
-        return False
+        assert "task" in result and result["task"].get("id") == task_id, result
+        assert result.get("id") == task_id and result.get("status"), result
 
 
 # ── Test 9: a part with neither "type" nor "kind" reaches the agent ──────
 
-async def test_discriminatorless_part_is_not_dropped() -> bool:
+async def test_discriminatorless_part_is_not_dropped():
     """
     A2A 1.0's real wire format (a2a-sdk>=1.0's proto-JSON mapping of
     Part's oneof) sends a text part as the bare {"text": "..."}  — no
@@ -616,7 +474,6 @@ async def test_discriminatorless_part_is_not_dropped() -> bool:
     _handle_messages_send is handing the adapter an already-normalized
     part (both "type" and "kind" set), not the bare one received.
     """
-    print("\n── Test 9: discriminator-less part isn't dropped (gap #6) ───────")
     app = _build_app()
     async with _client(app) as client:
         resp = await _rpc(client, "messages/send", {
@@ -627,16 +484,12 @@ async def test_discriminatorless_part_is_not_dropped() -> bool:
             p.get("text", "") for a in artifacts for p in a.get("parts", [])
             if p.get("type") == "text"
         )
-        if '"result": 5' in text and '"status": "success"' in text:
-            _ok("bare {text: ...} part", f"recognized and evaluated: {text!r}")
-            return True
-        _fail("bare {text: ...} part", f"NOT recognized, agent saw empty input: {text!r}")
-        return False
+        assert '"result": 5' in text and '"status": "success"' in text, text
 
 
 # ── Test 10: SSE events are oneof-wrapped with correct state names ───────
 
-async def test_sse_events_are_oneof_wrapped() -> bool:
+async def test_sse_events_are_oneof_wrapped():
     """
     A2A 1.0's StreamResponse is a oneof {task, message, statusUpdate,
     artifactUpdate} (spec §4.2). Checks both halves of gap #7's fix:
@@ -648,9 +501,7 @@ async def test_sse_events_are_oneof_wrapped() -> bool:
     The flat, pre-existing shape (kind/taskId/status.state lowercase)
     must stay exactly as it was, for 0.3/existing SSE consumers.
     """
-    print("\n── Test 10: SSE events are oneof-wrapped (gap #7) ───────────────")
     app = _build_app()
-    ok = True
     async with _client(app) as client:
         events = await _sse_events(
             client, "messages/sendStream",
@@ -660,36 +511,18 @@ async def test_sse_events_are_oneof_wrapped() -> bool:
         status_events = [e["result"] for e in events if e["result"]["kind"] == "status-update"]
         artifact_events = [e["result"] for e in events if e["result"]["kind"] == "artifact-update"]
 
-        if status_events and all(e.get("status", {}).get("state") for e in status_events):
-            _ok("flat status.state", "unchanged (lowercase, 0.3/existing consumers unaffected)")
-        else:
-            _fail("flat status.state", json.dumps(status_events))
-            ok = False
+        assert status_events and all(e.get("status", {}).get("state") for e in status_events), status_events
 
         proto_states = [e.get("statusUpdate", {}).get("status", {}).get("state") for e in status_events]
-        if proto_states and all(s and s.startswith("TASK_STATE_") for s in proto_states):
-            _ok("statusUpdate.status.state", f"proto enum names: {proto_states}")
-        else:
-            _fail("statusUpdate.status.state", f"got {proto_states}")
-            ok = False
+        assert proto_states and all(s and s.startswith("TASK_STATE_") for s in proto_states), proto_states
+        assert proto_states[-1] == "TASK_STATE_COMPLETED", proto_states
 
-        if proto_states and proto_states[-1] == "TASK_STATE_COMPLETED":
-            _ok("final event state", "TASK_STATE_COMPLETED — a strict client can detect completion")
-        else:
-            _fail("final event state", f"last state was {proto_states[-1] if proto_states else None!r}")
-            ok = False
-
-        if artifact_events and all("artifactUpdate" in e for e in artifact_events):
-            _ok("artifactUpdate", "present on every artifact event")
-        else:
-            _fail("artifactUpdate", json.dumps(artifact_events))
-            ok = False
-    return ok
+        assert artifact_events and all("artifactUpdate" in e for e in artifact_events), artifact_events
 
 
 # ── Test 11: history message.role uses the proto enum name (gap #8) ──────
 
-async def test_history_role_proto_name() -> bool:
+async def test_history_role_proto_name():
     """
     A2A 1.0's Role proto enum is ROLE_USER/ROLE_AGENT (spec §4.1.3), not
     our lowercase "user"/"agent" — a real client otherwise sees
@@ -698,32 +531,21 @@ async def test_history_role_proto_name() -> bool:
     flat history array alongside it keeps the original lowercase values
     for 0.3/existing consumers.
     """
-    print("\n── Test 11: history role uses proto enum name (gap #8) ──────────")
     app = _build_app()
-    ok = True
     async with _client(app) as client:
         resp = await _rpc(client, "messages/send", {"message": {"parts": [{"type": "text", "text": "add(2,3)"}]}})
         result = resp.get("result", {})
 
         flat_roles = [m.get("role") for m in result.get("history", [])]
-        if flat_roles == ["user", "agent"]:
-            _ok("flat history[].role", f"unchanged: {flat_roles}")
-        else:
-            _fail("flat history[].role", f"got {flat_roles}")
-            ok = False
+        assert flat_roles == ["user", "agent"], flat_roles
 
         proto_roles = [m.get("role") for m in result.get("task", {}).get("history", [])]
-        if proto_roles == ["ROLE_USER", "ROLE_AGENT"]:
-            _ok("task.history[].role", f"proto enum names: {proto_roles}")
-        else:
-            _fail("task.history[].role", f"got {proto_roles}")
-            ok = False
-    return ok
+        assert proto_roles == ["ROLE_USER", "ROLE_AGENT"], proto_roles
 
 
 # ── Test 12: ListTasks result is wrapped, not a bare array (gap #9) ──────
 
-async def test_list_tasks_result_is_wrapped() -> bool:
+async def test_list_tasks_result_is_wrapped():
     """
     A2A 1.0's ListTasksResponse is {"tasks": [...], "pageSize": ...,
     "nextPageToken": ...} (spec §9.4.4), not a bare array. A real
@@ -731,28 +553,23 @@ async def test_list_tasks_result_is_wrapped() -> bool:
     shape ("unhashable type: 'dict'"). Unlike every other fix in this
     suite, this ISN'T purely additive — JSON can't be an array AND an
     object with a "tasks" key at once — so the old shape is genuinely
-    gone; grep-verified the only in-repo consumer (tests/task_test.py)
+    gone; grep-verified the only in-repo consumer (tests/task_manual.py)
     before changing it, and updated it alongside this fix.
     """
-    print("\n── Test 12: ListTasks result is wrapped (gap #9) ────────────────")
     app = _build_app()
-    ok = True
     async with _client(app) as client:
         await _rpc(client, "messages/send", {"message": {"parts": [{"type": "text", "text": "add(2,3)"}]}})
         resp = await _rpc(client, "tasks/list", {"limit": 50})
         result = resp.get("result")
 
-        if isinstance(result, dict) and isinstance(result.get("tasks"), list) and "pageSize" in result:
-            _ok("ListTasks shape", f"{{'tasks': [...{len(result['tasks'])} task(s)], 'pageSize': {result['pageSize']}}}")
-        else:
-            _fail("ListTasks shape", f"expected a wrapped object, got {result!r}")
-            ok = False
-    return ok
+        assert isinstance(result, dict), result
+        assert isinstance(result.get("tasks"), list), result
+        assert "pageSize" in result, result
 
 
 # ── Test 13: GetTask/CancelTask/SubscribeToTask accept "id" (gap #10) ────
 
-async def test_task_methods_accept_id_param() -> bool:
+async def test_task_methods_accept_id_param():
     """
     GetTaskRequest/CancelTaskRequest/SubscribeToTaskRequest's proto
     field for the task identifier is "id" (spec §9.4.3 example:
@@ -762,41 +579,26 @@ async def test_task_methods_accept_id_param() -> bool:
     not an enum/shape nuance, a complete functional break. Both names
     are accepted now; "taskId" (0.3/existing consumers) is unaffected.
     """
-    print("\n── Test 13: GetTask/CancelTask/SubscribeToTask accept 'id' (gap #10) ─")
     app = _build_app()
-    ok = True
     async with _client(app) as client:
         send = await _rpc(client, "messages/send", {"message": {"parts": [{"type": "text", "text": "add(2,3)"}]}})
         task_id = send["result"]["taskId"]
 
         get = await _rpc(client, "GetTask", {"id": task_id})
-        if get.get("result", {}).get("id") == task_id:
-            _ok("GetTask with 'id' param", "resolved correctly")
-        else:
-            _fail("GetTask with 'id' param", json.dumps(get))
-            ok = False
+        assert get.get("result", {}).get("id") == task_id, get
 
         sub_events = await _sse_events(client, "SubscribeToTask", {"id": task_id})
-        if sub_events:
-            _ok("SubscribeToTask with 'id' param", f"{len(sub_events)} event(s)")
-        else:
-            _fail("SubscribeToTask with 'id' param", "no events")
-            ok = False
+        assert sub_events
 
         cancel = await _rpc(client, "CancelTask", {"id": task_id})
         # Already completed -> correctly rejected, but that's a real
         # business-logic response, not the "id required" param error.
-        if cancel.get("error", {}).get("code") == -32002:
-            _ok("CancelTask with 'id' param", "resolved correctly (rejected: already completed)")
-        else:
-            _fail("CancelTask with 'id' param", json.dumps(cancel))
-            ok = False
-    return ok
+        assert cancel.get("error", {}).get("code") == -32002, cancel
 
 
 # ── Test 14: file parts round-trip in A2A 1.0's flat shape (gaps #11/#12) ─
 
-async def test_file_part_round_trips() -> bool:
+async def test_file_part_round_trips():
     """
     A2A 1.0's Part proto has no "file" wrapper at all — FileInline/
     FileReference's fields (raw/url/filename/mediaType) sit directly on
@@ -813,9 +615,7 @@ async def test_file_part_round_trips() -> bool:
     (stls_a2a_task.py), additive alongside the nested shape kept for
     0.3/existing consumers.
     """
-    print("\n── Test 14: file parts round-trip (gaps #11/#12) ────────────────")
     app = _build_app()
-    ok = True
     async with _client(app) as client:
         resp = await _rpc(client, "messages/send", {
             "message": {"parts": [{"raw": "aGVsbG8gd29ybGQ=", "filename": "test.txt", "mediaType": "text/plain"}]},
@@ -823,64 +623,12 @@ async def test_file_part_round_trips() -> bool:
         history = resp.get("result", {}).get("history", [])
         user_parts = history[0].get("parts", []) if history else []
 
-        if user_parts and user_parts[0].get("type") == "file":
-            _ok("incoming flat file part", "recognized, not dropped (gap #11)")
-        else:
-            _fail("incoming flat file part", f"NOT recognized, got parts={user_parts!r}")
-            ok = False
-            return ok
+        assert user_parts and user_parts[0].get("type") == "file", user_parts  # gap #11
 
         part = user_parts[0]
-        if part.get("raw") == "aGVsbG8gd29ybGQ=" and part.get("mediaType") == "text/plain" and part.get("filename") == "test.txt":
-            _ok("outgoing flat fields", "raw/mediaType/filename present alongside nested 'file' (gap #12)")
-        else:
-            _fail("outgoing flat fields", json.dumps(part))
-            ok = False
+        assert part.get("raw") == "aGVsbG8gd29ybGQ=", part  # gap #12
+        assert part.get("mediaType") == "text/plain", part
+        assert part.get("filename") == "test.txt", part
 
-        if isinstance(part.get("file"), dict) and part["file"].get("bytes") == "aGVsbG8gd29ybGQ=":
-            _ok("nested 'file' shape", "unchanged (0.3/existing consumers unaffected)")
-        else:
-            _fail("nested 'file' shape", json.dumps(part))
-            ok = False
-    return ok
-
-
-async def main() -> None:
-    print("\n" + "=" * 70)
-    print("A2A Protocol Conformance (issue #14)")
-    print("=" * 70)
-
-    results: dict[str, bool] = {}
-    results["1 — 0.3 names unchanged"]      = await test_0_3_names_unchanged()
-    results["2 — 1.0 names == 0.3 outcome"] = await test_1_0_names_match_0_3()
-    results["3 — 1.0 SSE names"]            = await test_1_0_sse_names()
-    results["4 — unknown method guard"]     = await test_unknown_method_still_rejected()
-    results["5 — AgentCard schema"]         = await test_agent_card_schema()
-    results["6 — streaming capability"]     = await test_streaming_capability_matches_reality()
-    results["7 — generic card name"]        = await test_card_name_not_generic()
-    results["8 — SendMessage task-wrapped"]  = await test_send_message_result_is_task_wrapped()
-    results["9 — discriminator-less part"]   = await test_discriminatorless_part_is_not_dropped()
-    results["10 — SSE events oneof-wrapped"] = await test_sse_events_are_oneof_wrapped()
-    results["11 — history role proto name"]  = await test_history_role_proto_name()
-    results["12 — ListTasks wrapped"]        = await test_list_tasks_result_is_wrapped()
-    results["13 — task methods accept id"]   = await test_task_methods_accept_id_param()
-    results["14 — file part round-trip"]     = await test_file_part_round_trips()
-
-    print("\n" + "=" * 70)
-    print("Summary")
-    print("=" * 70)
-    all_ok = True
-    for label, ok in results.items():
-        print(f"  {'✅' if ok else '❌'}  Test {label}")
-        all_ok = all_ok and ok
-
-    print()
-    print("  🎉 All tests passed." if all_ok else "  ⚠️  Some tests failed — check the logs above.")
-    print("=" * 70 + "\n")
-
-    if not all_ok:
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        assert isinstance(part.get("file"), dict), part  # nested shape unchanged
+        assert part["file"].get("bytes") == "aGVsbG8gd29ybGQ=", part

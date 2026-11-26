@@ -21,26 +21,10 @@ but runner.run_async() monkeypatched to a fake event sequence — no
 real LLM call, no network, isolates exactly the fixed logic.
 """
 
-import asyncio
-import os
-import sys
-
-os.environ.setdefault("KEY_PROVIDER_NAME", "base")
-os.environ.setdefault("TASK_STORE_BACKEND", "memory")
-os.environ["AUTH_PG_DSN"] = ""
-
 from google.adk.agents import Agent
 
 from stls_a2a.stls_a2a_adapters_model import AgentRequest
 from stls_a2a.stls_a2a_google_adapter import GoogleADKAdapter
-
-
-def _ok(label: str, detail: str = "") -> None:
-    print(f"  ✅ {label}{': ' + detail if detail else ''}")
-
-
-def _fail(label: str, detail: str = "") -> None:
-    print(f"  ❌ {label}{': ' + detail if detail else ''}")
 
 
 class _FakeContent:
@@ -83,8 +67,7 @@ def _request(method: str = "messages/send") -> AgentRequest:
     )
 
 
-async def test_invoke_surfaces_sub_agent_error() -> bool:
-    print("\n── Test 1: invoke() surfaces a sub-agent's error_message ──")
+async def test_invoke_surfaces_sub_agent_error():
     adapter = _build_adapter()
 
     async def _fake_run_async(**_kwargs):
@@ -93,17 +76,12 @@ async def test_invoke_surfaces_sub_agent_error() -> bool:
     adapter.runner.run_async = _fake_run_async
 
     response = await adapter.invoke(_request())
-    ok = True
-    if response.error and "401" in str(response.error.get("message", "")):
-        _ok("error surfaced", str(response.error))
-    else:
-        _fail("error not surfaced as expected", str(response.model_dump()))
-        ok = False
-    return ok
+
+    assert response.error is not None, response.model_dump()
+    assert "401" in str(response.error.get("message", "")), response.model_dump()
 
 
-async def test_invoke_stream_surfaces_sub_agent_error() -> bool:
-    print("\n── Test 2: _invoke_stream() surfaces a sub-agent's error_message ──")
+async def test_invoke_stream_surfaces_sub_agent_error():
     adapter = _build_adapter()
 
     async def _fake_run_async(**_kwargs):
@@ -115,22 +93,12 @@ async def test_invoke_stream_surfaces_sub_agent_error() -> bool:
     async for chunk in adapter._invoke_stream(_request("messages/sendStream")):
         chunks.append(chunk)
 
-    ok = True
-    if not chunks:
-        _fail("stream produced nothing at all — the exact bug this regresses")
-        ok = False
-    else:
-        text = chunks[0]["parts"][0]["text"]
-        if "401" in text:
-            _ok("error surfaced as a visible text part", text)
-        else:
-            _fail("first chunk doesn't contain the error", str(chunks))
-            ok = False
-    return ok
+    assert chunks, "stream produced nothing at all — the exact bug this regresses"
+    text = chunks[0]["parts"][0]["text"]
+    assert "401" in text, chunks
 
 
-async def test_invoke_stream_normal_path_unaffected() -> bool:
-    print("\n── Test 3: normal (non-error) events still stream correctly ──")
+async def test_invoke_stream_normal_path_unaffected():
     adapter = _build_adapter()
 
     async def _fake_run_async(**_kwargs):
@@ -142,42 +110,6 @@ async def test_invoke_stream_normal_path_unaffected() -> bool:
     async for chunk in adapter._invoke_stream(_request("messages/sendStream")):
         chunks.append(chunk)
 
-    ok = True
     first_part = chunks[0]["parts"][0] if chunks and chunks[0]["parts"] else None
     text = getattr(first_part, "text", None) or (first_part.get("text") if isinstance(first_part, dict) else None)
-    if text == "hello back":
-        _ok("normal event still streamed correctly")
-    else:
-        _fail("normal event path regressed", str(chunks))
-        ok = False
-    return ok
-
-
-async def main() -> None:
-    print("\n" + "=" * 70)
-    print("GoogleADKAdapter error surfacing (found while testing issue #45)")
-    print("=" * 70)
-
-    results: dict[str, bool] = {}
-    results["1 — invoke() surfaces error"] = await test_invoke_surfaces_sub_agent_error()
-    results["2 — _invoke_stream() surfaces error"] = await test_invoke_stream_surfaces_sub_agent_error()
-    results["3 — normal stream path unaffected"] = await test_invoke_stream_normal_path_unaffected()
-
-    print("\n" + "=" * 70)
-    print("Summary")
-    print("=" * 70)
-    all_ok = True
-    for label, ok in results.items():
-        print(f"  {'✅' if ok else '❌'}  Test {label}")
-        all_ok = all_ok and ok
-
-    print()
-    print("  🎉 All tests passed." if all_ok else "  ⚠️  Some tests failed — check the logs above.")
-    print("=" * 70 + "\n")
-
-    if not all_ok:
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    assert text == "hello back", chunks

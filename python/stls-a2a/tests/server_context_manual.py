@@ -1,5 +1,5 @@
 """
-server_context_test.py
+server_context_manual.py
 -----------------------
 Test server for verifying user context propagation.
 
@@ -12,13 +12,13 @@ Startup:
   # With --secure on A, this needs KEY_PROVIDER_NAME=pqc here, to expose
   # the /stls/pqc/handshake endpoint.
   PORT=8002 BASE_URL=http://localhost:8002 KEY_PROVIDER_NAME=pqc \
-      python server_context_test.py --agent b
+      python server_context_manual.py --agent b
 
   # Terminal 2 — server A, PLAIN delegation to B (default behavior)
-  PORT=8001 BASE_URL=http://localhost:8001 python server_context_test.py --agent a
+  PORT=8001 BASE_URL=http://localhost:8001 python server_context_manual.py --agent a
 
   # Terminal 2bis — server A, ENCRYPTED delegation to B (/secure-a2a, PQC handshake)
-  PORT=8001 BASE_URL=http://localhost:8001 python server_context_test.py --agent a --secure
+  PORT=8001 BASE_URL=http://localhost:8001 python server_context_manual.py --agent a --secure
 
 Environment variables:
   PORT          Listen port (default: 8001 for A, 8002 for B)
@@ -64,7 +64,7 @@ def build_app_b() -> FastAPI:
     Exposes agent_b on /agents/agent-b/secure-a2a.
     Protected by a static API key (AuthConfig) for simplicity in the test.
     """
-    from agent_context_test_b import agent_b
+    from agent_context_manual_b import agent_b
 
     api_key_b = os.getenv("API_KEY_B", "test-key-agent-b")
     port      = int(os.getenv("PORT", "8012"))
@@ -102,9 +102,9 @@ def build_app_a(secure: bool = False) -> FastAPI:
     """
     Server A — root agent that delegates to B.
 
-    secure=False (default): uses agent_context_test_a.agent_a — plain
+    secure=False (default): uses agent_context_manual_a.agent_a — plain
         delegation via ContextualRemoteA2aAgent (unencrypted /a2a traffic).
-    secure=True: uses agent_context_test_a_secure.agent_a_secure —
+    secure=True: uses agent_context_manual_a_secure.agent_a_secure —
         encrypted delegation via ContextualSecureRemoteA2aAgent
         (/secure-a2a traffic, lazy PQC handshake towards B on first use).
 
@@ -116,9 +116,9 @@ def build_app_a(secure: bool = False) -> FastAPI:
     /secure-a2a towards ITS callers, not A's calls towards B).
     """
     if secure:
-        from agent_context_test_a_secure import agent_a_secure as agent_a
+        from agent_context_manual_a_secure import agent_a_secure as agent_a
     else:
-        from agent_context_test_a import agent_a
+        from agent_context_manual_a import agent_a
 
     api_key_a = os.getenv("API_KEY_A", "test-key-agent-a")
     port      = int(os.getenv("PORT", "8011"))

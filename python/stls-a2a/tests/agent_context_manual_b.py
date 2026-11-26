@@ -1,5 +1,5 @@
 """
-agent_context_test_b.py
+agent_context_manual_b.py
 -----------------------
 Agent B — user context diagnostics.
 

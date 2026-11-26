@@ -5,16 +5,27 @@ exercising a different slice of the SDK end to end (real servers, real
 key providers, no mocks). See below for each one.
 
 - [Context Propagation Test](#context-propagation-test) — user context survives client → agent A → agent B.
-- [Key Provider Stress Test](#key-provider-stress-test-key_providers_testpy-vs-multi_agent_serverpy) — concurrent session/key isolation under load, against `multi_agent_server.py`.
-- [Task Lifecycle Test](#task-lifecycle-test-task_testpy-vs-multi_agent_serverpy) — full A2A task lifecycle, auth, and real incremental streaming, against `multi_agent_server.py`.
-- [Key Management Test](#key-management-test-test_km_clientpy-vs-multi_agent_km_serverpy) — `ApiKeyManager` with 3 independent auth backends (Static/File/Postgres) plus legacy `AuthConfig`, against `multi_agent_km_server.py`.
+- [Key Provider Stress Test](#key-provider-stress-test-key_providers_manualpy-vs-multi_agent_serverpy) — concurrent session/key isolation under load, against `multi_agent_server.py`.
+- [Task Lifecycle Test](#task-lifecycle-test-task_manualpy-vs-multi_agent_serverpy) — full A2A task lifecycle, auth, and real incremental streaming, against `multi_agent_server.py`.
+- [Key Management Test](#key-management-test-km_client_manualpy-vs-multi_agent_km_serverpy) — `ApiKeyManager` with 3 independent auth backends (Static/File/Postgres) plus legacy `AuthConfig`, against `multi_agent_km_server.py`.
+
+All scripts in this directory are manual, real-infra integration
+scripts (real servers, real key providers, no mocks) — hence the
+`_manual.py` suffix, which keeps them out of pytest's default
+collection glob (`test_*.py` / `*_test.py`). The **real, CI-gated**
+`pytest` suite for `stls-a2a` lives alongside them in this same
+directory (`test_*.py` / `*_test.py` files, e.g.
+`a2a_protocol_conformance_test.py`, `identity_presentation_test.py`) —
+see issue #59: it mocks out real infra by default (in-memory
+`TaskStore`, a `MockAgent`, no Redis/Postgres/LLM) instead of needing
+any of the manual setup documented below.
 
 Other files that were in this directory and have been removed as either
 obsolete or redundant with the tests above: `arqit_client_test.py` /
 `arqit_server_test.py` (used the JVM/JPype `'arqit'` provider, removed
 since `stls-a2a` 0.1.3 — see the main [README](../README.md)),
 `multi_agent_client.py` / `multi_agent_client_simple.py` (manual
-clients superseded by `task_test.py` / `key_providers_test.py`),
+clients superseded by `task_manual.py` / `key_providers_manual.py`),
 `multi_agent_server_simple.py` (lighter variant of `multi_agent_server.py`
 with no scenario of its own), and `server_adk.py` / `server_lc.py` /
 `server_sk.py` / `server_invoices_class.py` (single-agent demo servers
@@ -31,15 +42,15 @@ propagation channel (`message.metadata` vs static `X-STLS-*` headers).
 
 | File | Role |
 |---|---|
-| [`server_context_test.py`](./server_context_test.py) | FastAPI server launcher. Exposes agent A **or** agent B depending on `--agent {a,b}`. |
-| [`agent_context_test_b.py`](./agent_context_test_b.py) | Agent B definition — a diagnostic Google ADK agent. Its only tool (`get_user_context`) reads `user_id`/`profile` back out of `tool_context.state` and the agent echoes them as JSON. |
-| [`agent_context_test_a.py`](./agent_context_test_a.py) | Agent A definition (plain delegation) — root ADK agent with two sub-agents pointed at B: `agent_b` (context via `ContextualRemoteA2aAgent`, plain `/a2a`) and `agent_b_static` (context via static `X-STLS-*` headers on the same httpx client, no per-request metadata). |
-| [`agent_context_test_a_secure.py`](./agent_context_test_a_secure.py) | Same scenario as above, but A delegates to B over the encrypted `/secure-a2a` channel (`ContextualSecureRemoteA2aAgent`, lazy PQC handshake). Used via `server_context_test.py --agent a --secure`. |
-| [`client_context_test.py`](./client_context_test.py) | Test client. Drives 6 scenarios against agent A and asserts the context round-tripped unchanged. |
+| [`server_context_manual.py`](./server_context_manual.py) | FastAPI server launcher. Exposes agent A **or** agent B depending on `--agent {a,b}`. |
+| [`agent_context_manual_b.py`](./agent_context_manual_b.py) | Agent B definition — a diagnostic Google ADK agent. Its only tool (`get_user_context`) reads `user_id`/`profile` back out of `tool_context.state` and the agent echoes them as JSON. |
+| [`agent_context_manual_a.py`](./agent_context_manual_a.py) | Agent A definition (plain delegation) — root ADK agent with two sub-agents pointed at B: `agent_b` (context via `ContextualRemoteA2aAgent`, plain `/a2a`) and `agent_b_static` (context via static `X-STLS-*` headers on the same httpx client, no per-request metadata). |
+| [`agent_context_manual_a_secure.py`](./agent_context_manual_a_secure.py) | Same scenario as above, but A delegates to B over the encrypted `/secure-a2a` channel (`ContextualSecureRemoteA2aAgent`, lazy PQC handshake). Used via `server_context_manual.py --agent a --secure`. |
+| [`client_context_manual.py`](./client_context_manual.py) | Test client. Drives 6 scenarios against agent A and asserts the context round-tripped unchanged. |
 
 ### What each of the 6 test cases checks
 
-Run from `client_context_test.py`'s `main()`:
+Run from `client_context_manual.py`'s `main()`:
 
 1. **Encrypted STLS, sync** — `message.metadata.user_id/profile`, over `SecureA2ATransportAdapter.send_secure_message()`.
 2. **Plain A2A, sync** — same metadata, plain HTTP JSON-RPC.
@@ -66,12 +77,12 @@ text, and the client parses + compares it against the expected values.
   scenario. The `--secure` variant additionally requires **agent B** to
   run with `KEY_PROVIDER_NAME=pqc`, so it exposes the
   `/stls/pqc/handshake` endpoint that A's encrypted delegation needs.
-- **`client_context_test.py` must run with `KEY_PROVIDER_NAME=base`
+- **`client_context_manual.py` must run with `KEY_PROVIDER_NAME=base`
   (or `arqit_py`), never `pqc`.** Its own client→A session setup uses
   the generic `get_session_provider().getSessionKeyIdentifier()`
   pattern, which assumes a key that's available immediately — `pqc`
   instead derives the key via an explicit KEM handshake
-  (`create_pqc_a2a_transport()`, used by `key_providers_test.py`
+  (`create_pqc_a2a_transport()`, used by `key_providers_manual.py`
   below), so calling `getSessionKeyIdentifier()` directly on it fails
   with `RuntimeError: kid not available — inject_key() or
   setSessionKeyIdentifier() not yet called`. `pqc` is only valid here on
@@ -80,11 +91,11 @@ text, and the client parses + compares it against the expected values.
   ports warning below for the mechanism), if `.env`'s
   `KEY_PROVIDER_NAME` was left set to `pqc` from testing the stress test
   further down, override it explicitly:
-  `KEY_PROVIDER_NAME=base python client_context_test.py`.
+  `KEY_PROVIDER_NAME=base python client_context_manual.py`.
 
 ### ⚠️ `.env` overrides the default ports
 
-`server_context_test.py` calls `load_dotenv()`, and this project's
+`server_context_manual.py` calls `load_dotenv()`, and this project's
 `.env` sets `PORT=8001`. Since `python-dotenv` does not override
 variables already present in the environment, this means:
 
@@ -93,7 +104,7 @@ variables already present in the environment, this means:
 - If you **do** pass `PORT=8002` explicitly on the command line (as
   shown below for agent B), your value wins over `.env`.
 
-`client_context_test.py` does **not** load `.env` — its
+`client_context_manual.py` does **not** load `.env` — its
 `BASE_URL_A` default is `http://localhost:8011`. So unless you
 explicitly export `PORT` when starting agent A, you must also pass
 `BASE_URL_A=http://localhost:8001` to the client, or the first request
@@ -112,14 +123,14 @@ show the venv of *this* repo).
 ```bash
 cd python/stls-a2a/tests
 PORT=8002 BASE_URL=http://localhost:8002 KEY_PROVIDER_NAME=base \
-    python server_context_test.py --agent b
+    python server_context_manual.py --agent b
 ```
 
 **Terminal 2 — agent A (plain delegation to B, the default):**
 
 ```bash
 cd python/stls-a2a/tests
-KEY_PROVIDER_NAME=base python server_context_test.py --agent a
+KEY_PROVIDER_NAME=base python server_context_manual.py --agent a
 ```
 
 Wait for both to print `Application startup complete` before moving on.
@@ -128,7 +139,7 @@ Wait for both to print `Application startup complete` before moving on.
 
 ```bash
 cd python/stls-a2a/tests
-KEY_PROVIDER_NAME=base BASE_URL_A=http://localhost:8001 python client_context_test.py
+KEY_PROVIDER_NAME=base BASE_URL_A=http://localhost:8001 python client_context_manual.py
 ```
 
 Expected output: all 6 cases print ✅ and the run ends with:
@@ -139,16 +150,16 @@ Expected output: all 6 cases print ✅ and the run ends with:
 
 #### Encrypted delegation variant (`--secure`)
 
-To exercise `agent_context_test_a_secure.py` instead, start agent B
+To exercise `agent_context_manual_a_secure.py` instead, start agent B
 with `KEY_PROVIDER_NAME=pqc` and pass `--secure` to agent A:
 
 ```bash
 # Terminal 1 — agent B, now with PQC handshake endpoint enabled
 PORT=8002 BASE_URL=http://localhost:8002 KEY_PROVIDER_NAME=pqc \
-    python server_context_test.py --agent b
+    python server_context_manual.py --agent b
 
 # Terminal 2 — agent A, encrypted delegation to B
-KEY_PROVIDER_NAME=base python server_context_test.py --agent a --secure
+KEY_PROVIDER_NAME=base python server_context_manual.py --agent a --secure
 ```
 
 The client command is unchanged — it talks to A the same way either
@@ -166,7 +177,7 @@ way; only A → B's internal transport differs.
 | `STLS_PORT_A` / `STLS_PORT_B` | server + client | `8091` / `8092` | STLS key-session provider port, independent of the HTTP `PORT` |
 | `KEY_PROVIDER_NAME` | both servers | `base` | `pqc` required on **B** for the `--secure` variant |
 
-## Key Provider Stress Test (`key_providers_test.py` vs `multi_agent_server.py`)
+## Key Provider Stress Test (`key_providers_manual.py` vs `multi_agent_server.py`)
 
 Stress-tests a `KeyProvider` (`arqit_py` or `pqc`) for **session/key
 isolation under concurrency**: many sessions opened in parallel on the
@@ -177,7 +188,7 @@ material, even under load.
 
 | File | Role |
 |---|---|
-| [`key_providers_test.py`](./key_providers_test.py) | The test itself (not a class — a standalone async script). See below. |
+| [`key_providers_manual.py`](./key_providers_manual.py) | The test itself (not a class — a standalone async script). See below. |
 | [`multi_agent_server.py`](./multi_agent_server.py) | Target server: mounts 5 agents behind secure A2A endpoints, including `adk-agent` — a Google ADK `financial_agent` with a `get_stock_price` tool (`yfinance`), used as the test's call target. |
 | [`adk_google_agents.py`](./adk_google_agents.py), [`invoices_agents.py`](./invoices_agents.py) | Local modules `multi_agent_server.py` imports (for the `adk-agent` and `invoices-classifier` endpoints respectively). **Not committed if missing** — if you hit `ModuleNotFoundError` for either, they need to be restored before the server can start. |
 
@@ -231,7 +242,7 @@ Wait for `Uvicorn running on http://0.0.0.0:8001`.
 ```bash
 cd python/stls-a2a/tests
 KEY_PROVIDER_NAME=pqc BASE_URL=http://localhost:8001 AGENT_PATH=/agents/adk-agent \
-    python key_providers_test.py
+    python key_providers_manual.py
 ```
 
 Expected output: Test A prints 2 distinct `kid`s/keys; Test B ends with
@@ -243,7 +254,7 @@ Expected output: Test A prints 2 distinct `kid`s/keys; Test B ends with
 
 To target `arqit_py` instead, swap `KEY_PROVIDER_NAME=pqc` for
 `KEY_PROVIDER_NAME=arqit_py` on **both** commands (it's also
-`key_providers_test.py`'s own default when the variable isn't set) —
+`key_providers_manual.py`'s own default when the variable isn't set) —
 requires real connectivity to the Arqit realm configured in
 `aq-sf-*.json`.
 
@@ -256,7 +267,7 @@ reply from the `get_stock_price` tool itself (`yfinance` rate-limit/
 glitch on that one ticker) — unrelated to key/session handling, not a
 test failure.
 
-## Task Lifecycle Test (`task_test.py` vs `multi_agent_server.py`)
+## Task Lifecycle Test (`task_manual.py` vs `multi_agent_server.py`)
 
 The most comprehensive script in this directory: exercises the full
 A2A task lifecycle, server-side authorization, and true incremental
@@ -314,7 +325,7 @@ venv.)
   makes real, billed model calls.
 - `brotli` must **not** be installed (see the conflict above).
 - `KEY_PROVIDER_NAME=base` (the script's own default) — like
-  `client_context_test.py`, its session setup uses
+  `client_context_manual.py`, its session setup uses
   `get_session_provider().getSessionKeyIdentifier()` directly, which
   doesn't work with `pqc` (would need the explicit
   `create_pqc_a2a_transport()` handshake instead, done conditionally
@@ -339,7 +350,7 @@ http://0.0.0.0:8001`:
 
 ```bash
 cd python/stls-a2a/tests
-KEY_PROVIDER_NAME=base python task_test.py
+KEY_PROVIDER_NAME=base python task_manual.py
 ```
 
 Expected output: every sub-case prints ✅, ending with:
@@ -363,7 +374,7 @@ was confirmed to stream incrementally (first chunk at 1.68s vs. 5.02s
 total). Required uninstalling `brotli` first (see the conflict above) —
 without that, `lc-agent`/`sk-agent` fail at the first call.
 
-## Key Management Test (`test_km_client.py` vs `multi_agent_km_server.py`)
+## Key Management Test (`km_client_manual.py` vs `multi_agent_km_server.py`)
 
 Validates `ApiKeyManager` with **three independent, concurrently-running
 auth backends** on the same server, plus the legacy `AuthConfig` path,
@@ -376,7 +387,7 @@ the full A2A method surface, SSE, multi-turn `contextId`, and the raw
 | File | Role |
 |---|---|
 | [`multi_agent_km_server.py`](./multi_agent_km_server.py) | Server: 5 agents, each on a different auth backend — `calculator` → `StaticLoader` (keys generated fresh at every startup), `adk-agent` → `FileLoader` (`api_keys.yaml`), `lc-agent` → `PostgresLoader` (`AUTH_PG_DSN`) or legacy `AuthConfig` if unset, `sk-agent` → legacy `AuthConfig`, `invoices-classifier` → no auth. Also exposes `/auth/health` and `/auth/refresh` (`ApiKeyManagerGroup`). |
-| [`test_km_client.py`](./test_km_client.py) | The test client: 6 suites (`diag`, `auth`, `a2a`, `sse`, `context`, `secure`), selectable individually via `--suite`. |
+| [`km_client_manual.py`](./km_client_manual.py) | The test client: 6 suites (`diag`, `auth`, `a2a`, `sse`, `context`, `secure`), selectable individually via `--suite`. |
 
 ### What it checks
 
@@ -401,7 +412,7 @@ never exercised until now:
   top-level `stls_a2a` package. **Fixed**: merged into the existing
   `from stls_a2a import (...)` block. Without this fix the server
   doesn't even start (`ModuleNotFoundError` at import time).
-- `test_km_client.py`'s `_build_stls_client()` imported
+- `km_client_manual.py`'s `_build_stls_client()` imported
   `from stls_a2a.stls_a2a_provider import KeySessionProviderFactory, KeySessionProvider`
   — same issue, no such submodule. **Fixed**: `KeySessionProviderFactory`,
   `KeySessionProvider`, and `SecureA2ATransportAdapter` are all
@@ -421,8 +432,8 @@ loop`), `_build_stls_client()` catches the exception and returns
 `None`, and the caller treats that as "provider unavailable" → skip.
 This isn't a `stls_a2a`/`stls_core` bug — `resolve_if_awaitable()` is
 documented as a sync convenience for top-level scripts (see how
-`client_context_test.py`/`task_test.py` use it at module level, outside
-any event loop); `test_km_client.py` is just calling it from the wrong
+`client_context_manual.py`/`task_manual.py` use it at module level, outside
+any event loop); `km_client_manual.py` is just calling it from the wrong
 context. The STLS-encrypted channel itself is already thoroughly
 covered elsewhere (Context Propagation Test, Task Lifecycle Test), so
 this was left as a known gap rather than reworked into an async call
@@ -473,7 +484,7 @@ server is up.
 ```bash
 cd python/stls-a2a/tests
 TEST_STATIC_KEY=<paste KEY_1 here> KEY_PROVIDER_NAME=base \
-    python test_km_client.py --verbose
+    python km_client_manual.py --verbose
 ```
 
 Run a single suite instead of all six with `--suite {diag,auth,a2a,sse,context,secure}`.

@@ -1,5 +1,5 @@
 """
-test_km_client.py
+km_client_manual.py
 -----------------
 Complete test client for multi_agent_km_server.py.
 
@@ -10,13 +10,13 @@ Startup:
     uv run python multi_agent_km_server.py
 
     # then in another terminal
-    uv run python test_km_client.py
+    uv run python km_client_manual.py
 
     # or with options:
-    uv run python test_km_client.py --host localhost --port 8001 --verbose
-    uv run python test_km_client.py --suite auth     # authentication tests only
-    uv run python test_km_client.py --suite a2a      # A2A method tests only
-    uv run python test_km_client.py --suite diag     # diagnostics only
+    uv run python km_client_manual.py --host localhost --port 8001 --verbose
+    uv run python km_client_manual.py --suite auth     # authentication tests only
+    uv run python km_client_manual.py --suite a2a      # A2A method tests only
+    uv run python km_client_manual.py --suite diag     # diagnostics only
 """
 
 from __future__ import annotations

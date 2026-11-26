@@ -15,11 +15,19 @@ name: Publish Python packages
 # stls-identity tests need a real Postgres/Redis (test_bridge.py,
 # test_keystore_redis.py, test_postgres_store.py, test_status_list_redis.py,
 # test_trust_registry.py) and are --ignore'd here; a slower infra-backed
-# gate is out of scope for this issue (see #57). stls-a2a has no
-# automated pytest suite at all yet (its tests/ directory is manual,
-# real-infra integration scripts using print/bool instead of assert, so
-# pytest would "pass" them even on a real failure — see #59) —
-# matrix.run_tests is false for it until #59 is done.
+# gate is out of scope for this issue (see #57).
+#
+# stls-a2a (issue #59, closed): tests/ used to be all manual, real-infra
+# integration scripts using print/bool instead of assert, so pytest would
+# "pass" them even on a real failure. Converted to a real assert-based
+# pytest suite that mocks out real infra by default (in-memory TaskStore,
+# a MockAgent, monkeypatched ADK runners) and renamed every genuinely
+# manual script out of pytest's collection glob (*_manual.py) — see
+# python/stls-a2a/tests/README.md. No --ignore needed: the whole
+# collectible suite is infra-free.
+#
+# This same test step (minus build/publish/tag) also runs on every push
+# and PR via python-tests.yml (issue #57), independent of a version bump.
 on:
   push:
     branches: [main]
@@ -49,7 +57,7 @@ jobs:
           - dir: python/stls-a2a
             dist_name: stls_a2a
             pypi_environment: pypi-stls-a2a
-            run_tests: false # no automated pytest suite yet — see #59
+            run_tests: true
             test_args: ""
           - dir: python/stls-identity
             dist_name: stls-identity

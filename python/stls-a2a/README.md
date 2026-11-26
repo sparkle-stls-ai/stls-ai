@@ -486,15 +486,15 @@ this — the real, runnable entry points are the integration scripts in
 [`tests/README.md`](./tests/README.md) for full prerequisites,
 expected output, and known limitations of each):
 
-1. **Context Propagation Test** (`server_context_test.py` + `client_context_test.py`) —
+1. **Context Propagation Test** (`server_context_manual.py` + `client_context_manual.py`) —
    user context (`user_id`/`profile`) survives client → agent A → agent B,
    across plain/encrypted transport, sync/SSE, and both propagation channels.
-2. **Key Provider Stress Test** (`key_providers_test.py` vs `multi_agent_server.py`) —
+2. **Key Provider Stress Test** (`key_providers_manual.py` vs `multi_agent_server.py`) —
    concurrent session/key isolation under load for `arqit_py`/`pqc`.
-3. **Task Lifecycle Test** (`task_test.py` vs `multi_agent_server.py`) —
+3. **Task Lifecycle Test** (`task_manual.py` vs `multi_agent_server.py`) —
    the full A2A task lifecycle, server-side authorization, and true
    incremental streaming across `adk-agent`, `lc-agent`, and `sk-agent`.
-4. **Key Management Test** (`test_km_client.py` vs `multi_agent_km_server.py`) —
+4. **Key Management Test** (`km_client_manual.py` vs `multi_agent_km_server.py`) —
    `ApiKeyManager` with three independent auth backends (Static/File/Postgres)
    plus legacy `AuthConfig`, discovery, auth, SSE, and multi-turn `contextId`.
 
@@ -813,7 +813,7 @@ params = {
 }
 ```
 
-A real example is available in [tests/task_test.py](./tests/task_test.py), where the client sends a PDF to the `invoices-classifier` agent.
+A real example is available in [tests/task_manual.py](./tests/task_manual.py), where the client sends a PDF to the `invoices-classifier` agent.
 
 A2A 1.0 clients send files in a different, flatter shape — `{"raw": base64, "filename": ..., "mediaType": ...}` or `{"url": ..., "filename": ..., "mediaType": ...}`, no `"file"` wrapper at all — which is also accepted (see "Using Standard A2A Methods" above). `FilePart`s are echoed back (e.g. in `Task.history`) carrying both shapes at once, so either kind of client can read them.
 
@@ -893,7 +893,7 @@ See issue #14 and `CHANGELOG.md` 0.1.8.
 Practical examples:
 
 - [tests/multi_agent_server.py](./tests/multi_agent_server.py)
-- [tests/task_test.py](./tests/task_test.py)
+- [tests/task_manual.py](./tests/task_manual.py)
 
 ## Logging and Troubleshooting
 
@@ -933,6 +933,32 @@ Operational suggestions:
     - **Cross-process device-identity conflict — confirmed real, not just the same-process race above (issue #38, 2026-11-19).** The `_ARQIT_PY_START_LOCK` fix two bullets up is a `threading.Lock`, process-local by construction — it cannot and does not protect two separate OS processes (e.g. horizontally-scaled replicas in K8s) from both authenticating the SAME `arqit_py` device identity. Confirmed by direct reproduction: two replica processes, each with its own local copy of one device's credentials, calling `start()` **sequentially** (not even concurrently) — the second one got rejected with "Terminal authentication failure, factory reset back to bootstrap key" from the real Arqit cloud, and the device stayed broken for every subsequent process using that credential until it was manually deregistered and re-registered. **Fix**, in `stls-core` 0.1.10: `ARQIT_PY_DEVICE_ROLE=consumer` lets a replica resolve session keys from the shared Redis-backed store without ever authenticating the device itself, and a device-level owner lock (`ArqitKeyStoreFactory.build_owner_lock_store()`) makes a second independent owner fail fast instead of repeating the incident. Both are read inside `KeySessionProviderFactory.get_session_provider()`, so `SecureSessionManager` picks them up with no code change here. See `python/stls-core/README.md`'s own `arqit_py` section and `samples/server/16_server_device_agent/README.md` for the runnable end-to-end demo (one device-agent process + two consumer `server.py` replicas sharing one device).
     - `KEY_SESSION_HOST`/`KEY_SESSION_PORT` have **no effect at all** on `arqit_py`, on either side: `KeyProviderArqitPy.create_provider_client(host, port, options)` and `create_provider_server(port, options)` never read their `host`/`port` arguments (`stls_core_providers_arqit_py.py:481-509`). The real peer address/port always comes from the JSON config (`SOCKET_RECEIVER_IP_ADDRESS`/`PORT` on the client side, `SOCKET_LISTENING_PORT` on the server side) — a comment in `stls-mcp/tests/vault_server.py` used to claim `KEY_SESSION_PORT` drives the server's listening port, which is stale/inaccurate for `arqit_py` and has been corrected.
     - `ARQIT_PY_TRANSPORT` (`"socket"` default | `"mqtt"`) is read identically by both sides via `KeyProviderArqitPy._get_transport()` and must be set consistently on client and server (and match the corresponding `SOCKET_*`/`MQTT_*` fields in their respective JSON configs) — it is a process-wide transport choice, not something that varies per counterpart.
+
+## Testing
+
+```bash
+uv pip install -e ".[dev]"
+pytest
+```
+
+A real, assert-based `pytest` suite (issue #59) — `fakeredis`-free,
+Redis/Postgres-free, LLM-free: in-memory `TaskStore`, a `MockAgent`,
+monkeypatched ADK runners, and real FastAPI apps exercised in-process
+via `httpx.ASGITransport` (no server process, no network). Covers A2A
+protocol conformance (issue #14), the identity-presentation hook
+(issue #15), the file-URI SSRF guard and error-surfacing fix for
+`GoogleADKAdapter` (issue #45), and the in-memory `TaskStore`.
+
+Runs automatically on every push/PR via
+[`python-tests.yml`](../../.github/workflows/python-tests.yml), and
+again as a release gate before publishing via
+[`publish-python.yml`](../../.github/workflows/publish-python.yml).
+
+[`tests/`](./tests) also holds a separate category of **manual**,
+real-infra integration scripts (`*_manual.py` — real servers, real key
+providers, real LLM calls, no mocks) — see
+[tests/README.md](./tests/README.md) for what each one needs and how
+to run it. These are not automated and don't run in CI.
 
 ## Useful Files in This Folder
 

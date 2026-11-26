@@ -56,6 +56,13 @@ examples = [
     "yfinance>=1.2.0",
 ]
 
+# Install:  uv pip install -e ".[dev]"
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+]
+
 # Redis cache for ApiKeyManager (RedisKeyCache, BackgroundRefresher) and
 # PostgresLoader. Pass-through to stls-core's extra of the same name.
 # Install:  uv pip install -e ".[redis]"
@@ -98,6 +105,21 @@ all = [
     "yfinance>=1.2.0",
     "stls_core[redis]",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+log_cli = true
+log_cli_level = "WARNING"
+# The tests/ directory also holds manual, real-infra integration
+# scripts (servers, stress tests, multi-process scenarios — see
+# tests/README.md) that intentionally don't match pytest's collection
+# glob (test_*.py / *_test.py) — nothing to ignore here beyond that.
+
+[tool.coverage.run]
+source = ["src/stls_a2a"]
+omit = ["tests/*"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

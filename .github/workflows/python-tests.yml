@@ -1,0 +1,77 @@
+name: Python package tests
+
+# Runs each Python package's OWN test suite on every push/PR that
+# touches it — independent of any version bump or publish (that's
+# publish-python.yml's job, which runs this same gate but only
+# post-merge on main, scoped to a changed-version package). See issue
+# #57: before this workflow, python/stls-identity and python/stls-a2a
+# had zero CI coverage at all; python/stls-core and python/stls-mcp
+# only had the narrower cross-language interop subset (see
+# stls-core-node-interop.yml / stls-mcp-node-interop.yml), never their
+# own full suite.
+#
+# Scoped, like publish-python.yml's gate (#56), to fast, no-external-
+# infra tests only — a handful of stls-identity tests need a real
+# Postgres/Redis (test_bridge.py, test_keystore_redis.py,
+# test_postgres_store.py, test_status_list_redis.py,
+# test_trust_registry.py) and are --ignore'd here too, for the same
+# reason: no service containers in this workflow. A slower,
+# infra-backed layer (service containers, mirroring what
+# stls-core-node-interop.yml already sets up for Redis/Postgres) can
+# be added later if that gap starts to matter.
+on:
+  push:
+    paths:
+      - "python/stls-core/**"
+      - "python/stls-a2a/**"
+      - "python/stls-identity/**"
+      - "python/stls-mcp/**"
+      - ".github/workflows/python-tests.yml"
+  pull_request:
+    paths:
+      - "python/stls-core/**"
+      - "python/stls-a2a/**"
+      - "python/stls-identity/**"
+      - "python/stls-mcp/**"
+      - ".github/workflows/python-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: python/stls-core
+            test_args: ""
+          - dir: python/stls-a2a
+            test_args: ""
+          - dir: python/stls-identity
+            # Excluded: need a real Postgres/Redis, out of scope for
+            # this no-infra gate (same list as publish-python.yml).
+            test_args: >-
+              --ignore=tests/test_bridge.py
+              --ignore=tests/test_keystore_redis.py
+              --ignore=tests/test_postgres_store.py
+              --ignore=tests/test_status_list_redis.py
+              --ignore=tests/test_trust_registry.py
+          - dir: python/stls-mcp
+            test_args: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev dependencies
+        working-directory: ${{ matrix.dir }}
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        working-directory: ${{ matrix.dir }}
+        run: pytest ${{ matrix.test_args }}

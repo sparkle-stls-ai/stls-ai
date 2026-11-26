@@ -1,0 +1,75 @@
+name: Node package tests
+
+# Runs each Node package's OWN test suite (its "smoke" scripts — unit-
+# level and infra-error-path checks, no real Postgres or Arqit cloud
+# involved) on every push/PR that touches it. See issue #57: until this
+# workflow, node/stls-core and node/stls-mcp only ever had their
+# cross-language interop subset run in CI (stls-core-node-interop.yml /
+# stls-mcp-node-interop.yml's tests/interop/* scripts) — their own
+# `npm run test` chain (crypto/auth/handshake/atrest/session/
+# provider-factory/postgres-loader smoke tests for stls-core;
+# transport-retry smoke test for stls-mcp) never ran here at all.
+#
+# node/stls-identity and node/stls-a2a don't exist yet (see issues
+# #30/#47), so this is scoped to the two Node packages that do.
+#
+# A single Redis service container is needed: node/stls-core's
+# auth/session smoke scripts dial a real Redis (TEST_REDIS_URL) to
+# exercise RedisKeyCache/RedisSessionCache directly — same container
+# convention (port 6399) stls-core-node-interop.yml already uses.
+# Everything else in both packages' `npm run test` chains is either
+# pure in-process logic or deliberately checks the soft-fail path with
+# no real backend reachable (e.g. postgres-loader.smoke.ts).
+on:
+  push:
+    paths:
+      - "node/stls-core/**"
+      - "node/stls-mcp/**"
+      - ".github/workflows/node-tests.yml"
+  pull_request:
+    paths:
+      - "node/stls-core/**"
+      - "node/stls-mcp/**"
+      - ".github/workflows/node-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [node/stls-core, node/stls-mcp]
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6399:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      TEST_REDIS_URL: redis://localhost:6399
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install + build
+        working-directory: ${{ matrix.dir }}
+        run: |
+          npm install
+          npm run build
+
+      - name: Run tests
+        working-directory: ${{ matrix.dir }}
+        run: npm run test

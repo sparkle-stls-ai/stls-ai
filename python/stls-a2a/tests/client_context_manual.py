@@ -1,5 +1,5 @@
 """
-client_context_test.py
+client_context_manual.py
 -----------------------
 Test client for verifying user context propagation.
 
@@ -11,7 +11,7 @@ In both cases, verifies that agent_b received the user_id and profile
 propagated by A via ContextualRemoteA2aAgent.
 
 Startup (after starting server B and server A):
-  python client_context_test.py
+  python client_context_manual.py
 
 Environment variables:
   BASE_URL_A    URL of server A (default: http://localhost:8001)
@@ -450,7 +450,7 @@ async def test_secure_stream_channel() -> bool:
 
 # ── Test 5: static X-STLS-* headers — plain channel ───────────────────────────
 
-# Values mirroring STATIC_USER_ID / STATIC_PROFILE in agent_context_test_a.py
+# Values mirroring STATIC_USER_ID / STATIC_PROFILE in agent_context_manual_a.py
 STATIC_USER_ID = "service-account-agent-a@tim-sparkle.com"
 STATIC_PROFILE = {"tenant": "tim-sparkle", "role": "service", "department": "AI-Platform"}
 

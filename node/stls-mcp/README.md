@@ -280,6 +280,11 @@ The manual, step-by-step sections below show exactly what the script
 automates — useful for understanding the moving parts or debugging a single
 step in isolation, but the script is the one to actually run day to day.
 
+This package's own suite (`npm run test`, currently just the
+transport-retry smoke test) runs on every push/PR via
+[`node-tests.yml`](../../.github/workflows/node-tests.yml), separately
+from the interop script above — no infra needed.
+
 ### Node-only, same-language
 
 ```bash
