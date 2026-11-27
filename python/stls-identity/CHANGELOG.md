@@ -2,6 +2,45 @@
 
 All relevant changes to this package, in reverse chronological order.
 
+## [0.1.5] — 2026-11-27
+
+Issue #65 audit, extended here from `stls-mcp`/`stls-a2a`: checked
+every `try/except ImportError` guard and every unconditional import
+against what `pyproject.toml` actually declares as mandatory vs.
+optional. `python/stls-core`, `node/stls-core`, and `node/stls-identity`
+came back clean; this package had two real, distinct issues.
+
+### Fixed
+
+- `stls_id_keystore.py`, `stls_id_credential_cache.py` (both classes),
+  `stls_id_postgres_store.py` (both stores), `stls_id_trust_registry_store.py`
+  — six `try/except ImportError` guards around `redis`/`asyncpg`
+  imports, as if either might be absent. Both are already MANDATORY
+  dependencies here (`redis>=5.0`, `asyncpg>=0.29` in `dependencies`,
+  no extras group) — dead code, same class of bug found in
+  `stls-mcp`'s 0.1.9. Now plain, unconditional module-level imports;
+  they fail loudly instead of silently degrading if `stls_core`'s own
+  install is ever genuinely broken.
+- `httpx` was declared only in the `[dev]` extra, while
+  `stls_id_status.py` (`fetch_status_bit()`/
+  `fetch_remote_credential_status()`) imports it unconditionally at
+  module level, reachable from `__init__.py`. This worked today only
+  because `stls_core`'s own mandatory dependencies happen to pull in
+  `httpx` transitively (confirmed with a clean venv installing ONLY
+  this package's own declared deps) — fragile, not something this
+  package should rely on staying true. `httpx>=0.27` moved to the main
+  `dependencies`.
+
+`node/stls-identity` was audited too and found already clean (its own
+`pg` dynamic import is correctly in `optionalDependencies`, everything
+else is a genuinely-mandatory static import) — no change needed there,
+version bumped anyway to stay numerically aligned with this release.
+
+Also corrected `__version__` in `__init__.py` again — it had drifted
+back to `"0.1.3"` despite 0.1.4's changelog recording the same fix;
+this is the second time, so treat this constant as untrustworthy until
+it's generated from `pyproject.toml` instead of hand-maintained.
+
 ## [0.1.4] — 2026-11-23
 
 Issue #54 — a Requestor-side loader to present a received delegation

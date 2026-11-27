@@ -48,6 +48,8 @@ import os
 from abc import ABC, abstractmethod
 from typing import Any
 
+import asyncpg
+
 from .stls_id_models import DIDDocument, StatusListCredential
 
 logger = logging.getLogger(__name__)
@@ -121,14 +123,6 @@ class PostgresDIDDocumentStore(DIDDocumentStoreBase):
     async def _get_pool(self) -> Any:
         if self._pool is not None:
             return self._pool
-        try:
-            import asyncpg  # type: ignore
-        except ImportError as exc:
-            raise RuntimeError(
-                "PostgresDIDDocumentStore requires asyncpg. "
-                "Install with: uv add asyncpg"
-            ) from exc
-
         if not self._dsn:
             raise RuntimeError("PostgresDIDDocumentStore: IDENTITY_PG_DSN not configured.")
 
@@ -249,14 +243,6 @@ class PostgresStatusListCacheStore(StatusListCacheStoreBase):
     async def _get_pool(self) -> Any:
         if self._pool is not None:
             return self._pool
-        try:
-            import asyncpg  # type: ignore
-        except ImportError as exc:
-            raise RuntimeError(
-                "PostgresStatusListCacheStore requires asyncpg. "
-                "Install with: uv add asyncpg"
-            ) from exc
-
         if not self._dsn:
             raise RuntimeError("PostgresStatusListCacheStore: IDENTITY_PG_DSN not configured.")
 

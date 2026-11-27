@@ -36,6 +36,7 @@ import os
 from abc import ABC, abstractmethod
 from typing import Any
 
+import asyncpg
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -194,13 +195,6 @@ class PostgresTrustAnchorRegistryStore(TrustAnchorRegistryStoreBase):
     async def _get_pool(self) -> Any:
         if self._pool is not None:
             return self._pool
-        try:
-            import asyncpg  # type: ignore
-        except ImportError as exc:
-            raise RuntimeError(
-                "PostgresTrustAnchorRegistryStore requires asyncpg. "
-                "Install with: uv add asyncpg"
-            ) from exc
 
         if not self._dsn:
             raise RuntimeError("PostgresTrustAnchorRegistryStore: IDENTITY_PG_DSN not configured.")

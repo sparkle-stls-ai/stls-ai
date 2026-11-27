@@ -30,6 +30,8 @@ import json
 import os
 from abc import ABC, abstractmethod
 
+import redis as redis_lib
+
 from .stls_id_models import NetworkAuthorityCredential, OperationalCredential
 
 
@@ -94,13 +96,6 @@ class RedisIdentityCredentialCache(IdentityCredentialCacheBase):
         redis_url: str = "redis://localhost:6379",
         namespace: str = "stls:identity:credential",
     ) -> None:
-        try:
-            import redis as redis_lib
-        except ImportError as exc:
-            raise ImportError(
-                "redis>=5.0 is required for IDENTITY_CREDENTIAL_CACHE_BACKEND=redis. "
-                "Install with: pip install 'redis>=5.0'"
-            ) from exc
         self._r = redis_lib.Redis.from_url(redis_url, decode_responses=True)
         self._ns = namespace
 
@@ -241,13 +236,6 @@ class RedisOperationalCredentialCache(OperationalCredentialCacheBase):
         redis_url: str = "redis://localhost:6379",
         namespace: str = "stls:identity:opcred",
     ) -> None:
-        try:
-            import redis as redis_lib
-        except ImportError as exc:
-            raise ImportError(
-                "redis>=5.0 is required for OPERATIONAL_CREDENTIAL_CACHE_BACKEND=redis. "
-                "Install with: pip install 'redis>=5.0'"
-            ) from exc
         self._r = redis_lib.Redis.from_url(redis_url, decode_responses=True)
         self._ns = namespace
 
