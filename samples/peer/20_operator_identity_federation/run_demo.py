@@ -65,12 +65,15 @@ async def _wait_http_ready(url: str, timeout: float = 20.0) -> None:
     raise SystemExit(f"timed out waiting for {url} to come up")
 
 
-def _run_helios_step(credential: str) -> dict:
-    """Runs helios_agent/client.ts once, for one credential choice, and
+def _run_helios_step(credential: str, segment: str | None = None) -> dict:
+    """Runs helios_agent/client.ts once, for one credential choice
+    (optionally overriding the requested segment — issue #74), and
     returns the {outcome, detail, ticketId} it printed."""
+    args = [NPX, "tsx", "--env-file=.env", "client.ts", f"--credential={credential}"]
+    if segment is not None:
+        args.append(f"--segment={segment}")
     proc = subprocess.run(
-        [NPX, "tsx", "--env-file=.env", "client.ts", f"--credential={credential}"],
-        cwd=HERE / "helios_agent", capture_output=True, text=True,
+        args, cwd=HERE / "helios_agent", capture_output=True, text=True,
     )
     print(proc.stdout)
     if proc.returncode != 0:
@@ -136,15 +139,25 @@ def main() -> None:
         _run_helios_step("valid")
 
         _pause(
-            "STEP 2 — Same request, but this time Helios presents a permission slip\n"
-            "that has already expired. Meridian's own ID card is unchanged and still\n"
-            "perfectly valid — only the specific grant is stale.\n"
+            "STEP 2 — Same valid, unexpired permission slip as step 1 — the delegation\n"
+            "itself checks out perfectly. But this time Helios asks Meridian to\n"
+            "reroute a DIFFERENT segment (MER-SEG-9) than the one it was actually\n"
+            "delegated for (MER-SEG-7). Identity and delegation are not the same\n"
+            "question as authorization for THIS specific call (issue #74).\n"
+            "Expected: REJECTED, before Meridian's own tool is ever called."
+        )
+        _run_helios_step("valid", segment="MER-SEG-9")
+
+        _pause(
+            "STEP 3 — Same request as step 1, but this time Helios presents a\n"
+            "permission slip that has already expired. Meridian's own ID card is\n"
+            "unchanged and still perfectly valid — only the specific grant is stale.\n"
             "Expected: REJECTED, before Meridian's own tool is ever called."
         )
         _run_helios_step("expired")
 
         _pause(
-            "STEP 3 (bonus) — Now we revoke Meridian's OWN ID card at the federation\n"
+            "STEP 4 (bonus) — Now we revoke Meridian's OWN ID card at the federation\n"
             "level (not the permission slip — the permission slip from step 1 is\n"
             "untouched, still inside its validity window). Helios then presents the\n"
             "EXACT SAME permission slip that worked in step 1.\n"

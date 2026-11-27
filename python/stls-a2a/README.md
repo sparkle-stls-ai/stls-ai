@@ -619,6 +619,33 @@ See [`samples/server/19_identity_presentation`](../../samples/server/19_identity
 a full working example (both roles, three observable outcomes) and `stls-identity`'s own README
 for what actually travels on the wire.
 
+##### Reaching the delegated scope from inside the handler (issue #74)
+
+`.ok`/`.error` is only half of what `identity_verifier.verify_request()` can return — a
+successful result can also carry `requestor_did`/`grantor_did`/`scope` (the unpacked
+`OperationalCredential`'s own delegated grant, from `stls-identity` ≥0.1.6). This now reaches a
+`framework="custom"` handler as `request.context["identity"]`, via the same mechanism already
+used for `X-STLS-User-Id`/`X-STLS-Profile` — no extra wiring needed beyond `identity_verifier=`
+itself:
+
+```python
+from stls_a2a import verified_identity
+
+async def my_handler(request):
+    identity = verified_identity(request) or {}
+    scope = identity.get("scope") or {}
+    if scope.get("action") != "reroute_traffic" or scope.get("segment") != requested_segment:
+        return AgentResponse(error={"code": -32602, "message": "scope mismatch"}, id=request.id)
+    ...
+```
+
+Identity proves WHO is calling and THAT a grant exists; it never proves this call's own
+parameters match it — that check is the handler's own job, same separation of concerns
+`stls-identity` documents for `scope` being opaque to `Sentinel`. See
+[`samples/peer/20_operator_identity_federation`](../../samples/peer/20_operator_identity_federation)'s
+`meridian_agent` for a full working example, including the exact failure this closes (a credential
+scoped to one segment being used to request a different one).
+
 Frameworks supported by the adapters:
 
 - `auto`
