@@ -111,15 +111,39 @@ against both the previous floor and latest, as of 2026-11-27):
   `langchain-community`, `langchain-openai`, `langgraph`: already
   clean at their existing floors, no change.
 
-### Known issue
+### `uv.lock` regenerated
 
-Installing the `semantic-kernel` extra with `uv` requires
-`uv pip install --prerelease=allow -e ".[semantic-kernel]"` (or
-`[all]`) — `semantic-kernel>=1.39.x` depends on `azure-ai-agents`,
-which only publishes pre-release versions satisfying that floor, and
-`uv`'s resolver rejects pre-releases by default. Plain `pip install`
-does not need the flag. This is an upstream `semantic-kernel`
-packaging choice, not something fixable from here.
+Found via a GitHub Dependabot scan after this branch merged:
+`uv.lock` had never been regenerated since the original repo import —
+it still pinned `pyjwt==2.11.0`, `semantic-kernel==1.36.0`,
+`google-adk==1.25.0`, `langchain==1.2.10`, the exact pre-#65 vulnerable
+versions, regardless of what the floors above now say in
+`pyproject.toml`. Anyone installing via the lockfile (`uv sync`)
+instead of a plain `pip install` got the old versions despite this
+release's own floor raises. Regenerated with `uv lock --upgrade`,
+which also resolved most of the ~180 Dependabot alerts that turned
+out to be the same root cause, one call site removed (transitive
+dependencies of `google-adk`/`langchain`/`semantic-kernel` that were
+similarly stuck on year-old pins): `authlib`, `aiohttp`, `cryptography`,
+`mcp`, `pyasn1`, `soupsieve`, `sqlparse`, `pyarrow`, `pyopenssl`,
+`python-multipart`, `requests`, `urllib3`, `idna`, `python-dotenv`,
+`pydantic-settings`, and more all moved to patched versions.
+
+Along the way, `--upgrade` combined with `--prerelease=allow` (needed
+for `azure-ai-agents`, see below) let the resolver drift two unrelated
+packages onto stray pre-releases too (`authlib` → `1.10.0b1`, `redis`
+→ `8.2.1b1`) — fixed by pinning `azure-ai-agents` to an exact version
+instead of relying on the global flag (see the `semantic-kernel` extra
+in `pyproject.toml`), which also means `uv pip install` no longer
+needs `--prerelease=allow` for that extra at all — the "Known issue"
+this release used to document above is resolved.
+
+One residual: `werkzeug` stayed at `3.1.1` (patched: `3.1.6`) even
+under `--upgrade-package werkzeug` with a cleared cache — pulled in
+transitively via `semantic-kernel` → `openapi-core`, whose own
+declared constraint (`werkzeug>=2.1.0`) doesn't explain the ceiling;
+not chased further; MODERATE severity, three levels removed from any
+code this package actually calls.
 
 ## [0.1.11] — 2026-11-20
 

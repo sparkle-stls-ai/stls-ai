@@ -149,9 +149,19 @@ langgraph = [
 # >=1.39.4 (issue #65): the 1.36.0 floor this used to carry was
 # vulnerable to CVE-2026-25592 and CVE-2026-26030 — the latter a
 # REMOTE CODE EXECUTION vulnerability, both fixed by 1.39.4.
+# azure-ai-agents pinned exactly: semantic-kernel>=1.39.4 requires
+# azure-ai-agents>=1.2.0b3, and EVERY azure-ai-agents release is a
+# pre-release (no stable 1.x exists at all, confirmed against PyPI) —
+# an exact pin lets the resolver satisfy it without needing
+# --prerelease=allow globally, which otherwise lets unrelated
+# packages (seen: authlib, redis) drift onto their own stray
+# pre-releases too. `uv pip install` without --prerelease=allow still
+# needs this exact pin to resolve; plain `pip install` has always
+# been fine either way.
 # Install: uv pip install -e ".[semantic-kernel]"
 semantic-kernel = [
     "semantic-kernel>=1.39.4",
+    "azure-ai-agents==1.2.0b6",
 ]
 
 # All extras (excluding the Arqit wheels, which need --find-links).
