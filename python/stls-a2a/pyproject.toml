@@ -76,8 +76,19 @@ redis = [
 #     --find-links arqit_wheels/arqit-skaplatform-mqtt-common/ \
 #     --find-links arqit_wheels/arqit-skaplatform-peering/ \
 #     --find-links arqit_wheels/arqit-skaplatform-monitoring/
+# brotli>=1.2.0 overrides arqit-skaplatform-common's own exact pin
+# (Brotli==1.1.0): that pin is just inherited conservatism — the SDK
+# imports brotli in authentication.py but never calls it (confirmed by
+# inspecting the wheel, no .compress/.decompress/.process call exists
+# anywhere) — while openai's httpx2 client needs brotli>=1.2.0 for its
+# Decompressor.process(data, output_buffer_limit=...) call. Without
+# this floor, installing arqit_py alongside semantic-kernel/langchain
+# in the same environment locks brotli at 1.1.0 and every OpenAI call
+# that gets a brotli-compressed response (Cloudflare, by default)
+# crashes with TypeError: process() takes no keyword arguments.
 arqit_py = [
     "stls_core[arqit_py]",
+    "brotli>=1.2.0",
 ]
 
 # PQC provider — hybrid X25519 + ML-KEM-768. Pass-through to stls-core[pqc].
@@ -203,3 +214,14 @@ where = ["src"]
 # and remove this section.
 [tool.uv.sources]
 stls_core = { path = "../stls-core" }
+
+# arqit-skaplatform-common==21.0.0 declares brotli==1.1.0 exactly, but
+# never actually calls it (dead import in authentication.py, confirmed
+# by inspecting the wheel) — the pin is just inherited conservatism.
+# openai's httpx2 client needs brotli>=1.2.0 for its brotli decoder
+# (Decompressor.process(data, output_buffer_limit=...)). Without this
+# override, uv's resolver treats the two constraints as unsatisfiable
+# whenever arqit_py and semantic-kernel/langchain are installed
+# together; override-dependencies lets the explicit floor above win.
+[tool.uv]
+override-dependencies = ["brotli>=1.2.0"]
