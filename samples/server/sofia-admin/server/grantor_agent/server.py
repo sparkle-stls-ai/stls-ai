@@ -103,7 +103,7 @@ def build_app() -> FastAPI:
         port=8081,
     )
 
-    from agent_identity import sofia_grantor_agent
+    from agent_grantor import sofia_grantor_agent
 
     create_secure_a2a_endpoint(
         app=app,

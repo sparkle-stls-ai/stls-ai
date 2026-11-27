@@ -9,6 +9,54 @@ of which this package is the TypeScript port.
 
 ---
 
+## [0.1.7] — 2026-11-27
+
+1:1 port of `python/stls-identity` 0.1.7 (issue #42): an individual
+agent had no equivalent of the Trust Anchor Registry's key history — a
+DID Document carried exactly one `verificationMethod`, so rotating an
+agent's own signing key made every credential/presentation it had
+already signed unverifiable the moment the DID Document published
+only the new key. `verifyPresentationProof()`'s holder binding also
+had no historical-fallback path at all, unlike `verifySignature()`'s
+issuer-key fallback via `TrustAnchorRegistryClient.resolveHistorical()`.
+
+### Added
+
+- `VerificationMethod` (`models.ts`) gains `validFrom`/`validUntil`/
+  `revokedAt`, all optional (backward compatible with every DID
+  Document published before this change) — same semantics as
+  `TrustAnchorEntry`'s own fields.
+- `did.ts`: `rotateAgentSigningKey()`, `rotateSigningKey()`,
+  `currentVerificationMethod()` (the rotation-safe replacement for
+  `verificationMethod[0]`), `resolveHolderKeyAt()`,
+  `agentIdFromVerificationMethodId()`, and
+  `makeDidDocumentHolderKeyResolver()`.
+- `IdentityKeystoreBase.rotate(agentId)` — unconditionally generates
+  and persists a new signing key, unlike `getOrCreate()`.
+- `Sentinel`'s `SentinelOptions` gains `holderKeyResolver`, checked as
+  a fallback by `verifyPresentationProof()` when a holder key isn't in
+  `trustedIssuerKeys` — a separate option from `trustRegistry`, since
+  an agent's key history lives in its own DID Document, not the shared
+  Trust Anchor Registry.
+
+### Changed
+
+- `Sentinel.verifyPresentationProof()` is now `async` (was sync) —
+  required to await the new `holderKeyResolver` fallback. Every caller
+  in this package and its tests now awaits it.
+
+### Fixed
+
+- `loadIdentityPresenter()`, `loadDelegationPresenter()`
+  (`presentation.ts`) and `loadDelegationManager()` (`delegation.ts`)
+  always hardcoded `` `${holderDid}#key-1` `` — correct before this
+  release, WRONG the moment an agent actually rotates (same issue as
+  the Python port's own 0.1.7 fix — see that CHANGELOG entry for the
+  full reasoning). All three now accept an optional
+  `verificationMethodId` option the caller can resolve itself (e.g.
+  via `currentVerificationMethod()`); omitted, they keep the same
+  `#key-1` default — fully backward compatible.
+
 ## [0.1.6] — 2026-11-27
 
 1:1 port of `python/stls-identity` 0.1.6 (issue #74): authorization

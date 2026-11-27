@@ -36,7 +36,7 @@ from dotenv import load_dotenv
 # own comment: tools_identity.py never calls load_dotenv() itself.
 load_dotenv()
 
-from stls_identity import DelegationManager, NetworkAuthorityCredential
+from stls_identity import DelegationManager, NetworkAuthorityCredential, current_verification_method
 
 from tools_identity import (
     _STATUS_LIST_PUBLISH_URL,
@@ -80,7 +80,7 @@ async def main() -> None:
     delegation_manager = DelegationManager(
         grantor_did=grantor_document.id,
         grantor_signing_key=grantor_signing_key,
-        grantor_verification_method_id=grantor_document.verification_method[0].id,
+        grantor_verification_method_id=current_verification_method(grantor_document).id,
         status_list_manager=d.status_list_manager,
         status_list_publish_url=_STATUS_LIST_PUBLISH_URL,
     )

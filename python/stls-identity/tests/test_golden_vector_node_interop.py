@@ -71,6 +71,6 @@ async def test_python_verifies_the_shared_fixture():
     sentinel = Sentinel(trusted_issuer_keys={vm_id: authority_pub, holder_vm_id: holder_pub})
 
     await sentinel.verify_signature(credential)
-    sentinel.verify_presentation_proof(
+    await sentinel.verify_presentation_proof(
         presentation, expected_challenge=fixture["presentation"]["proof"]["challenge"]
     )

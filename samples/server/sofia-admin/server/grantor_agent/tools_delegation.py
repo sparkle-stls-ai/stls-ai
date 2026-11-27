@@ -78,11 +78,28 @@ _delegation_manager = None
 
 
 async def _get_delegation_manager():
-    """Built once, cached — the signing key doesn't change between
-    calls (no rotation yet, issue #42). The current Identity Credential
-    is re-fetched on every delegate_to_agent() call instead (see
-    below), not cached here, since it CAN change (reissued/revoked)
-    independently of this object's lifetime."""
+    """Built once, cached for the life of this process. The current
+    Identity Credential is re-fetched on every delegate_to_agent() call
+    instead (see below), not cached here, since it CAN change
+    (reissued/revoked) independently of this object's lifetime.
+
+    KNOWN LIMITATION (issue #42, now implemented at the package level):
+    this cache is never invalidated, so if this Grantor's signing key
+    is ever rotated (stls_identity.rotate_signing_key()) while this
+    service keeps running, every delegation issued afterward signs
+    with the stale grantor_verification_method_id this manager was
+    built with — load_delegation_manager() defaults that id to
+    "{holder_did}#key-1" when not told otherwise, which becomes WRONG
+    the moment a rotation closes that key generation (see
+    load_delegation_manager()'s own docstring). A verifier then finds
+    that verification method CLOSED at the new credential's own
+    signing time and rejects it outright. Restarting this service
+    after a rotation picks up the new key correctly; this module does
+    not yet resolve or refresh the current verification_method_id on
+    its own, since doing so needs a DIDDocumentStoreBase this process
+    doesn't otherwise hold (see identity_manager/server.py's
+    _populate_coordinator_key() for the pattern to follow if this ever
+    needs to survive a live rotation without a restart)."""
     global _delegation_manager
     if _delegation_manager is not None:
         return _delegation_manager

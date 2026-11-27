@@ -144,7 +144,7 @@ async def test_identity_presentation_roundtrip():
     assert vp.holder == s.grantor_doc.id
     assert vp.proof.proof_purpose == "authentication"
 
-    s.sentinel.verify_presentation_proof(vp, expected_challenge=challenge)
+    await s.sentinel.verify_presentation_proof(vp, expected_challenge=challenge)
     (identity,) = Sentinel.unpack_presentation(vp)
     assert identity is s.grantor_identity_credential or identity.id == s.grantor_identity_credential.id
 
@@ -169,7 +169,7 @@ async def test_delegated_presentation_roundtrip_and_full_chain():
         challenge=challenge,
     )
 
-    s.sentinel.verify_presentation_proof(vp, expected_challenge=challenge)
+    await s.sentinel.verify_presentation_proof(vp, expected_challenge=challenge)
     operational, identity = Sentinel.unpack_presentation(vp)
 
     # unpack_presentation deve restituire l'ordine corretto indipendentemente
@@ -205,7 +205,7 @@ async def test_presentation_signed_by_wrong_key_fails_verification():
     )
 
     with pytest.raises(CredentialVerificationError, match="signature"):
-        s.sentinel.verify_presentation_proof(vp, expected_challenge=challenge)
+        await s.sentinel.verify_presentation_proof(vp, expected_challenge=challenge)
 
 
 async def test_presentation_from_unknown_holder_is_rejected():
@@ -222,7 +222,7 @@ async def test_presentation_from_unknown_holder_is_rejected():
     )
 
     with pytest.raises(CredentialVerificationError, match="unknown or untrusted"):
-        s.sentinel.verify_presentation_proof(vp, expected_challenge=challenge)
+        await s.sentinel.verify_presentation_proof(vp, expected_challenge=challenge)
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +243,7 @@ async def test_presentation_replay_with_stale_challenge_is_rejected():
     # successiva, che ha emesso un challenge diverso.
     new_challenge = str(uuid.uuid4())
     with pytest.raises(CredentialVerificationError, match="replay"):
-        s.sentinel.verify_presentation_proof(vp, expected_challenge=new_challenge)
+        await s.sentinel.verify_presentation_proof(vp, expected_challenge=new_challenge)
 
 
 async def test_presentation_replay_cannot_be_salvaged_by_forging_the_challenge_field():
@@ -271,7 +271,7 @@ async def test_presentation_replay_cannot_be_salvaged_by_forging_the_challenge_f
     vp.proof.challenge = new_challenge
 
     with pytest.raises(CredentialVerificationError, match="signature"):
-        s.sentinel.verify_presentation_proof(vp, expected_challenge=new_challenge)
+        await s.sentinel.verify_presentation_proof(vp, expected_challenge=new_challenge)
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +295,7 @@ async def test_tampering_with_credential_list_after_signing_is_detected():
     tampered.verifiable_credential[0].credential_subject.scope["resource"] = "admin-panel"
 
     with pytest.raises(CredentialVerificationError, match="signature"):
-        s.sentinel.verify_presentation_proof(tampered, expected_challenge=challenge)
+        await s.sentinel.verify_presentation_proof(tampered, expected_challenge=challenge)
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +320,7 @@ async def test_presentation_with_wrong_proof_purpose_is_rejected():
     vp.proof.proof_purpose = "assertionMethod"
 
     with pytest.raises(CredentialVerificationError, match="wrong purpose"):
-        s.sentinel.verify_presentation_proof(vp, expected_challenge=challenge)
+        await s.sentinel.verify_presentation_proof(vp, expected_challenge=challenge)
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +383,7 @@ async def test_attach_identity_presentation_header_roundtrips():
     assert decoded == vp
     # and it must still verify — the round-trip through JSON/base64
     # mustn't lose anything the signature covers.
-    s.sentinel.verify_presentation_proof(decoded, expected_challenge=challenge)
+    await s.sentinel.verify_presentation_proof(decoded, expected_challenge=challenge)
 
 
 async def test_identity_presenter_on_challenge_produces_a_fresh_header_each_time():
@@ -405,7 +405,7 @@ async def test_identity_presenter_on_challenge_produces_a_fresh_header_each_time
         decoded = VerifiablePresentation.model_validate(
             json.loads(base64.b64decode(headers[PRESENTATION_HEADER]))
         )
-        s.sentinel.verify_presentation_proof(decoded, expected_challenge=challenge)
+        await s.sentinel.verify_presentation_proof(decoded, expected_challenge=challenge)
 
     # a header signed for challenge_1 must NOT verify against challenge_2
     # (this is exactly the forged-challenge regression above, from the
@@ -415,4 +415,4 @@ async def test_identity_presenter_on_challenge_produces_a_fresh_header_each_time
         json.loads(base64.b64decode(headers_1[PRESENTATION_HEADER]))
     )
     with pytest.raises(CredentialVerificationError):
-        s.sentinel.verify_presentation_proof(decoded_1, expected_challenge=challenge_2)
+        await s.sentinel.verify_presentation_proof(decoded_1, expected_challenge=challenge_2)

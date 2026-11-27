@@ -33,7 +33,7 @@ them other than the Postgres/Redis backends they each read from.
 - `server/identity_manager/` — `agent_identity.py` + `tools_identity.py` + `server.py`
   (plus `bootstrap_coordinator_identity.py`, see
   [Identity-compliant sub-agents](#identity-compliant-sub-agents-issue-45) below)
-- `server/grantor_agent/` — `agent_identity.py` + `tools_delegation.py` + `server.py` — generic,
+- `server/grantor_agent/` — `agent_grantor.py` + `tools_delegation.py` + `server.py` — generic,
   configured entirely via `IDENTITY_AGENT_ID` (one running copy = one specific
   Grantor); see [Delegation with a real Grantor agent](#delegation-with-a-real-grantor-agent-issue-51) below
 

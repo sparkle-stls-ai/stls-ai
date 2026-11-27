@@ -224,6 +224,20 @@ export interface LoadDelegationManagerOptions {
   statusListManager: StatusListManagerLike;
   statusListPublishUrl: string;
   auditHook?: AuditHook;
+  /**
+   * The CURRENT verification method id to sign delegations with, if
+   * the caller already knows it (e.g. via currentVerificationMethod()
+   * on this agent's own DIDDocument, resolved separately). Defaults
+   * to "{holderDid}#key-1", correct for a Grantor that has never
+   * rotated its key (issue #42) but WRONG the moment it has: a
+   * DelegationManager built with a stale id signs real Operational
+   * Credentials with a verification method a verifier will find
+   * CLOSED at the signature's own timestamp, failing verification
+   * outright. Matters most for a long-running Grantor agent process
+   * (built once at startup, cached) that might outlive a rotation of
+   * its own key without restarting.
+   */
+  verificationMethodId?: string;
 }
 
 /**
@@ -267,7 +281,7 @@ export async function loadDelegationManager(
   return new DelegationManager({
     grantorDid: holderDid,
     grantorSigningKey: holderKey,
-    grantorVerificationMethodId: `${holderDid}#key-1`,
+    grantorVerificationMethodId: options.verificationMethodId ?? `${holderDid}#key-1`,
     statusListManager: options.statusListManager,
     statusListPublishUrl: options.statusListPublishUrl,
     auditHook: options.auditHook,

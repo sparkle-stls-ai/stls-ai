@@ -34,8 +34,10 @@ from stls_identity import (
     RequestPresentationVerifier,
     Sentinel,
     bootstrap_signing_key,
+    current_verification_method,
     decode_multibase_ed25519_public_key,
     fetch_remote_credential_status,
+    make_did_document_holder_key_resolver,
 )
 
 # ---------------------------------------------------------------------------
@@ -119,14 +121,27 @@ def _build_identity_verifier() -> tuple[RequestPresentationVerifier | None, dict
         logger.info("REQUIRE_IDENTITY_PRESENTATION=false — identity_verifier is None, hook fully disabled.")
         return None, None
 
-    from stls_identity import IdentityKeystoreFactory
-    from tools_identity import _AUTHORITY_VM_ID, _GOVERNING_AUTHORITY_AGENT_ID
+    from stls_identity import IdentityKeystoreFactory, PostgresDIDDocumentStore
+    from tools_identity import _AUTHORITY_VM_ID, _GOVERNING_AUTHORITY_AGENT_ID, _GOVERNING_AUTHORITY_HOST
 
     keystore = IdentityKeystoreFactory.build()
     _, authority_pub, _ = bootstrap_signing_key(_GOVERNING_AUTHORITY_AGENT_ID, keystore)
     trusted_keys = {_AUTHORITY_VM_ID: authority_pub}
 
-    sentinel = Sentinel(trusted_issuer_keys=trusted_keys)
+    # Issue #42: resolves an agent's OWN rotated key straight from its
+    # DID Document when it isn't in trusted_keys. Deliberately a SEPARATE
+    # PostgresDIDDocumentStore instance, not tools_identity.py's
+    # _deps()-cached one — that cached pool is bound to whichever event
+    # loop first awaits it (see this module's own bugfix comment above);
+    # this resolver's first use always happens inside a real request, on
+    # uvicorn's real loop, same as any other per-request DB call, so a
+    # second pool here is simpler than coordinating with that cache.
+    did_store = PostgresDIDDocumentStore(dsn=os.environ.get("IDENTITY_PG_DSN", ""))
+    holder_key_resolver = make_did_document_holder_key_resolver(
+        did_store, governing_authority_host=_GOVERNING_AUTHORITY_HOST,
+    )
+
+    sentinel = Sentinel(trusted_issuer_keys=trusted_keys, holder_key_resolver=holder_key_resolver)
     verifier = RequestPresentationVerifier(sentinel, status_resolver=fetch_remote_credential_status)
     return verifier, trusted_keys
 
@@ -147,7 +162,10 @@ async def _populate_coordinator_key(trusted_keys: dict) -> None:
             IDENTITY_AGENT_ID,
         )
         return
-    vm = coordinator_doc.verification_method[0]
+    # current_verification_method(), not verification_method[0]: after a
+    # key rotation (issue #42) the oldest entry sits at index 0, not the
+    # current one — indexing by position would (re)trust a closed key.
+    vm = current_verification_method(coordinator_doc)
     trusted_keys[vm.id] = decode_multibase_ed25519_public_key(vm.public_key_multibase)
     logger.info("Identity verifier: trusted coordinator key loaded (%s).", vm.id)
 

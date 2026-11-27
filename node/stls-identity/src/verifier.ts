@@ -54,21 +54,36 @@ export interface SentinelOptions {
    * credential signed before an Authority rotated its key still
    * verify correctly, without keeping every historical key loaded in
    * the hot-path cache.
-   *
-   * Deliberately NOT applied to verifyPresentationProof()'s holder
-   * binding: the registry only tracks Governing Authority keys, never
-   * individual agent keys.
    */
   trustRegistry?: TrustAnchorRegistryClientLike;
+  /**
+   * The per-agent analogue of trustRegistry, for
+   * verifyPresentationProof()'s holder binding (issue #42).
+   * Deliberately a DIFFERENT option, not a reuse of trustRegistry:
+   * Governing Authority keys resolve via the Trust Anchor Registry
+   * (one shared store, keyed by authorityId), while an agent's own key
+   * history lives inside its OWN DIDDocument (one per agentId, see
+   * did.ts's rotateAgentSigningKey()/resolveHolderKeyAt()) — a
+   * structurally different lookup. Pass
+   * makeDidDocumentHolderKeyResolver(didStore, governingAuthorityHost)
+   * for the common case. undefined (default) = disabled: a holder key
+   * not already in trustedIssuerKeys is simply rejected, same behavior
+   * as before this option existed.
+   */
+  holderKeyResolver?: (verificationMethodId: string, at: Date) => Promise<Uint8Array | null>;
 }
 
 export class Sentinel {
   private readonly trustedKeys: Map<string, Uint8Array>;
   private readonly trustRegistry: TrustAnchorRegistryClientLike | undefined;
+  private readonly holderKeyResolver:
+    | ((verificationMethodId: string, at: Date) => Promise<Uint8Array | null>)
+    | undefined;
 
   constructor(options: SentinelOptions) {
     this.trustedKeys = options.trustedIssuerKeys;
     this.trustRegistry = options.trustRegistry;
+    this.holderKeyResolver = options.holderKeyResolver;
   }
 
   async verifySignature(credential: VerifiableCredential): Promise<void> {
@@ -200,11 +215,15 @@ export class Sentinel {
    * canonical payload therefore includes proof-minus-proofValue (so
    * challenge, created and verificationMethod are all signed over),
    * mirroring presentation.ts's buildVerifiablePresentation() exactly.
+   *
+   * Async since the holderKeyResolver fallback (unlike the
+   * trustedIssuerKeys Map lookup) does I/O — same reason
+   * verifySignature() is already async.
    */
-  verifyPresentationProof(
+  async verifyPresentationProof(
     presentation: VerifiablePresentation,
     options: { expectedChallenge: string },
-  ): void {
+  ): Promise<void> {
     const proof = presentation.proof;
     if (!proof) {
       throw new CredentialVerificationError("presentation is unsigned");
@@ -224,7 +243,11 @@ export class Sentinel {
       );
     }
 
-    const signer = this.trustedKeys.get(proof.verificationMethod);
+    let signer = this.trustedKeys.get(proof.verificationMethod);
+    if (signer === undefined && this.holderKeyResolver !== undefined) {
+      const resolved = await this.holderKeyResolver(proof.verificationMethod, new Date(proof.created));
+      signer = resolved ?? undefined;
+    }
     if (signer === undefined) {
       throw new CredentialVerificationError(
         `unknown or untrusted holder verification method: ${proof.verificationMethod}`,

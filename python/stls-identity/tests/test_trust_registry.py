@@ -41,6 +41,16 @@ DSN = os.getenv(
     "postgresql://postgres:postgres@localhost:5432/stls_identity_test",
 )
 
+# Explicit test-only table name — NEVER rely on the ambient
+# TRUST_REGISTRY_PG_TABLE fallback here. That env var is meant to carry
+# a deployment's real production table name; if IDENTITY_TEST_PG_DSN
+# ever coincides with a production DSN, a fixture that forgot `table=`
+# would TRUNCATE the real Trust Anchor Registry instead of a harmless,
+# nonexistent one. Same lesson as test_postgres_store.py's
+# _TEST_DID_TABLE/_TEST_STATUS_LIST_TABLE (see that file's comment for
+# the incident this guards against).
+_TEST_TRUST_ANCHOR_TABLE = "stls_identity_test_trust_anchors"
+
 
 async def _noop_audit_hook(entry):
     pass
@@ -65,7 +75,7 @@ class _InMemoryStatusListManager:
 
 @pytest.fixture
 async def store():
-    s = PostgresTrustAnchorRegistryStore(dsn=DSN)
+    s = PostgresTrustAnchorRegistryStore(dsn=DSN, table=_TEST_TRUST_ANCHOR_TABLE)
     pool = await s._get_pool()
     async with pool.acquire() as conn:
         await conn.execute(s.get_ddl())

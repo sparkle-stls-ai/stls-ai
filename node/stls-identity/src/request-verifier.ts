@@ -102,7 +102,7 @@ export class RequestPresentationVerifier {
     }
 
     try {
-      this.sentinel.verifyPresentationProof(presentation, { expectedChallenge: options.challenge });
+      await this.sentinel.verifyPresentationProof(presentation, { expectedChallenge: options.challenge });
       const shape = Sentinel.unpackPresentation(presentation);
 
       if (shape.length === 1) {

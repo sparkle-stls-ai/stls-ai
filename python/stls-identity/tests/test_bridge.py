@@ -30,11 +30,24 @@ DSN = os.getenv(
 AUTHORITY_ID = "sofia-authority"
 AUTHORITY_AGENT_ID = "governing-authority"
 
+# Explicit test-only table names — NEVER rely on the ambient
+# IDENTITY_PG_DID_TABLE/IDENTITY_PG_STATUS_LIST_TABLE fallback here.
+# Those env vars are meant to carry a deployment's real production
+# table names; this fixture TRUNCATEs its tables at both setup AND
+# teardown, so forgetting `table=` wipes the real DID/status-list data
+# on every single test run — this is exactly what happened on
+# 2026-11-27 (sf_identity_did_documents emptied, sofia-admin-coordinator's
+# DID Document lost) after test_postgres_store.py was already hardened
+# this same way following the 2026-11-20 incident. See that file's
+# _TEST_DID_TABLE/_TEST_STATUS_LIST_TABLE comment for the full history.
+_TEST_DID_TABLE = "stls_identity_test_did_documents"
+_TEST_STATUS_LIST_TABLE = "stls_identity_test_status_list_cache"
+
 
 @pytest.fixture
 async def client():
-    did_store = PostgresDIDDocumentStore(dsn=DSN)
-    status_store = PostgresStatusListCacheStore(dsn=DSN)
+    did_store = PostgresDIDDocumentStore(dsn=DSN, table=_TEST_DID_TABLE)
+    status_store = PostgresStatusListCacheStore(dsn=DSN, table=_TEST_STATUS_LIST_TABLE)
     pool = await did_store._get_pool()
     async with pool.acquire() as conn:
         await conn.execute(did_store.get_ddl())
