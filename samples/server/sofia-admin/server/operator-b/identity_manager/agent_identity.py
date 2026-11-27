@@ -25,6 +25,7 @@ from tools_identity import (
     issue_identity_credential_for_agent,
     list_agents_with_identity,
     get_agent_did_document,
+    rotate_agent_identity,
     validate_agent_identity_credential,
     revoke_agent_identity_credential,
     describe_platform_identity_state,
@@ -64,6 +65,16 @@ sofia_identity_agent = Agent(
         "[\"grantor\"]) and principal_ref.\n"
         "- list_agents_with_identity: list every agent_id that has a published DID.\n"
         "- get_agent_did_document: look up a specific agent's DID Document.\n"
+        "- rotate_agent_identity: rotate an agent's own signing key — generates "
+        "a new keypair and updates its DID Document, keeping the OLD key "
+        "resolvable for anything signed before the rotation (issue #42). Does "
+        "NOT reissue the agent's Identity Credential (unaffected by this — it's "
+        "signed by the Authority, not the agent). Refuses to run on the "
+        "Governing Authority's own identity (use the Trust Anchor Registry "
+        "tools for that instead). Warn the caller that any already-running "
+        "process holding this agent's old key (e.g. the coordinator, a Grantor "
+        "agent) needs to restart, or be given the returned "
+        "new_verification_method_id explicitly, to actually use the new key.\n"
         "- validate_agent_identity_credential: run a REAL end-to-end check "
         "(signature, validity window, revocation status) on a credential — not "
         "just a lookup.\n"
@@ -145,6 +156,7 @@ sofia_identity_agent = Agent(
         issue_identity_credential_for_agent,
         list_agents_with_identity,
         get_agent_did_document,
+        rotate_agent_identity,
         validate_agent_identity_credential,
         revoke_agent_identity_credential,
         describe_platform_identity_state,

@@ -68,6 +68,7 @@ from stls_identity import (
     current_verification_method,
     decode_multibase_ed25519_public_key,
     fetch_status_bit,
+    rotate_signing_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -454,6 +455,69 @@ async def get_agent_did_document(agent_id: str) -> dict:
         return {"found": True, "document": document.model_dump(mode="json", by_alias=True)}
     except Exception as e:
         logger.error("get_agent_did_document error: %s", e)
+        return {"error": str(e)}
+
+
+async def rotate_agent_identity(agent_id: str) -> dict:
+    """
+    Rotates an agent's own Ed25519 signing key (issue #42) — generates
+    a fresh keypair and updates the agent's DID Document so the OLD
+    key generation stays resolvable for anything already signed with
+    it (Operational Credentials it issued as a Grantor, presentations
+    it already sent), while anything signed AFTER this call must use
+    the new one.
+
+    Does NOT touch the agent's Identity Credential at all: that
+    credential is signed by the Governing Authority's own key, never
+    the agent's — rotating here does not invalidate it, and it never
+    needs to be reissued because of a rotation.
+
+    Refuses to rotate the Governing Authority's own identity — that is
+    the Trust Anchor Registry's own key history, a separate, more
+    sensitive operation (see onboard_trust_anchor/revoke_trust_anchor),
+    not something this agent-scoped tool should ever touch.
+
+    IMPORTANT caveat: any long-running process that already built an
+    IdentityPresenter/DelegationManager for this agent_id (via
+    load_identity_presenter()/load_delegation_manager(), e.g. the
+    coordinator or a Grantor agent) keeps signing with the OLD key
+    until it is restarted, or rebuilt with the new_verification_method_id
+    this call returns — rotating here does not, by itself, reach a
+    process that already loaded the previous key.
+
+    Args:
+        agent_id: the agent's identifier — must already be bootstrapped
+            (bootstrap_agent_identity) with a published DID Document.
+
+    Returns:
+        dict with 'did', 'previous_verification_method_id',
+        'new_verification_method_id', 'rotated_at', or {'error': '...'}.
+    """
+    if agent_id == _GOVERNING_AUTHORITY_AGENT_ID:
+        return {
+            "error": "refusing to rotate the Governing Authority's own identity here — "
+            "that's the Trust Anchor Registry's key history, a separate and more "
+            "sensitive operation (see onboard_trust_anchor/revoke_trust_anchor)."
+        }
+
+    d = await _deps()
+    try:
+        previous_document = await d.did_store.get(agent_id)
+        if previous_document is None:
+            return {"error": f"agent '{agent_id}' has no DID — call bootstrap_agent_identity first"}
+        previous_vm_id = current_verification_method(previous_document).id
+
+        _, rotated_document = await rotate_signing_key(agent_id, d.keystore, d.did_store)
+        new_vm_id = current_verification_method(rotated_document).id
+
+        return {
+            "did": rotated_document.id,
+            "previous_verification_method_id": previous_vm_id,
+            "new_verification_method_id": new_vm_id,
+            "rotated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.error("rotate_agent_identity error: %s", e)
         return {"error": str(e)}
 
 
