@@ -1,6 +1,5 @@
 import os
 from typing import Any,Optional
-from dotenv import load_dotenv
 from fastapi import FastAPI
 
 from .stls_a2a_card_model import (
@@ -14,9 +13,6 @@ from .stls_a2a_card_model import (
 
 import logging
 logger = logging.getLogger(__name__)
-load_dotenv()
-
-KEY_PROVIDER_NAME= os.getenv("KEY_PROVIDER_NAME")
 
 def _build_stls_extension(secure_url: str | None = None) -> AgentExtension:
     """
@@ -28,12 +24,13 @@ def _build_stls_extension(secure_url: str | None = None) -> AgentExtension:
     just semantically for the pqc case, which has no relation to
     Arqit (X25519 + ML-KEM-768 is an independent mechanism).
     """
+    key_provider_name = os.getenv("KEY_PROVIDER_NAME")
     params: dict = {
         "encryption": "AES-256-GCM",
-        "keyProvider": KEY_PROVIDER_NAME or "base",
+        "keyProvider": key_provider_name or "base",
         "hmac": "HMAC-SHA256",
     }
-    if KEY_PROVIDER_NAME == "pqc":
+    if key_provider_name == "pqc":
         params["keyDerivation"] = "HKDF-SHA256+X25519+ML-KEM-768"
         params["handshakeEndpoint"] = "/stls/pqc/handshake"
     else:
@@ -54,11 +51,12 @@ def _get_security_scheme() -> SecuritySchemeType:
     removed (it was also semantically wrong for pqc — see
     StlsKeyExchangeSecurityScheme).
     """
-    match KEY_PROVIDER_NAME:
+    key_provider_name = os.getenv("KEY_PROVIDER_NAME")
+    match key_provider_name:
         case "base" | "arqit_py":
             return StlsKeyExchangeSecurityScheme(
-                key_provider=KEY_PROVIDER_NAME,
-                description=f"Quantum-safe key exchange ({KEY_PROVIDER_NAME})",
+                key_provider=key_provider_name,
+                description=f"Quantum-safe key exchange ({key_provider_name})",
             )
         case "pqc":
             return StlsKeyExchangeSecurityScheme(

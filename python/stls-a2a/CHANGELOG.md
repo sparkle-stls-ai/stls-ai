@@ -37,6 +37,35 @@ time, contradicting that same intent, is now lazy too.
   `LangChainAdapter`/`CustomFunctionAdapter` were already safe (no
   hard dependency at their own module level) and needed no change.
 
+### Fixed
+
+- `stls_a2a_card_model.py`/`stls_a2a_utils.py` called bare
+  `load_dotenv()` at module import time. `python-dotenv` searches
+  upward from the *library's own* file location, so this resolved to
+  this package's own dev `.env` (e.g. `PORT=8001`,
+  `KEY_PROVIDER_NAME=pqc`) and silently injected those values into
+  `os.environ` of ANY process that imports `stls_a2a` — overriding
+  env vars the importing application never meant to share, with no
+  indication anything happened. The root cause was already documented
+  from a previous incident (`KEY_PROVIDER_NAME` override, found
+  2026-11-07) but only patched in one consumer at the time, not fixed
+  at the source. Both `load_dotenv()` calls are removed entirely —
+  loading `.env` files is an application's own concern, not a
+  library's. `stls_a2a_card_model.py`'s `KEY_PROVIDER_NAME` module
+  constant was also dead code (assigned, never read anywhere) and
+  removed with it. `stls_a2a_utils.py`'s copy (actually used, in
+  `_build_stls_extension`/`_get_security_scheme`) is now read via
+  `os.getenv("KEY_PROVIDER_NAME")` at call time instead of cached once
+  at import time, matching the pattern already used elsewhere in this
+  package (`stls_a2a_integration.py`, `stls_a2a_secure_remote.py`).
+  Found while re-testing samples against this release's updated
+  dependencies — `samples/server/19_identity_presentation`'s server
+  silently relied on the leaked `KEY_PROVIDER_NAME=pqc` and never
+  declared that dependency itself; fixed there too (now passes
+  `name="pqc"` explicitly to `KeySessionProviderFactory` and sets
+  `KEY_PROVIDER_NAME=pqc` via `os.environ.setdefault(...)` before
+  anything PQC-dependent is imported).
+
 ### Security
 
 Vulnerability floors raised (checked via PyPI's vulnerability API
