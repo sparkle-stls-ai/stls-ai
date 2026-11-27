@@ -287,6 +287,20 @@ class _AuthGateASGI:
 
         if result.ok:
             self._identity_challenges.pop(session_id, None)
+            # Issue #74: stash the verified, unpacked credential
+            # (scope, requestor/grantor DIDs) on request.state instead
+            # of letting it fall out of scope the moment .ok is True.
+            # This is the enforcement point closest to the real
+            # effect — the MCP tool handler itself — so this is where
+            # it matters most that the scope survives: get_verified_identity()
+            # (stls_mcp_identity_context.py) reads it back via
+            # Context.request_context.request.state, which is this
+            # SAME Starlette Request object (ASGI `scope["state"]` is
+            # a shared dict reference, so it survives every later
+            # `dict(scope)` shallow copy between here and the FastMCP
+            # tool call — see that module's docstring for the full
+            # chain).
+            request.state.stls_verified_identity = result
             return None
 
         logger.warning("Identity presentation rejected for session_id=%s: %s", session_id, result.error)

@@ -80,3 +80,20 @@ export const ERR_IDENTITY_CHALLENGE_REQUIRED = -32005;
  * consistent here rather than introducing a different convention.
  */
 export const HEADER_IDENTITY_PRESENTATION = "X-STLS-Identity-Presentation";
+
+/**
+ * Issue #74 — INTERNAL ONLY, never sent or received over the wire.
+ *
+ * auth.ts's checkIdentity() sets this directly on the in-process
+ * Request object's (mutable) Headers on a successful identity check,
+ * as a copy of the session id. It exists because HEADER_SESSION_ID
+ * itself gets deleted by encryptedHandler() before building the
+ * decrypted inner request (middleware.ts: "STLS-only header,
+ * meaningless to innerHandle") — so by the time the official SDK
+ * reads that inner request's headers into a tool call's
+ * `extra.requestInfo.headers`, the real session header is already
+ * gone. This second header is the one identity-context.ts's
+ * getVerifiedIdentity()/requireScope() actually read back, to look up
+ * VerifiedIdentityStore. Never logged, never forwarded anywhere external.
+ */
+export const HEADER_VERIFIED_SESSION_ID = "X-Stls-Internal-Verified-Session-Id";

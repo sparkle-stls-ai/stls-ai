@@ -180,10 +180,12 @@ real internet.
   that constraint rather than working around it.
 - Scope (`{"action": "reroute_traffic", "segment": "MER-SEG-7"}`) is
   opaque to `Sentinel` by design — it never checks whether the scope
-  matches what was actually requested. That's `meridian_agent`'s own
-  job if it cared to (this sample doesn't bother, since the real point
-  is the identity/delegation check, not an authorization-scope
-  engine).
+  matches what was actually requested. That check is `meridian_agent`'s
+  own job, and (issue #74) it now actually does it: `_reroute_traffic_handler`
+  reads the verified scope back via `stls_a2a.verified_identity(request)`
+  and rejects the call if `segment` doesn't match what Helios's
+  credential was actually delegated for — identity proves a grant
+  exists, this is the separate check that it covers THIS call.
 
 ## Known limitation (by design, not a bug)
 

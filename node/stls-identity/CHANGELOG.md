@@ -9,6 +9,24 @@ of which this package is the TypeScript port.
 
 ---
 
+## [0.1.6] — 2026-11-27
+
+1:1 port of `python/stls-identity` 0.1.6 (issue #74): authorization
+scope was never propagated from identity verification to the
+tool/action executor. `RequestPresentationVerifier.verifyRequest()`
+unpacked and verified the presented credential(s) — including the
+`OperationalCredential`'s `scope` — then discarded all of it once
+`ok` was true.
+
+### Added
+
+- `PresentationVerificationResult` now carries `requestorDid`,
+  `grantorDid`, and `scope` alongside `ok`/`error`, populated on every
+  successful `verifyRequest()` call. `scope` stays `undefined` for a
+  plain identity presentation (no delegation involved) and is the
+  `OperationalCredential`'s own scope object (unchanged, still opaque
+  to this layer) for a delegated one.
+
 ## [0.1.5] — 2026-11-27
 
 No `.ts` source changes. Version bump only, to stay numerically aligned

@@ -7,6 +7,50 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.10] — 2026-11-27
+
+1:1 port of `python/stls-mcp` 0.1.10 (issue #74): authorization scope
+was never propagated from identity verification to the tool/action
+executor. `checkIdentity()` (auth.ts, `#46`'s identity gate) checked
+`.ok` and discarded everything else, leaving the actual MCP tool
+callback with no way to see what the caller was verified to be
+delegated to do.
+
+The mechanism differs from Python's, deliberately: Node's Fetch-API
+`Request` has no `request.state`-equivalent mutable slot, and
+`encryptedHandler()` builds a genuinely new `Request` once it decrypts
+the body, which also deletes `X-STLS-Session-ID` itself before that
+(middleware.ts — "STLS-only header, meaningless to innerHandle"). So
+`checkIdentity()` now mirrors the session id under a second,
+internal-only header (never sent or received over the wire) that
+*does* survive into `extra.requestInfo.headers` for a tool callback —
+see `identity-context.ts`'s module docstring for the full chain, and
+`tests/identity-context.smoke.ts` for a test against the REAL
+`checkIdentity()`/`encryptedHandler()` path, not a hand-rolled stand-in
+(this is exactly the kind of thing that looks right until you actually
+run it: the first version of this fix assumed the session header
+survived unchanged, and the test caught that it doesn't).
+
+### Added
+
+- `identity-context.ts` (new): `VerifiedIdentityStore`,
+  `getVerifiedIdentity(store, extra)`, `requireScope(store, extra,
+  expected)` — meant to run as the first line of a tool callback.
+  `requireScope()` fails closed (`ScopeMismatchError`) whenever there's
+  no verified identity, no delegated scope, or a mismatched parameter.
+- `IdentityVerifierLike.verifyRequest()`'s return type now includes
+  optional `requestorDid`/`grantorDid`/`scope`, matching
+  `python`/`node` `stls-identity`'s `PresentationVerificationResult`.
+- `wrapWithAuth()`'s `WrapWithAuthOptions` and `createSecureMcpApp()`'s
+  `CreateSecureMcpAppOptions` both gained an optional `identityStore`
+  — pass the SAME `VerifiedIdentityStore` instance to both it and
+  whatever tool handlers call `getVerifiedIdentity`/`requireScope`.
+  `undefined` (default): the identity check still runs as before, its
+  result just isn't retained for any tool to read back — no behavior
+  change for callers that don't pass one.
+- `HEADER_VERIFIED_SESSION_ID` (constants.ts) — the internal-only
+  header described above.
+
 ## [0.1.9] — 2026-11-27
 
 No `.ts` source changes. Version bump only, to stay numerically aligned

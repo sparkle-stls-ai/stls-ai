@@ -40,10 +40,36 @@ __all__ = [
 class PresentationVerificationResult:
     """Matches the minimal duck type stls-a2a's
     SecureA2AHTTPMiddleware._check_identity_async() expects back from
-    identity_verifier.verify_request()."""
+    identity_verifier.verify_request() — `.ok`/`.error` is the part
+    that gate has always read; `requestor_did`/`grantor_did`/`scope`
+    are additive (issue #74) and exist so the caller (stls-a2a,
+    stls-mcp) can carry the VERIFIED, unpacked credential past the
+    gate to wherever the real effect happens, instead of discarding it
+    the moment `.ok` is True.
+
+    scope stays exactly as opaque here as it already was to Sentinel
+    (see stls_id_delegation.py's module docstring) — this result
+    hands it through verbatim, it never inspects or interprets it.
+    """
 
     ok: bool
     error: str | None = None
+    requestor_did: str | None = None
+    """The presenting holder's own DID, set whenever ok=True — the
+    Grantor's DID for a plain identity presentation, the Requestor's
+    DID for a delegated one (the one actually making the request
+    either way)."""
+    grantor_did: str | None = None
+    """Set only for a delegated (OperationalCredential + Grantor
+    identity) presentation — None for a plain identity presentation,
+    since there's no delegation involved."""
+    scope: dict[str, Any] | None = None
+    """The OperationalCredential's own `scope`, verbatim — None for a
+    plain identity presentation (there's no grant to carry), a dict
+    (possibly empty) for a delegated one. None is the signal "this
+    caller presented its own identity, not a delegated grant";
+    distinguishing that from an intentionally empty `{}` grant is why
+    this isn't defaulted to `{}`."""
 
 
 StatusResolver = Callable[[VerifiableCredential], Awaitable[tuple[dt.datetime, bool]]]
@@ -98,6 +124,9 @@ class RequestPresentationVerifier:
                 await self._sentinel.verify(
                     identity, status_bitstring_fetch_time=fetch_time, is_revoked=revoked,
                 )
+                return PresentationVerificationResult(
+                    ok=True, requestor_did=identity.credential_subject.id,
+                )
             else:
                 operational, grantor_identity = shape
                 grantor_fetch_time, grantor_revoked = await self._status_resolver(grantor_identity)
@@ -110,7 +139,11 @@ class RequestPresentationVerifier:
                     operational_fetch_time=operational_fetch_time,
                     operational_is_revoked=operational_revoked,
                 )
+                return PresentationVerificationResult(
+                    ok=True,
+                    requestor_did=operational.credential_subject.id,
+                    grantor_did=grantor_identity.credential_subject.id,
+                    scope=operational.credential_subject.scope,
+                )
         except CredentialVerificationError as exc:
             return PresentationVerificationResult(ok=False, error=str(exc))
-
-        return PresentationVerificationResult(ok=True)

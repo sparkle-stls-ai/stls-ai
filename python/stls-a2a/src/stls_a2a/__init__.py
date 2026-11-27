@@ -1,5 +1,5 @@
 from .stls_a2a_transport import SecureA2ATransport, A2AMessage
-from .stls_a2a_adapters_model import AgentResponse
+from .stls_a2a_adapters_model import AgentResponse, verified_identity
 from .stls_a2a_integration import (
     SecureA2ATransportAdapter,
     create_secure_a2a_endpoint,
