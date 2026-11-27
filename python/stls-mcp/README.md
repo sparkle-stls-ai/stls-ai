@@ -326,6 +326,31 @@ encrypted endpoint in practice: the plain MCP endpoint never carries
 that header, so the check is naturally a no-op there even when
 `identity_verifier` is configured.
 
+#### Reaching the verified scope from inside a tool (issue #74)
+
+`.ok`/`.error` is only half of what `identity_verifier.verify_request()` can return — a
+successful result can also carry `requestor_did`/`grantor_did`/`scope` (the unpacked
+`OperationalCredential`'s own delegated grant, from `stls-identity` ≥0.1.6).
+`_AuthGateASGI` stashes it on `request.state.stls_verified_identity`; a `@mcp.tool()`
+function reads it back via `get_verified_identity(ctx)`/`require_scope(ctx, **expected)`
+(`stls_mcp_identity_context.py`) — `ctx.request_context.request.state` is the SAME object,
+surviving every ASGI `dict(scope)` shallow copy between the gate and the tool call:
+
+```python
+from stls_mcp import require_scope
+
+@mcp.tool()
+def check_and_apply_reroute(segment: str, reason: str, ctx: Context) -> str:
+    require_scope(ctx, action="reroute_traffic", segment=segment)
+    ...  # only reached if the delegated scope actually matches
+```
+
+This is the enforcement point closest to the real effect — the tool itself — so it holds even
+for an LLM-driven agent (ADK/LangChain) that picked the call's own arguments: the model is
+never part of the check, only the tool author's own key names are. `require_scope()` fails
+closed (`ScopeMismatchError`, a `PermissionError` subclass) whenever there's no verified
+identity, no delegated scope, or a mismatched parameter.
+
 ## Quick usage
 
 ### Server

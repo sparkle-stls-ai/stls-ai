@@ -9,6 +9,8 @@ import { ed25519 } from "@noble/curves/ed25519.js";
 import { signCredentialPayload } from "../src/signing.js";
 import { buildVerifiablePresentation, attachIdentityPresentationHeader } from "../src/presentation.js";
 import { RequestPresentationVerifier } from "../src/request-verifier.js";
+import { IdentityManager } from "../src/issuer.js";
+import { DelegationManager } from "../src/delegation.js";
 import { Sentinel } from "../src/verifier.js";
 import { KeyStorageTier, PRESENTATION_HEADER, type NetworkAuthorityCredential } from "../src/models.js";
 
@@ -85,7 +87,9 @@ function fakeRequest(headers: Record<string, string>) {
   }));
 
   const result = await verifier.verifyRequest(fakeRequest(headers), { challenge: "server-issued-challenge" });
-  assert.deepEqual(result, { ok: true });
+  // Plain identity presentation (issue #74): requestorDid is set, but
+  // there's no delegation involved, so grantorDid/scope stay undefined.
+  assert.deepEqual(result, { ok: true, requestorDid: AGENT_DID });
   console.log("OK: T01 end-to-end verifyRequest() succeeds");
 }
 
@@ -178,4 +182,79 @@ function fakeRequest(headers: Record<string, string>) {
   assert.equal(result.ok, false);
   assert.match(result.error ?? "", /revoked/);
   console.log("OK: T05 revoked credential surfaces as ok:false");
+}
+
+// T06 — delegated presentation (issue #74): the verified, unpacked
+// grant must survive past the ok check — requestorDid/grantorDid/scope
+// all populated, mirroring python's test_valid_delegated_presentation_is_accepted.
+{
+  class InMemoryStatusListManager {
+    private next = 0;
+    async allocateIndex(): Promise<number> {
+      return this.next++;
+    }
+    async revoke(): Promise<void> {}
+    async isRevoked(): Promise<boolean> {
+      return false;
+    }
+  }
+
+  const authority = ed25519.keygen();
+  const grantor = ed25519.keygen();
+  const requestor = ed25519.keygen();
+  const grantorDid = "did:web:sofia.sparkle.example.com:agents:099";
+  const grantorVmId = `${grantorDid}#key-1`;
+  const requestorDid = "did:web:b.example.com:agents:042";
+  const requestorVmId = `${requestorDid}#key-1`;
+
+  const issuer = new IdentityManager({
+    governingAuthorityDid: AUTHORITY_DID,
+    signingKey: authority.secretKey,
+    signingVerificationMethodId: AUTHORITY_VM_ID,
+    statusListManager: new InMemoryStatusListManager(),
+    statusListPublishUrl: "https://sofia.sparkle.example.com/identity/status-list",
+  });
+  const grantorIdentity = await issuer.issueIdentityCredential({
+    agentDid: grantorDid, clientId: "sparkle-agent-099", roles: ["grantor"],
+  });
+
+  const delegationManager = new DelegationManager({
+    grantorDid, grantorSigningKey: grantor.secretKey, grantorVerificationMethodId: grantorVmId,
+    statusListManager: new InMemoryStatusListManager(),
+    statusListPublishUrl: "https://sofia.sparkle.example.com/agents/099/status-list",
+  });
+  const operational = await delegationManager.issueOperationalCredential({
+    grantorIdentityCredential: grantorIdentity,
+    requestorDid, requestorClientId: "b-agent-042",
+    scope: { action: "reroute_traffic", segment: "MER-SEG-7" },
+  });
+
+  const vp = buildVerifiablePresentation({
+    holderDid: requestorDid,
+    holderSigningKey: requestor.secretKey,
+    holderVerificationMethodId: requestorVmId,
+    credentials: [operational, grantorIdentity],
+    challenge: "delegation-challenge",
+  });
+  const headers = attachIdentityPresentationHeader(vp);
+
+  const sentinel = new Sentinel({
+    trustedIssuerKeys: new Map([
+      [AUTHORITY_VM_ID, authority.publicKey],
+      [grantorVmId, grantor.publicKey],
+      [requestorVmId, requestor.publicKey],
+    ]),
+  });
+  const verifier = new RequestPresentationVerifier(sentinel, async () => ({
+    fetchTime: new Date(), isRevoked: false,
+  }));
+
+  const result = await verifier.verifyRequest(fakeRequest(headers), { challenge: "delegation-challenge" });
+  assert.deepEqual(result, {
+    ok: true,
+    requestorDid,
+    grantorDid,
+    scope: { action: "reroute_traffic", segment: "MER-SEG-7" },
+  });
+  console.log("OK: T06 delegated presentation carries requestorDid/grantorDid/scope through");
 }

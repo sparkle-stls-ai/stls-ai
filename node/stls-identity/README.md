@@ -331,12 +331,14 @@ was transactional there.
 ## Keeping in sync with the Python version
 
 The version number in `package.json` follows
-`python/stls-identity/pyproject.toml` (currently `0.1.4`) — same
+`python/stls-identity/pyproject.toml` (currently `0.1.6`) — same
 convention as `stls-core`/`stls-mcp`. Not yet implemented: `bridge.ts`/
 `trust-registry-bridge.ts` (the FastAPI route wiring — no Node HTTP
-framework has been chosen for this package yet) and actually wiring
-this package into `node/stls-a2a`/`node/stls-mcp` (issue #46 and
-`node/stls-a2a`'s own gap #1 — see issue #47 for the full plan).
+framework has been chosen for this package yet). `node/stls-mcp`'s own
+`identityVerifier` hook (issue #46) is wired and ready to take a
+`RequestPresentationVerifier` instance directly — its `verifyRequest()`
+shape matches `IdentityVerifierLike` exactly. There is no
+`node/stls-a2a` to wire into at all — only `python/stls-a2a` exists.
 
 ## License
 

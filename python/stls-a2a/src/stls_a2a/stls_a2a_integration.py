@@ -875,6 +875,17 @@ class SecureA2AHTTPMiddleware:
 
         if result.ok:
             self._identity_challenges.pop(session_id, None)
+            # Issue #74: the ok/error check used to be the end of this
+            # result's life — the verified, unpacked credential (scope,
+            # requestor/grantor DIDs) was discarded right here, so
+            # nothing downstream of the identity gate ever saw WHAT was
+            # verified, only THAT something was. Stashing it on
+            # request.state lets _extract_http_context() (called right
+            # after this returns, same request object) carry it into
+            # agent_request.context the same way it already does for
+            # X-STLS-User-Id/X-STLS-Profile — no new plumbing needed
+            # beyond that one read.
+            request.state.stls_verified_identity = result
             return None
 
         logger.warning(
@@ -904,6 +915,20 @@ class SecureA2AHTTPMiddleware:
         Supported headers:
             X-STLS-User-Id   → context["user_id"]   (string)
             X-STLS-Profile   → context["profile"]    (JSON string → dict)
+
+        Also carries forward the identity_verifier's verified result
+        (issue #74), when identity_verifier is configured and this
+        request already cleared _check_identity_async():
+            context["identity"] = {
+                "requestor_did": str,
+                "grantor_did":   str | None,
+                "scope":         dict | None,
+            }
+        Not derived from headers — read from request.state, where
+        _check_identity_async() stashed it on success, same request
+        object. Absent entirely when identity_verifier isn't
+        configured or hasn't run on this request, so this is a pure
+        addition for callers that don't use it.
 
         Works independently of ApiKeyManager and AuthConfig:
         the headers are always read, even on unauthenticated endpoints.
@@ -939,6 +964,14 @@ class SecureA2AHTTPMiddleware:
                     "_extract_http_context: X-STLS-Profile isn't valid JSON — ignored. "
                     "Received value: %.80s", profile_raw
                 )
+
+        verified = getattr(getattr(request, "state", None), "stls_verified_identity", None)
+        if verified is not None:
+            ctx["identity"] = {
+                "requestor_did": getattr(verified, "requestor_did", None),
+                "grantor_did": getattr(verified, "grantor_did", None),
+                "scope": getattr(verified, "scope", None),
+            }
 
         if ctx:
             logger.debug(

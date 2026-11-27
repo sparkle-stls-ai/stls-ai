@@ -64,6 +64,7 @@ import type { ApiKeyManager, AuthConfig, KeySessionProvider } from "stls-core";
 import { MCP_PLAIN_PATH, MCP_STLS_PATH } from "./constants.js";
 import { encryptedHandler } from "./middleware.js";
 import { wrapWithAuth, type IdentityVerifierLike, type RequestHandler } from "./auth.js";
+import type { VerifiedIdentityStore } from "./identity-context.js";
 
 export interface CreateSecureMcpAppOptions {
   /** Path of the encrypted endpoint. Default MCP_STLS_PATH ("/mcp-stls"). */
@@ -87,6 +88,17 @@ export interface CreateSecureMcpAppOptions {
    * never carry — see auth.ts's checkIdentity().
    */
   identityVerifier?: IdentityVerifierLike;
+  /**
+   * Issue #74: shared with `identityVerifier` — pass the SAME
+   * VerifiedIdentityStore instance here and to whatever tool handlers
+   * (registered inside `getServer`) call getVerifiedIdentity()/
+   * requireScope() (identity-context.ts), so the verified, delegated
+   * scope reaches the tool call itself, not just this gate's ok/error
+   * check. undefined (default) = the identity check still runs when
+   * `identityVerifier` is set, its result just isn't retained for any
+   * tool to read back.
+   */
+  identityStore?: VerifiedIdentityStore;
 }
 
 function normalizePath(pathname: string): string {
@@ -147,11 +159,13 @@ export async function createSecureMcpApp(
     auth: options.auth,
     apiKeyManager: options.apiKeyManager,
     identityVerifier: options.identityVerifier,
+    identityStore: options.identityStore,
   });
   const guardedStls = wrapWithAuth(stlsHandler, {
     auth: options.auth,
     apiKeyManager: options.apiKeyManager,
     identityVerifier: options.identityVerifier,
+    identityStore: options.identityStore,
   });
 
   // ── Handshake endpoints — always open, by design ────────────────────────

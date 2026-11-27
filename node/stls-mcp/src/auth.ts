@@ -43,7 +43,8 @@
 import { randomBytes } from "node:crypto";
 import { HEADER_SESSION_ID } from "stls-core";
 import type { ApiKeyManager, AuthConfig, RequestLike } from "stls-core";
-import { ERR_IDENTITY_CHALLENGE_REQUIRED, HEADER_IDENTITY_PRESENTATION } from "./constants.js";
+import { ERR_IDENTITY_CHALLENGE_REQUIRED, HEADER_IDENTITY_PRESENTATION, HEADER_VERIFIED_SESSION_ID } from "./constants.js";
+import type { VerifiedIdentityStore } from "./identity-context.js";
 
 export type RequestHandler = (request: Request) => Promise<Response>;
 
@@ -51,10 +52,22 @@ export type RequestHandler = (request: Request) => Promise<Response>;
  * Duck-typed stand-in for stls-identity's RequestPresentationVerifier
  * (or an equivalent object) — this package never imports stls-identity,
  * it only calls `identityVerifier.verifyRequest(request, { challenge })`
- * expecting `{ ok, error? }`. Same posture as ApiKeyManager above.
+ * expecting `{ ok, error?, requestorDid?, grantorDid?, scope? }`.
+ * `requestorDid`/`grantorDid`/`scope` are additive (issue #74) — same
+ * posture as ApiKeyManager above, and same shape as python's
+ * PresentationVerificationResult.
  */
 export interface IdentityVerifierLike {
-  verifyRequest(request: Request, options: { challenge: string }): Promise<{ ok: boolean; error?: string }>;
+  verifyRequest(
+    request: Request,
+    options: { challenge: string },
+  ): Promise<{
+    ok: boolean;
+    error?: string;
+    requestorDid?: string;
+    grantorDid?: string;
+    scope?: Record<string, unknown>;
+  }>;
 }
 
 export interface WrapWithAuthOptions {
@@ -68,6 +81,16 @@ export interface WrapWithAuthOptions {
    * use, zero behavior change for every existing caller.
    */
   identityVerifier?: IdentityVerifierLike;
+  /**
+   * Issue #74: where a successful identityVerifier result's
+   * requestorDid/grantorDid/scope get recorded, keyed by sessionId, so
+   * a tool handler can read it back via getVerifiedIdentity()/
+   * requireScope() (identity-context.ts). undefined (default) = the
+   * verified result is still checked for ok/error as before, just not
+   * retained past this request — no behavior change for callers that
+   * don't pass one.
+   */
+  identityStore?: VerifiedIdentityStore;
 }
 
 // Same value and reasoning as python/stls-mcp's own
@@ -134,6 +157,7 @@ async function checkIdentity(
   request: Request,
   identityVerifier: IdentityVerifierLike | undefined,
   challenges: Map<string, { challenge: string; mintedAt: number }>,
+  identityStore: VerifiedIdentityStore | undefined,
 ): Promise<Response | null> {
   if (!identityVerifier) {
     return null;
@@ -159,7 +183,7 @@ async function checkIdentity(
   }
 
   const { challenge } = cached;
-  let result: { ok: boolean; error?: string };
+  let result: { ok: boolean; error?: string; requestorDid?: string; grantorDid?: string; scope?: Record<string, unknown> };
   try {
     result = await identityVerifier.verifyRequest(request, { challenge });
   } catch (err) {
@@ -169,6 +193,24 @@ async function checkIdentity(
 
   if (result.ok) {
     challenges.delete(sessionId);
+    if (identityStore) {
+      // Issue #74: record the verified, unpacked grant for this
+      // session so a tool handler can read it back via
+      // getVerifiedIdentity()/requireScope().
+      identityStore.record(sessionId, {
+        requestorDid: result.requestorDid,
+        grantorDid: result.grantorDid,
+        scope: result.scope,
+      });
+      // HEADER_SESSION_ID itself gets deleted by encryptedHandler()
+      // before the decrypted inner request is built (middleware.ts) —
+      // mirror it under an internal-only header (constants.ts) so the
+      // lookup key survives into extra.requestInfo.headers for the
+      // tool call. Request.headers is a mutable Headers instance here,
+      // same request object `handler(request)` is about to be called
+      // with below — this never touches the actual wire.
+      request.headers.set(HEADER_VERIFIED_SESSION_ID, sessionId);
+    }
     return null;
   }
 
@@ -182,7 +224,7 @@ async function checkIdentity(
  * no overhead, no behavior change for callers who use none of them.
  */
 export function wrapWithAuth(handler: RequestHandler, options: WrapWithAuthOptions = {}): RequestHandler {
-  const { auth, apiKeyManager, identityVerifier } = options;
+  const { auth, apiKeyManager, identityVerifier, identityStore } = options;
   if (!apiKeyManager && !(auth && auth.enabled) && !identityVerifier) {
     return handler;
   }
@@ -218,7 +260,7 @@ export function wrapWithAuth(handler: RequestHandler, options: WrapWithAuthOptio
     }
 
     // ── 3. Identity presentation (issue #15 gap #1, #46) ────────────────
-    const identityDenial = await checkIdentity(request, identityVerifier, identityChallenges);
+    const identityDenial = await checkIdentity(request, identityVerifier, identityChallenges, identityStore);
     if (identityDenial) {
       return identityDenial;
     }

@@ -106,12 +106,12 @@ stls-ai/
 | Package | Language | Version | What it provides |
 |---|---|---|---|
 | [`stls-core`](python/stls-core) | Python ≥3.12 | 0.1.11 | Protocol-agnostic crypto, session cache, handshake, key providers, API-key auth. The common foundation. |
-| [`stls-identity`](python/stls-identity) | Python ≥3.12 | 0.1.5 | DID documents, Identity/Operational Verifiable Credentials, delegation, revocation, Trust Anchor Registry, Sentinel verifier. |
-| [`stls-a2a`](python/stls-a2a) | Python ≥3.12 | 0.1.12 | Secure A2A transport, task lifecycle, agent cards, agent registry, optional DID/VC identity-presentation hook. Framework adapters (Google ADK, LangChain, LangGraph, Semantic Kernel) are optional extras, not installed by default. |
-| [`stls-mcp`](python/stls-mcp) | Python ≥3.12 | 0.1.9 | Encrypted MCP endpoint (`/mcp-stls`) alongside a 100%-standard MCP endpoint (`/mcp`), built on the official MCP SDK; optional DID/VC identity-presentation hook. |
+| [`stls-identity`](python/stls-identity) | Python ≥3.12 | 0.1.6 | DID documents, Identity/Operational Verifiable Credentials, delegation, revocation, Trust Anchor Registry, Sentinel verifier. |
+| [`stls-a2a`](python/stls-a2a) | Python ≥3.12 | 0.1.13 | Secure A2A transport, task lifecycle, agent cards, agent registry, optional DID/VC identity-presentation hook. Framework adapters (Google ADK, LangChain, LangGraph, Semantic Kernel) are optional extras, not installed by default. |
+| [`stls-mcp`](python/stls-mcp) | Python ≥3.12 | 0.1.10 | Encrypted MCP endpoint (`/mcp-stls`) alongside a 100%-standard MCP endpoint (`/mcp`), built on the official MCP SDK; optional DID/VC identity-presentation hook. |
 | [`stls-core`](node/stls-core) | Node.js ≥20 / TS | 0.1.11 | TypeScript port of `python/stls-core` — bit-compatible wire format, cross-language tested. |
-| [`stls-identity`](node/stls-identity) | Node.js ≥20 / TS | 0.1.5 | TypeScript port of `python/stls-identity` — same DID/VC wire format, cross-language tested. |
-| [`stls-mcp`](node/stls-mcp) | Node.js ≥20 / TS | 0.1.9 | TypeScript port of `python/stls-mcp` — same dual-endpoint design, verified against the Python server/client. |
+| [`stls-identity`](node/stls-identity) | Node.js ≥20 / TS | 0.1.6 | TypeScript port of `python/stls-identity` — same DID/VC wire format, cross-language tested. |
+| [`stls-mcp`](node/stls-mcp) | Node.js ≥20 / TS | 0.1.10 | TypeScript port of `python/stls-mcp` — same dual-endpoint design, verified against the Python server/client. |
 
 Each package README documents its own installation, configuration, and
 internals in depth — this document stays at the level of the whole
@@ -140,6 +140,13 @@ system.
   authorization — with delegation chains, revocation, and a Trust
   Anchor Registry, built on real RFC 8785 (JCS) canonicalization and
   Ed25519 signatures.
+- **Delegated scope reaches the tool/action executor, not just the
+  identity gate**: `stls-a2a`'s agent handler and `stls-mcp`'s tool
+  callback can both read the caller's verified, delegated scope
+  (`verified_identity()`/`get_verified_identity()`+`require_scope()`)
+  and enforce it against the call's own parameters, deterministically,
+  before any real effect — holds even for an LLM-driven agent (ADK/
+  LangChain), since the model never participates in that check.
 - **Pluggable auth**: from a static, timing-safe `AuthConfig` for small
   deployments to a full `ApiKeyManager` with static/file/Postgres
   loaders, Redis-backed caching, and revocation.
@@ -184,6 +191,7 @@ packages above against real agent frameworks and deployment targets:
 - [`samples/peer/17_peer_a_core`](samples/peer/17_peer_a_core) / [`17_peer_b_core`](samples/peer/17_peer_b_core) — the device-agent/consumer split applied to a genuinely bidirectional peer (each side plays both roles), not just N replicas of one role.
 - [`samples/peer/18_naas_federation`](samples/peer/18_naas_federation) — multi-party NaaS RFQ federation: one buyer company compares real quotes from two seller companies, each seller's receiving side running as 2 replicas behind the device-agent/consumer split, validated end to end on a real K8s cluster with both `pqc` and real `arqit_py` devices.
 - [`samples/server/19_identity_presentation`](samples/server/19_identity_presentation) — `stls-identity`'s DID/Verifiable-Credential layer attached to a real secure A2A call for the first time (issue #15 gap #1): a Requestor presents a signed `VerifiablePresentation`, the Verifier agent challenges and checks it via `RequestPresentationVerifier`, all transparent to the caller via one automatic retry.
+- [`samples/peer/20_operator_identity_federation`](samples/peer/20_operator_identity_federation) — two independent operator companies, Python ⇄ Node.js, delegation/revocation checked against real Redis. Four steps: a valid delegated grant accepted; the SAME valid grant rejected when the call's own parameters don't match what was actually delegated (issue #74 — identity and authorization for THIS call are different questions); an expired grant rejected; the Grantor's own identity revoked at the federation level, invalidating an otherwise-still-valid grant.
 - [`samples/server/2_sk_financial_agent`](samples/server/2_sk_financial_agent) — Semantic Kernel financial agent.
 - [`samples/server/5_adk_doc_gen`](samples/server/5_adk_doc_gen) — Google ADK document-generation agent.
 - [`samples/server/sofia-admin`](samples/server/sofia-admin) — admin/management server with cloud deployment scaffolding.

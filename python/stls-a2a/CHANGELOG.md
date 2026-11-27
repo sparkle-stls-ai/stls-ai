@@ -7,6 +7,46 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.13] — 2026-11-27
+
+Issue #74: authorization scope was never propagated from identity
+verification to the tool/action executor. `SecureA2AHTTPMiddleware._check_identity_async()`
+already ran `identity_verifier.verify_request()` and checked `.ok`,
+but discarded the rest of the result — nothing downstream of the
+identity gate (the agent handler, further down an MCP tool call) ever
+saw WHAT was verified, only THAT something was. Found while building
+`samples/peer/20_operator_identity_federation`: a validly-delegated
+credential scoped to one network segment could ask the agent to act
+on a different one, in the same call, unchecked.
+
+### Added
+
+- `_check_identity_async()` now stashes the verified result (whatever
+  `identity_verifier.verify_request()` returned — same duck type as
+  before, requires stls-identity 0.1.6 for the
+  `requestor_did`/`grantor_did`/`scope` fields to actually be
+  populated) on `request.state.stls_verified_identity`.
+- `_extract_http_context()` reads it back and adds
+  `context["identity"] = {"requestor_did", "grantor_did", "scope"}` to
+  the `AgentRequest` passed to the agent handler — same mechanism
+  already used for `X-STLS-User-Id`/`X-STLS-Profile`, so no new
+  plumbing in `process_secure_request`/`process_plain_request`/the SSE
+  variants was needed. Absent entirely when `identity_verifier` isn't
+  configured — zero behavior change for every existing caller.
+- `stls_a2a.verified_identity(request)` — a small helper for
+  `framework="custom"` handlers to read `context["identity"]` without
+  reaching into the dict shape directly. Returns `None` when absent.
+
+### Fixed
+
+- `samples/peer/20_operator_identity_federation`'s `meridian_agent`:
+  `_reroute_traffic_handler` now calls `verified_identity()` and
+  rejects the call (JSON-RPC -32602) when the delegated scope's
+  `action`/`segment` don't match the request's own parameters —
+  closing the exact gap this issue was filed over. Previously
+  documented in that sample's own README as "this sample doesn't
+  bother" checking scope; it now does.
+
 ## [0.1.12] — 2026-11-27
 
 Issue #65 audit: `google-adk`, `langchain`/`langchain-community`/

@@ -10,6 +10,13 @@ NetworkAuthorityCredential), never a plain single-credential identity
 — Sentinel.unpack_presentation() tells the two shapes apart by what's
 actually in the list, nothing here chooses between them up front.
 
+Issue #74: _reroute_traffic_handler below now enforces the delegated
+scope against the call's own `segment`, via stls_a2a's
+verified_identity() — previously the only check at all was identity
+("is there a valid grant"), never authorization ("does THIS call match
+it"), so a Helios credential scoped to one segment could reroute a
+different one and nothing noticed.
+
 status_resolver below reads straight from Redis via StatusListManager,
 instead of stls_identity.fetch_remote_credential_status (which would
 fetch a PUBLISHED StatusListCredential document over HTTP). Standing
@@ -53,6 +60,7 @@ from stls_a2a import (
     KeySessionProviderFactory,
     create_secure_a2a_endpoint,
     start_task_store_cleanup,
+    verified_identity,
 )
 from stls_identity import RequestPresentationVerifier, Sentinel, StatusListManager, VerifiableCredential
 from stls_mcp import perform_pqc_client_handshake, stls_httpx_factory
@@ -122,12 +130,21 @@ async def _call_reroute_tool(segment: str, reason: str) -> dict:
 async def _reroute_traffic_handler(request):
     """Plain function agent (framework='custom') — the one real skill
     this sample is about. By the time this runs, stls_a2a's identity
-    gate has already verified the delegation pair; this handler only
-    reads the request's own text for `segment`/`reason`, the same
-    separation of concerns the library enforces everywhere else
-    (identity proves authorization to call AT ALL, never the request's
-    own parameters — see stls_id_delegation.py's module docstring on
-    `scope` being opaque to Sentinel)."""
+    gate has already verified the delegation pair AND (issue #74)
+    carried the verified, unpacked scope into request.context —
+    nothing here re-derives or trusts the caller's own claim about
+    what it's allowed to do.
+
+    Before #74 this handler called the tool with whatever `segment`
+    the request text claimed, unchecked: identity proved WHO was
+    calling and THAT a grant existed, never whether THIS call's own
+    parameters matched it. A Helios credential scoped to
+    {"segment": "MER-SEG-7"} could ask to reroute a different segment
+    in the very same call, and nothing rejected it — exactly the gap
+    the issue was filed over. verified_identity()'s `scope` is still
+    opaque to stls_a2a itself (see stls_id_delegation.py's module
+    docstring) — interpreting it is this handler's job, as the
+    resource owner, not the identity layer's."""
     message = (request.params or {}).get("message", {})
     parts = message.get("parts", [])
     text = next((p.get("text") for p in parts if isinstance(p, dict) and p.get("text")), "{}")
@@ -136,6 +153,24 @@ async def _reroute_traffic_handler(request):
         segment, reason = payload["segment"], payload["reason"]
     except (json.JSONDecodeError, KeyError):
         segment, reason = "MER-SEG-7", text
+
+    identity = verified_identity(request) or {}
+    scope = identity.get("scope") or {}
+    if scope.get("action") != "reroute_traffic" or scope.get("segment") != segment:
+        logger.warning(
+            "Scope mismatch: requestor=%s delegated_scope=%s requested_segment=%s — denied",
+            identity.get("requestor_did"), scope, segment,
+        )
+        return AgentResponse(
+            error={
+                "code": -32602,
+                "message": (
+                    f"delegated scope {scope!r} does not authorize "
+                    f"reroute_traffic on segment {segment!r}"
+                ),
+            },
+            id=request.id,
+        )
 
     tool_result = await _call_reroute_tool(segment, reason)
     result = {"parts": [{"type": "text", "text": json.dumps(tool_result)}]}

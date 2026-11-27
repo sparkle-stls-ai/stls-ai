@@ -7,6 +7,36 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.10] — 2026-11-27
+
+Issue #74: authorization scope was never propagated from identity
+verification to the tool/action executor. `_AuthGateASGI` (`#46`'s
+identity gate, same `identity_verifier` duck type as stls-a2a) checked
+`.ok` and discarded everything else, leaving the actual `@mcp.tool()`
+function with no way to see what the caller was verified to be
+delegated to do — the enforcement point closest to the real effect,
+and the one place that still holds even when an LLM-driven agent
+(ADK/LangChain) picked the call's own arguments, since the model is
+never part of this check.
+
+### Added
+
+- `stls_mcp_identity_context.py` (new): `get_verified_identity(ctx)` and
+  `require_scope(ctx, **expected)`, meant to run as the first line of
+  a `@mcp.tool()` function. `_AuthGateASGI._check_identity_async()`
+  now stashes the verified result on `request.state.stls_verified_identity`
+  on success; both helpers read it back via
+  `ctx.request_context.request.state` — no MCP SDK change, no new
+  header, just the existing ASGI `scope["state"]` convention, which
+  survives every `dict(scope)` shallow copy between the auth gate and
+  the tool call (see that module's docstring for the full chain, and
+  `tests/test_stls_mcp_identity_context.py` for a direct test of that
+  claim). `require_scope()` fails closed — `ScopeMismatchError`
+  (a `PermissionError` subclass) — whenever there's no verified
+  identity, no delegated scope, or a mismatched parameter.
+- `get_verified_identity`, `require_scope`, `ScopeMismatchError` now
+  exported from the package root.
+
 ## [0.1.9] — 2026-11-27
 
 Issue #65 audit (the `stls-mcp` part — see `python/stls-a2a` 0.1.12 for

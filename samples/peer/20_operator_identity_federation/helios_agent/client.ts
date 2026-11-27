@@ -17,6 +17,7 @@
  * Run:
  *   npx tsx --env-file=.env client.ts --credential=valid
  *   npx tsx --env-file=.env client.ts --credential=expired
+ *   npx tsx --env-file=.env client.ts --segment=MER-SEG-9   # issue #74
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -80,6 +81,7 @@ async function postEncrypted(
 
 async function callReroute(
   credentialChoice: "valid" | "expired",
+  segment: string = SEGMENT,
 ): Promise<{ outcome: "success" | "rejected"; detail: unknown }> {
   const identity = loadIdentity();
   const operationalCredential =
@@ -97,14 +99,14 @@ async function callReroute(
     params: {
       message: {
         parts: [
-          { type: "text", text: JSON.stringify({ segment: SEGMENT, reason: "incident on MER-SEG-7" }) },
+          { type: "text", text: JSON.stringify({ segment, reason: `incident on ${segment}` }) },
         ],
       },
     },
     id: 1,
   };
 
-  console.log(`[helios_agent] asking Meridian to reroute traffic on ${SEGMENT}...`);
+  console.log(`[helios_agent] asking Meridian to reroute traffic on ${segment}...`);
   let { status, json } = await postEncrypted(transport, sessionId, requestBody);
 
   if (status === 401 && json?.error?.code === ERR_IDENTITY_CHALLENGE_REQUIRED) {
@@ -131,6 +133,19 @@ async function callReroute(
 
   const plaintext = transport.decrypt(StlsEnvelope.fromDict(json));
   const decrypted = JSON.parse(plaintext.toString("utf-8"));
+
+  // issue #74: a scope mismatch isn't a transport/identity failure —
+  // _reroute_traffic_handler rejects it as an ordinary JSON-RPC error
+  // INSIDE a normal 200 response (same encrypted envelope shape as a
+  // success), not an HTTP-level 401/403. Must be checked explicitly;
+  // `decrypted.result` is simply absent on this path, which would
+  // otherwise silently read back as an empty, "successful" result.
+  if (decrypted.error) {
+    const message = decrypted.error.message ?? JSON.stringify(decrypted.error);
+    console.log(`[helios_agent] REJECTED — ${message}`);
+    return { outcome: "rejected", detail: message };
+  }
+
   // The plain function-agent adapter wraps our {parts:[...]} into a full
   // A2A Task shape (history/artifacts/status) — the text we returned is
   // under the first artifact's first part, not directly on `result`.
@@ -169,8 +184,10 @@ async function logIncident(outcome: string, detail: unknown): Promise<string> {
 async function main(): Promise<void> {
   const credentialArg = process.argv.find((a) => a.startsWith("--credential="));
   const credentialChoice = (credentialArg?.split("=")[1] ?? "valid") as "valid" | "expired";
+  const segmentArg = process.argv.find((a) => a.startsWith("--segment="));
+  const segment = segmentArg?.split("=")[1] ?? SEGMENT;
 
-  const { outcome, detail } = await callReroute(credentialChoice);
+  const { outcome, detail } = await callReroute(credentialChoice, segment);
   const ticketId = await logIncident(outcome, detail);
   console.log(`[helios_agent] logged as incident ticket ${ticketId}`);
 

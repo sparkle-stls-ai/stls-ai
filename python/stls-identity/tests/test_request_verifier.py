@@ -152,6 +152,10 @@ async def test_valid_identity_presentation_is_accepted():
 
     assert result.ok is True
     assert result.error is None
+    # Plain identity presentation — no delegation involved (issue #74).
+    assert result.requestor_did == s.grantor_doc.id
+    assert result.grantor_did is None
+    assert result.scope is None
 
 
 async def test_valid_delegated_presentation_is_accepted():
@@ -168,6 +172,12 @@ async def test_valid_delegated_presentation_is_accepted():
     result = await verifier.verify_request(_FakeRequest(_header_for(vp)), challenge=challenge)
 
     assert result.ok is True
+    # The verified, unpacked grant must survive past the ok/error check
+    # (issue #74) — this is the whole point of the bridge: downstream
+    # code (stls-a2a, stls-mcp) needs the scope, not just a boolean.
+    assert result.requestor_did == s.requestor_doc.id
+    assert result.grantor_did == s.grantor_doc.id
+    assert result.scope == {"action": "invoke-workflow", "resource": "sparkle-agent-007"}
 
 
 # ---------------------------------------------------------------------------

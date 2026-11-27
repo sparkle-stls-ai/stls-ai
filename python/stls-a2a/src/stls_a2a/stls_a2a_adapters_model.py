@@ -172,6 +172,27 @@ class AgentRequest(BaseModel):
     id: Optional[Any] = None
     context: Optional[Dict[str, Any]] = None
 
+
+def verified_identity(request: "AgentRequest") -> Optional[Dict[str, Any]]:
+    """
+    Returns the identity_verifier's verified result for this request
+    (issue #74) — {"requestor_did", "grantor_did", "scope"} — or None
+    when identity_verifier wasn't configured, or this particular
+    request never went through an identity check (e.g. the plain
+    /a2a endpoint, which carries no session to bind a challenge to).
+
+    `scope` is the OperationalCredential's own scope, verbatim and
+    still opaque to this layer: identity proves WHO is calling and
+    THAT a grant exists, never whether this call's own parameters
+    match it. A framework="custom" handler (or downstream MCP tool —
+    the enforcement point closest to the real effect) is expected to
+    compare `scope` against its own request/tool-call parameters
+    itself before acting, exactly the separation of concerns
+    documented in stls_id_delegation.py's module docstring.
+    """
+    return (request.context or {}).get("identity")
+
+
 class AgentResponse(BaseModel):
     model_config = ConfigDict(exclude_none=True,populate_by_name=True)   
     result: Optional[Any] = None

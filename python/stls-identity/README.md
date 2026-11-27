@@ -106,7 +106,7 @@ loaded automatically by `tests/conftest.py`). Tests that don't touch
 external infrastructure still run with nothing configured.
 
 68 tests as of 0.1.0, 91 as of 0.1.1, 95 as of 0.1.2, 99 as of 0.1.3,
-109 as of 0.1.4, all against real crypto/DB/cache where relevant —
+109 as of 0.1.4, 112 as of 0.1.6, all against real crypto/DB/cache where relevant —
 never against Python stubs for the parts that matter (signing, canonicalization,
 persistence, revocation).
 

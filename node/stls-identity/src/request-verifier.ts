@@ -16,10 +16,31 @@
 import { PRESENTATION_HEADER, type VerifiableCredential } from "./models.js";
 import { CredentialVerificationError, Sentinel } from "./verifier.js";
 
-/** Matches the minimal duck type stls-a2a's identity_verifier hook expects back. */
+/**
+ * Matches the minimal duck type stls-a2a's identity_verifier hook
+ * expects back — `ok`/`error` is the part that hook has always read;
+ * `requestorDid`/`grantorDid`/`scope` are additive (issue #74) so the
+ * caller can carry the VERIFIED, unpacked credential past the gate to
+ * wherever the real effect happens, instead of discarding it the
+ * moment `ok` is true. 1:1 port of python's
+ * PresentationVerificationResult (stls_id_request_verifier.py) —
+ * same fields, same semantics for `scope` being `undefined` vs. an
+ * intentionally empty `{}`.
+ */
 export interface PresentationVerificationResult {
   ok: boolean;
   error?: string;
+  /** The presenting holder's own DID, set whenever ok=true — the
+   * Grantor's DID for a plain identity presentation, the Requestor's
+   * DID for a delegated one. */
+  requestorDid?: string;
+  /** Set only for a delegated presentation — undefined for a plain
+   * identity presentation, since there's no delegation involved. */
+  grantorDid?: string;
+  /** The OperationalCredential's own `scope`, verbatim — undefined
+   * for a plain identity presentation (no grant to carry), a dict
+   * (possibly empty) for a delegated one. */
+  scope?: Record<string, unknown>;
 }
 
 /**
@@ -88,6 +109,7 @@ export class RequestPresentationVerifier {
         const [identity] = shape;
         const { fetchTime, isRevoked } = await this.statusResolver(identity);
         await this.sentinel.verify(identity, { statusBitstringFetchTime: fetchTime, isRevoked });
+        return { ok: true, requestorDid: identity.credentialSubject.id };
       } else {
         const [operational, grantorIdentity] = shape;
         const grantor = await this.statusResolver(grantorIdentity);
@@ -99,6 +121,12 @@ export class RequestPresentationVerifier {
           operationalFetchTime: op.fetchTime,
           operationalIsRevoked: op.isRevoked,
         });
+        return {
+          ok: true,
+          requestorDid: operational.credentialSubject.id,
+          grantorDid: grantorIdentity.credentialSubject.id,
+          scope: operational.credentialSubject.scope,
+        };
       }
     } catch (exc) {
       if (exc instanceof CredentialVerificationError) {
@@ -106,7 +134,5 @@ export class RequestPresentationVerifier {
       }
       throw exc;
     }
-
-    return { ok: true };
   }
 }

@@ -2,6 +2,29 @@
 
 All relevant changes to this package, in reverse chronological order.
 
+## [0.1.6] — 2026-11-27
+
+Issue #74: authorization scope was never propagated from identity
+verification to the tool/action executor. `RequestPresentationVerifier.verify_request()`
+unpacked and verified the presented credential(s) — including the
+`OperationalCredential`'s `scope` — then discarded all of it the
+moment `.ok` was True, leaving stls-a2a's and stls-mcp's
+`identity_verifier` hooks with a bare boolean. This is the
+stls-identity side of the fix; see `python/stls-a2a` 0.1.13 and
+`python/stls-mcp` 0.1.10 for how the verified result now actually
+reaches the A2A agent handler and the MCP tool call.
+
+### Added
+
+- `PresentationVerificationResult` (`stls_id_request_verifier.py`) now
+  carries `requestor_did`, `grantor_did`, and `scope` alongside
+  `ok`/`error`, populated on every successful `verify_request()` call.
+  `scope` is `None` for a plain identity presentation (no delegation
+  involved) and the `OperationalCredential`'s own scope dict
+  (unchanged, still opaque to this layer) for a delegated one —
+  `None` vs. an intentionally empty `{}` is a real distinction, not
+  defaulted away.
+
 ## [0.1.5] — 2026-11-27
 
 Issue #65 audit, extended here from `stls-mcp`/`stls-a2a`: checked

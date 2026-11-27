@@ -13,9 +13,10 @@
 
 export * from "./constants.js";
 export * from "./auth.js";
+export * from "./identity-context.js";
 export { StlsMcpError, encryptedHandler, type EncryptedHandlerOptions } from "./middleware.js";
 export { createSecureMcpApp, stlsCapabilitiesFragment, type CreateSecureMcpAppOptions } from "./server.js";
 export { toNodeRequestListener } from "./http-adapter.js";
 export * from "./transport.js";
 
-export const STLS_MCP_NODE_VERSION = "0.1.5";
+export const STLS_MCP_NODE_VERSION = "0.1.10";

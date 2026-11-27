@@ -274,6 +274,44 @@ the encrypted endpoint in practice: the plain MCP endpoint never
 carries that header, so the check is naturally a no-op there even when
 `identityVerifier` is configured.
 
+#### Reaching the verified scope from inside a tool (issue #74)
+
+`identityVerifier.verifyRequest()`'s `ok`/`error` is only half the
+story — a successful result can also carry `requestorDid`/
+`grantorDid`/`scope` (the unpacked `OperationalCredential`'s own
+delegated grant). To let a tool callback actually enforce it, pass a
+`VerifiedIdentityStore` to **both** `createSecureMcpApp()` and the
+tool registration closure, then call `requireScope()` as the first
+line of the tool, before any real effect:
+
+```ts
+import { createSecureMcpApp, VerifiedIdentityStore, requireScope } from "stls-mcp";
+
+const identityStore = new VerifiedIdentityStore();
+
+function getServer() {
+  const mcp = new McpServer({ name: "meridian-network-ops", version: "1.0.0" });
+  mcp.tool("check_and_apply_reroute", schema, async (args, extra) => {
+    requireScope(identityStore, extra, { action: "reroute_traffic", segment: args.segment });
+    // ... the real effect, only reached if the delegated scope actually matches
+  });
+  return mcp;
+}
+
+const app = await createSecureMcpApp(getServer, provider, {
+  identityVerifier: myIdentityVerifier,
+  identityStore,
+});
+```
+
+This is the enforcement point closest to the real effect — the tool
+callback itself — so it holds even for an LLM-driven agent (ADK/
+LangChain) that picked the call's own arguments: the model is never
+part of the check, only the tool author's own key names are. See
+`identity-context.ts`'s module docstring for why this needs an
+explicit, shared `VerifiedIdentityStore` (Node's Fetch-API `Request`
+has nothing like Python's mutable `request.state`).
+
 ## Known limitations (v0.1)
 
 - **Streamable HTTP only** — no stdio transport, same as Python (nothing

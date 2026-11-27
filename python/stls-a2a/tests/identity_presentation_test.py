@@ -83,9 +83,12 @@ class FakeIdentityVerifier:
     """Minimal duck-typed stand-in for stls-identity's bridge — only
     what SecureA2AHTTPMiddleware._check_identity_async() actually calls."""
 
-    def __init__(self, ok: bool = True):
+    def __init__(self, ok: bool = True, *, requestor_did=None, grantor_did=None, scope=None):
         self.ok = ok
         self.calls: list[str] = []
+        self._requestor_did = requestor_did
+        self._grantor_did = grantor_did
+        self._scope = scope
 
     async def verify_request(self, request, *, challenge: str):
         self.calls.append(challenge)
@@ -96,6 +99,9 @@ class FakeIdentityVerifier:
         r = _Result()
         r.ok = self.ok
         r.error = None if self.ok else "fake rejection"
+        r.requestor_did = self._requestor_did
+        r.grantor_did = self._grantor_did
+        r.scope = self._scope
         return r
 
 
@@ -189,6 +195,64 @@ async def test_accepted_presentation_passes_identity_check():
         assert code2 != ERR_IDENTITY_CHALLENGE_REQUIRED, body2
         assert message2 != "Unauthorized: invalid identity presentation", body2
         assert verifier.calls == [challenge]
+
+
+def _make_request(headers: dict[str, str]):
+    """Minimal real starlette.requests.Request (not a duck-typed fake):
+    _extract_http_context() needs a genuine `.state`, which only a real
+    Request provides. No decrypt/agent round trip involved — this
+    drives SecureA2AHTTPMiddleware's own methods directly, the same
+    pair (_check_identity_async then _extract_http_context) the ASGI
+    handlers call in sequence on the live path."""
+    from starlette.requests import Request as _StarletteRequest
+
+    scope = {
+        "type": "http", "method": "POST", "path": "/secure-a2a",
+        "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+    }
+
+    async def _receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    return _StarletteRequest(scope, _receive)
+
+
+async def test_verified_scope_reaches_extracted_context():
+    """
+    Issue #74: the verified credential used to be discarded the moment
+    .ok was True — nothing downstream of the identity gate ever saw
+    WHAT was verified. This proves the fix: once _check_identity_async()
+    succeeds, _extract_http_context() (called right after it on the
+    live path, same request object) surfaces requestor/grantor DIDs
+    and the OperationalCredential's own scope, for a custom-framework
+    handler (or MCP tool, one layer further down) to act on.
+    """
+    from stls_a2a.stls_a2a_integration import SecureA2AHTTPMiddleware
+
+    verifier = FakeIdentityVerifier(
+        ok=True, requestor_did="did:web:b.example.com:agents:042",
+        grantor_did="did:web:sofia.sparkle.example.com:agents:099",
+        scope={"action": "reroute_traffic", "segment": "MER-SEG-7"},
+    )
+    middleware = SecureA2AHTTPMiddleware(_KEY_SESSION_PROVIDER, identity_verifier=verifier)
+
+    challenge_request = _make_request({"X-A2A-Session-ID": "sess-scope"})
+    denial = await middleware._check_identity_async(challenge_request)
+    assert denial is not None  # first call: challenge required, no presentation yet
+
+    presentation_request = _make_request({
+        "X-A2A-Session-ID": "sess-scope",
+        "X-STLS-Identity-Presentation": "ZmFrZS12cA==",
+    })
+    result = await middleware._check_identity_async(presentation_request)
+    assert result is None  # the fake verifier accepts unconditionally
+
+    ctx = middleware._extract_http_context(presentation_request)
+    assert ctx["identity"] == {
+        "requestor_did": "did:web:b.example.com:agents:042",
+        "grantor_did": "did:web:sofia.sparkle.example.com:agents:099",
+        "scope": {"action": "reroute_traffic", "segment": "MER-SEG-7"},
+    }
 
 
 async def test_rejected_presentation_is_denied():

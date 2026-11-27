@@ -45,6 +45,7 @@ from .stls_mcp_constants import (
 )
 from .stls_mcp_middleware import StlsMcpError, StlsMcpMiddleware
 from .stls_mcp_auth import AuthConfig
+from .stls_mcp_identity_context import get_verified_identity, require_scope, ScopeMismatchError
 from .stls_mcp_server import create_secure_mcp_app, stls_capabilities_fragment
 from .stls_mcp_transport import (
     StlsHandshakeFailed,
@@ -80,6 +81,11 @@ __all__ = [
     # File/Postgres) import from stls_core.auth and pass the
     # already-started instance to create_secure_mcp_app(api_key_manager=...).
     "AuthConfig",
+    # identity_context.py — issue #74: the identity_verifier's verified
+    # scope, carried from the auth gate to the tool handler itself.
+    "get_verified_identity",
+    "require_scope",
+    "ScopeMismatchError",
     # constants.py
     "MCP_PLAIN_PATH",
     "MCP_STLS_PATH",
@@ -89,4 +95,4 @@ __all__ = [
     "STLS_EXTENSION_URI",
 ]
 
-__version__ = "0.1.9"
+__version__ = "0.1.10"

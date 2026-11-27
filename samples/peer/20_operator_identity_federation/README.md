@@ -134,24 +134,33 @@ install` is still needed once in `helios_agent/` and
 `helios_mcp_server/` before the first run.
 
 `run_demo.py` starts the three background services for you, waits for
-them to be reachable, then walks through the three steps below,
+them to be reachable, then walks through the four steps below,
 pausing for Enter before each one and explaining what's about to
 happen. Everything runs on `localhost` — nothing here talks to the
 real internet.
 
-## The three things to try
+## The four things to try
 
 1. **The happy path.** Helios presents a valid permission slip
    together with Meridian's own, currently-good ID card. Accepted:
    Meridian's own MCP tool runs, the reroute is "applied", and Helios
    logs it as an incident ticket.
-2. **A stale permission slip.** Same request, but the slip presented
-   has already expired. Meridian's own ID card is completely
+2. **The right slip, the wrong ask (issue #74).** Same valid,
+   unexpired permission slip as step 1 — the delegation itself checks
+   out perfectly, Meridian's own ID card is fine. But this time Helios
+   asks Meridian to reroute a *different* segment (`MER-SEG-9`) than
+   the one the slip actually authorizes (`MER-SEG-7`). Rejected before
+   Meridian's own MCP tool is ever called: proving a valid grant
+   exists is a different question from proving THIS call matches it —
+   `_reroute_traffic_handler` checks the second one explicitly now,
+   via `stls_a2a.verified_identity()`. Before this fix, nothing did.
+3. **A stale permission slip.** Same request as step 1, but the slip
+   presented has already expired. Meridian's own ID card is completely
    unaffected and still valid — only the specific grant is stale.
    Rejected before Meridian's tool is ever called: being a recognized
    partner didn't help, because that was never the thing being
    checked at this step.
-3. **The point of the whole demo.** `run_demo.py` revokes **Meridian's
+4. **The point of the whole demo.** `run_demo.py` revokes **Meridian's
    own ID card** — not the permission slip, which is untouched and
    still inside its 10-minute window. Helios then presents the *exact
    same slip* that worked in step 1. Rejected anyway: a permission is
@@ -180,10 +189,12 @@ real internet.
   that constraint rather than working around it.
 - Scope (`{"action": "reroute_traffic", "segment": "MER-SEG-7"}`) is
   opaque to `Sentinel` by design — it never checks whether the scope
-  matches what was actually requested. That's `meridian_agent`'s own
-  job if it cared to (this sample doesn't bother, since the real point
-  is the identity/delegation check, not an authorization-scope
-  engine).
+  matches what was actually requested. That check is `meridian_agent`'s
+  own job, and (issue #74) it now actually does it: `_reroute_traffic_handler`
+  reads the verified scope back via `stls_a2a.verified_identity(request)`
+  and rejects the call if `segment` doesn't match what Helios's
+  credential was actually delegated for — identity proves a grant
+  exists, this is the separate check that it covers THIS call.
 
 ## Known limitation (by design, not a bug)
 
