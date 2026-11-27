@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-This file lists the open-source dependencies used by the six
+This file lists the open-source dependencies used by the seven
 dual-licensed STLS-AI packages (see [`README.md#licensing`](README.md#licensing)),
 and their licenses, as of this writing. It does not cover `samples/`,
 which carries its own, separate set of dependencies and is excluded
@@ -52,27 +52,60 @@ either direct or transitive — see "Scan coverage" below.
 | fastapi | MIT |
 | rfc8785 | Apache-2.0 |
 | asyncpg | Apache-2.0 |
+| httpx | BSD-3-Clause |
 
 ### `python/stls-a2a`
+
+Since issue #65, the agent-framework SDKs below are no longer pulled in
+by a plain `pip install stls_a2a` — each is an opt-in extra
+(`[google-adk]`, `[langchain]`, `[langgraph]`, `[semantic-kernel]`, or
+`[all]` for every one of them at once). Listed separately so this table
+reflects what actually gets installed, not a superset.
+
+Always installed:
+
 | Package | License |
 |---|---|
 | stls_core | AGPL-3.0-or-later OR commercial (this project) |
 | fastapi | MIT |
-| google-adk | Apache-2.0 |
-| google-genai | Apache-2.0 |
 | httpx | BSD-3-Clause |
 | jwt (GehirnInc) | Apache-2.0 |
 | PyJWT | MIT |
-| langchain | MIT |
-| langchain-community | MIT |
-| langchain-openai | MIT |
-| langgraph | MIT |
-| opentelemetry-api / -sdk | Apache-2.0 |
 | psycopg2-binary | LGPL-3.0 + OpenSSL exception (see above) |
 | python-dotenv | BSD-3-Clause |
 | redis | MIT |
-| semantic-kernel | MIT |
 | uvicorn | BSD-3-Clause |
+
+Only with the `[google-adk]` extra:
+
+| Package | License |
+|---|---|
+| google-adk | Apache-2.0 |
+| google-genai | Apache-2.0 |
+| opentelemetry-api / -sdk | Apache-2.0 |
+
+Only with the `[langchain]` extra:
+
+| Package | License |
+|---|---|
+| langchain | MIT |
+| langchain-community | MIT |
+| langchain-openai | MIT |
+
+Only with the `[langgraph]` extra:
+
+| Package | License |
+|---|---|
+| langgraph | MIT |
+
+Only with the `[semantic-kernel]` extra:
+
+| Package | License |
+|---|---|
+| semantic-kernel | MIT |
+
+`pybars4` (the transitive LGPL-3.0 dependency noted above) is pulled in
+only through the `[semantic-kernel]` extra, not by a plain install.
 
 ### `python/stls-mcp`
 | Package | License |
@@ -93,6 +126,16 @@ either direct or transitive — see "Scan coverage" below.
 | pg (optional) | MIT |
 | yaml (optional) | ISC |
 
+### `node/stls-identity`
+| Package | License |
+|---|---|
+| stls-core | AGPL-3.0-or-later OR commercial (this project; local workspace package, not third-party) |
+| @noble/curves | MIT |
+| bs58 | MIT |
+| canonicalize | Apache-2.0 |
+| redis | MIT |
+| pg (optional) | MIT |
+
 ### `node/stls-mcp`
 | Package | License |
 |---|---|
@@ -105,17 +148,23 @@ either direct or transitive — see "Scan coverage" below.
 The tables above cover direct, production dependencies as declared in
 each package's `pyproject.toml`/`package.json`. Additionally, a full
 transitive scan was run against the `python/stls-a2a` virtual
-environment (its dependency tree is a superset of `stls-core`'s and
-`stls-mcp`'s, through `langchain`/`langgraph`/`google-adk`/
-`semantic-kernel`) — 218 installed packages, inspected via
-`importlib.metadata`. Result: no GPL, AGPL, SSPL, or BUSL-licensed
-package found, beyond the two LGPL packages already noted above and
-this project's own AGPL/commercial-dual-licensed packages. Node's
-dependency tree is small enough (5 direct packages total across both
-Node packages) that it was reviewed directly rather than scanned.
+environment with every optional extra installed (`.[all]`) — its
+dependency tree is a superset of `stls-core`'s and `stls-mcp`'s,
+through `langchain`/`langgraph`/`google-adk`/`semantic-kernel` — 218
+installed packages, inspected via `importlib.metadata`. Result: no
+GPL, AGPL, SSPL, or BUSL-licensed package found, beyond the two LGPL
+packages already noted above and this project's own AGPL/commercial-
+dual-licensed packages. Since issue #65 made those four frameworks
+optional extras rather than a default install, a plain
+`pip install stls_a2a` pulls in only the "Always installed" subset of
+that scanned tree — strictly smaller, so the all-extras scan still
+covers it. Node's dependency tree is small enough (9 distinct direct
+packages across all three Node packages) that it was reviewed directly
+rather than scanned.
 
 This scan was not repeated for `python/stls-identity`, whose dependency
-tree is a strict subset of `stls-a2a`'s.
+tree (with `httpx` now mandatory as of issue #65, previously dev-only)
+is still a strict subset of `stls-a2a`'s "always installed" set.
 
 Dev-only dependencies (`pytest`, `httpx` as a test client, `fakeredis`,
 etc. — installed only via each package's `[dev]` extra, never required
