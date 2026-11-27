@@ -379,16 +379,19 @@ by default, see the extras list above):
 uv pip install -e ".[google-adk]"
 uv pip install -e ".[langchain]"
 uv pip install -e ".[langgraph]"
-uv pip install --prerelease=allow -e ".[semantic-kernel]"   # see note below
-uv pip install --prerelease=allow -e ".[all]"                # everything, previous default behavior
+uv pip install -e ".[semantic-kernel]"
+uv pip install -e ".[all]"            # everything, previous default behavior
 ```
 
-**`semantic-kernel` needs `--prerelease=allow` with `uv`**:
 `semantic-kernel>=1.39.4` (the floor here, raised for CVE-2026-26030 — a
-remote code execution vulnerability) depends on `azure-ai-agents`, which
-only publishes pre-release versions satisfying that floor. `uv` rejects
-pre-releases by default; plain `pip install` does not need the flag.
-This is an upstream `semantic-kernel` packaging choice.
+remote code execution vulnerability) depends on `azure-ai-agents`,
+which only ever publishes pre-release versions — no stable release
+exists at all. The `semantic-kernel` extra pins an exact
+`azure-ai-agents` version to satisfy that without needing `uv`'s
+`--prerelease=allow` globally (which otherwise also lets unrelated
+packages drift onto their own stray pre-releases — seen in practice
+with `authlib`/`redis` while regenerating `uv.lock`). Plain
+`pip install` never needed the flag either way.
 
 ### Package Build
 
