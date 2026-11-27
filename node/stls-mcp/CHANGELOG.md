@@ -7,6 +7,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.9] — 2026-11-27
+
+No `.ts` source changes. Version bump only, to stay numerically aligned
+with `python/stls-mcp` 0.1.9 (issue #65's audit) — that fix was
+Python-only: two dead `try/except ImportError` guards around mandatory
+`stls_core` imports (`AuthConfig`, `HANDSHAKE_PATH`/`HANDSHAKE_PQC_PATH`).
+`node/stls-mcp` was checked for the same issue during that audit and
+confirmed already clean (no dynamic/guarded imports at all, all three
+`package.json` dependencies genuinely mandatory) — nothing to fix here.
+
 ## [0.1.8] — 2026-11-27
 
 Brings the DID/VC identity-presentation hook (issue #15 gap #1,

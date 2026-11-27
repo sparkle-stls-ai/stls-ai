@@ -111,7 +111,7 @@ stls-ai/
 | [`stls-mcp`](python/stls-mcp) | Python ≥3.12 | 0.1.9 | Encrypted MCP endpoint (`/mcp-stls`) alongside a 100%-standard MCP endpoint (`/mcp`), built on the official MCP SDK; optional DID/VC identity-presentation hook. |
 | [`stls-core`](node/stls-core) | Node.js ≥20 / TS | 0.1.11 | TypeScript port of `python/stls-core` — bit-compatible wire format, cross-language tested. |
 | [`stls-identity`](node/stls-identity) | Node.js ≥20 / TS | 0.1.4 | TypeScript port of `python/stls-identity` — same DID/VC wire format, cross-language tested. |
-| [`stls-mcp`](node/stls-mcp) | Node.js ≥20 / TS | 0.1.8 | TypeScript port of `python/stls-mcp` — same dual-endpoint design, verified against the Python server/client. |
+| [`stls-mcp`](node/stls-mcp) | Node.js ≥20 / TS | 0.1.9 | TypeScript port of `python/stls-mcp` — same dual-endpoint design, verified against the Python server/client. |
 
 Each package README documents its own installation, configuration, and
 internals in depth — this document stays at the level of the whole
