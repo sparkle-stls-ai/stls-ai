@@ -14,6 +14,7 @@ in the transport layer: verify first, only proceed if every check passes.
 from __future__ import annotations
 
 import datetime as dt
+from typing import Awaitable, Callable
 
 import base58
 import rfc8785
@@ -42,6 +43,7 @@ class Sentinel:
         *,
         trusted_issuer_keys: dict[str, Ed25519PublicKey],
         trust_registry: TrustAnchorRegistryClient | None = None,
+        holder_key_resolver: Callable[[str, dt.datetime], Awaitable[Ed25519PublicKey | None]] | None = None,
     ):
         """
         trusted_issuer_keys maps verification_method id -> public key —
@@ -57,14 +59,26 @@ class Sentinel:
         rotated its key still verify correctly, without keeping every
         historical key loaded in the hot-path cache.
 
-        Deliberately NOT applied to verify_presentation_proof()'s holder
-        binding: the registry only tracks Governing Authority keys, never
-        individual agent keys — a Requestor's own key rotation is a
-        different, not-yet-built feature (agent DID Documents don't have
-        key history the way Trust Anchor entries now do).
+        holder_key_resolver: the per-agent analogue of trust_registry,
+        for verify_presentation_proof()'s holder binding (issue #42).
+        Deliberately a DIFFERENT parameter, not a reuse of
+        trust_registry: Governing Authority keys resolve via the Trust
+        Anchor Registry (one shared store, keyed by authority_id),
+        while an agent's own key history lives inside its OWN
+        DIDDocument (one per agent_id, see stls_id_did.py's
+        rotate_agent_signing_key()/resolve_holder_key_at()) — a
+        structurally different lookup, so it gets its own resolution
+        path rather than overloading trust_registry's shape onto data
+        it was never designed to hold. Pass
+        stls_id_did.make_did_document_holder_key_resolver(did_store,
+        governing_authority_host=...) for the common case. None
+        (default) = disabled: a holder key not already in
+        trusted_issuer_keys is simply rejected, same behavior as before
+        this parameter existed.
         """
         self._trusted_keys = trusted_issuer_keys
         self._trust_registry = trust_registry
+        self._holder_key_resolver = holder_key_resolver
 
     async def verify_signature(self, credential: VerifiableCredential) -> None:
         proof = credential.proof
@@ -198,7 +212,7 @@ class Sentinel:
             is_revoked=operational_is_revoked,
         )
 
-    def verify_presentation_proof(
+    async def verify_presentation_proof(
         self,
         presentation: VerifiablePresentation,
         *,
@@ -213,11 +227,18 @@ class Sentinel:
         via verify() or verify_delegation_chain() on the unpacked
         credentials — this method does not touch those at all.
 
-        The holder's key is resolved through the same trusted_issuer_keys
-        mapping used for credential issuers; nothing here treats a
-        holder's key as structurally different from an issuer's — both
-        are "a DID's key, resolved via its bridge or the registry",
-        the same way stls-identity resolves any other agent's key.
+        The holder's key is resolved through trusted_issuer_keys first
+        (fast path, no I/O — same dict used for credential issuers),
+        then, if configured, through holder_key_resolver (issue #42):
+        the key might not be currently published but still be the one
+        that was valid for this holder's DID WHEN this presentation was
+        signed, same "might be rotated, not necessarily untrusted"
+        reasoning verify_signature() already applies to issuer keys via
+        trust_registry.
+
+        Async since the holder_key_resolver fallback (unlike the
+        trusted_issuer_keys dict lookup) does I/O — same reason
+        verify_signature() is already async.
 
         Raises:
             CredentialVerificationError: unsigned, wrong proof purpose,
@@ -253,6 +274,8 @@ class Sentinel:
             )
 
         signer = self._trusted_keys.get(proof.verification_method)
+        if signer is None and self._holder_key_resolver is not None:
+            signer = await self._holder_key_resolver(proof.verification_method, proof.created)
         if signer is None:
             raise CredentialVerificationError(
                 f"unknown or untrusted holder verification method: {proof.verification_method}"

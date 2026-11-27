@@ -245,6 +245,7 @@ def load_delegation_manager(
     status_list_manager: StatusListManager,
     status_list_publish_url: str,
     audit_hook: AuditHook | None = None,
+    verification_method_id: str | None = None,
 ) -> DelegationManager | None:
     """
     Loads an already-bootstrapped-and-issued agent's own identity as a
@@ -270,6 +271,24 @@ def load_delegation_manager(
             Authority's own did:web — used to recompute this agent's
             DID locally (domain_and_path_to_did() is a pure function,
             no I/O).
+        verification_method_id: the CURRENT verification method id to
+            sign delegations with, if the caller already knows it (e.g.
+            via current_verification_method() on this agent's own
+            DIDDocument, resolved separately — this function stays
+            sync and never touches DIDDocumentStoreBase itself).
+            Defaults to "{holder_did}#key-1", correct for a Grantor
+            that has never rotated its key (issue #42) but WRONG the
+            moment it has: a DelegationManager built with a stale id
+            signs real Operational Credentials with a verification
+            method a verifier will find CLOSED (valid_until already
+            in the past) at the signature's own timestamp, failing
+            verification outright — not a timing edge case, a Grantor
+            that silently cannot delegate anymore after rotating.
+            Matters most for a long-running Grantor agent process
+            (built once at startup, cached — see
+            samples/server/sofia-admin/server/grantor_agent/
+            tools_delegation.py) that might outlive a rotation of its
+            own key without restarting.
 
     Returns:
         None if the agent has no signing key yet, no cached credential
@@ -294,7 +313,7 @@ def load_delegation_manager(
     return DelegationManager(
         grantor_did=holder_did,
         grantor_signing_key=holder_key,
-        grantor_verification_method_id=f"{holder_did}#key-1",
+        grantor_verification_method_id=verification_method_id or f"{holder_did}#key-1",
         status_list_manager=status_list_manager,
         status_list_publish_url=status_list_publish_url,
         audit_hook=audit_hook,

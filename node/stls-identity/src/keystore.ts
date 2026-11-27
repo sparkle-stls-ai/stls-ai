@@ -47,6 +47,22 @@ export interface IdentityKeystoreBase {
    * (re)publish the DID Document or just serve the existing one.
    */
   getOrCreate(agentId: string): Promise<{ privateKey: Uint8Array; created: boolean }>;
+  /**
+   * Key rotation (issue #42): unconditionally generates a NEW signing
+   * key and overwrites whatever was stored, regardless of whether one
+   * already existed. Unlike getOrCreate(), always returns a fresh key.
+   *
+   * The old private key is simply gone after this call, by design:
+   * nothing ever needs to sign with it again, only to verify
+   * signatures made with it before rotation, which only needs its
+   * PUBLIC half — kept resolvable via the agent's updated DIDDocument
+   * (see did.ts's rotateAgentSigningKey()), never via this keystore.
+   * Callers must update that DIDDocument in the same operation
+   * (did.ts's rotateSigningKey() does both) — calling this alone
+   * leaves the agent unable to sign anything verifiers can still
+   * resolve.
+   */
+  rotate(agentId: string): Promise<Uint8Array>;
 }
 
 abstract class BaseIdentityKeystore implements IdentityKeystoreBase {
@@ -61,6 +77,12 @@ abstract class BaseIdentityKeystore implements IdentityKeystoreBase {
     const newKey = ed25519.keygen().secretKey;
     await this.put(agentId, newKey);
     return { privateKey: newKey, created: true };
+  }
+
+  async rotate(agentId: string): Promise<Uint8Array> {
+    const newKey = ed25519.keygen().secretKey;
+    await this.put(agentId, newKey);
+    return newKey;
   }
 }
 

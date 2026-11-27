@@ -29,11 +29,17 @@ from .stls_id_models import (
     TrustAnchorEntry,
 )
 from .stls_id_did import (
+    agent_id_from_verification_method_id,
     bootstrap_signing_key,
     build_did_document,
+    current_verification_method,
     decode_multibase_ed25519_public_key,
     did_to_resolution_url,
     domain_and_path_to_did,
+    make_did_document_holder_key_resolver,
+    resolve_holder_key_at,
+    rotate_agent_signing_key,
+    rotate_signing_key,
 )
 from .stls_id_keystore import (
     IdentityKeystoreBase,
@@ -93,7 +99,7 @@ from .stls_id_trust_registry_client import (
 )
 from .stls_id_trust_registry_bridge import create_trust_registry_router
 
-__version__ = "0.1.6"
+__version__ = "0.1.7"
 
 __all__ = [
     # models
@@ -114,11 +120,17 @@ __all__ = [
     "VerifiablePresentation",
     "TrustAnchorEntry",
     # did
+    "agent_id_from_verification_method_id",
     "bootstrap_signing_key",
     "build_did_document",
+    "current_verification_method",
     "decode_multibase_ed25519_public_key",
     "did_to_resolution_url",
     "domain_and_path_to_did",
+    "make_did_document_holder_key_resolver",
+    "resolve_holder_key_at",
+    "rotate_agent_signing_key",
+    "rotate_signing_key",
     # keystore
     "IdentityKeystoreBase",
     "IdentityKeystoreFactory",

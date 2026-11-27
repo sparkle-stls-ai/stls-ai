@@ -62,11 +62,29 @@ export function toPydanticIsoString(date: Date): string {
 // DID Document (did:web)
 // ---------------------------------------------------------------------------
 
+/**
+ * Key history (issue #42, the per-agent analogue of TrustAnchorEntry's
+ * own key history): an agent's DIDDocument.verificationMethod can hold
+ * MULTIPLE entries over the agent's lifetime, one per key rotation.
+ * Older entries are kept, not removed, so a credential/presentation
+ * signed before a rotation still resolves against the key that was
+ * actually valid when it was signed (see resolveHolderKeyAt() in
+ * did.ts). `authentication`/`assertionMethod` on the owning DIDDocument
+ * always point at ONLY the current entry.
+ *
+ * validFrom/validUntil/revokedAt are all optional for backward
+ * compatibility with DID Documents published before this field
+ * existed (a single, un-rotated key). A document built fresh via
+ * buildDidDocument() always sets validFrom explicitly.
+ */
 export interface VerificationMethod {
   id: string; // e.g. "did:web:sofia.sparkle.example.com:agents:087#key-1"
   type: "Ed25519VerificationKey2020";
   controller: string; // the Governing Authority DID
   publicKeyMultibase: string; // multibase-encoded raw Ed25519 public key
+  validFrom?: string | null; // ISO-8601 (UTC) — None = no known lower bound
+  validUntil?: string | null; // ISO-8601 (UTC) — None = currently active
+  revokedAt?: string | null; // ISO-8601 (UTC) — emergency revocation of THIS key generation
 }
 
 export function makeVerificationMethod(

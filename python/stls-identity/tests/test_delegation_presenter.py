@@ -263,7 +263,7 @@ async def test_load_delegation_presenter_full_roundtrip_verifies_server_side(mon
         f"{grantor_doc.id}#key-1": grantor_pub,
         f"{requestor_doc.id}#key-1": requestor_pub,  # holder binding checks the Requestor's own key too
     })
-    sentinel.verify_presentation_proof(vp, expected_challenge=challenge)  # must not raise: holder binding
+    await sentinel.verify_presentation_proof(vp, expected_challenge=challenge)  # must not raise: holder binding
 
     shape = sentinel.unpack_presentation(vp)
     assert len(shape) == 2  # this is the delegated-call shape, not plain identity

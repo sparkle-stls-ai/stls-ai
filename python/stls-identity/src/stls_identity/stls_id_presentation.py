@@ -151,6 +151,7 @@ def load_identity_presenter(
     agent_id: str,
     *,
     governing_authority_host: str,
+    verification_method_id: str | None = None,
 ) -> IdentityPresenter | None:
     """
     Loads an already-bootstrapped-and-issued agent's identity as an
@@ -175,6 +176,16 @@ def load_identity_presenter(
             Authority's own did:web — used to recompute this agent's DID
             locally (domain_and_path_to_did() is a pure function, no I/O;
             did:web construction never needs a lookup).
+        verification_method_id: the CURRENT verification method id to
+            present with, if the caller already knows it (e.g. via
+            current_verification_method() on this agent's own
+            DIDDocument, resolved separately — this function stays sync
+            and never touches DIDDocumentStoreBase itself). Defaults to
+            "{holder_did}#key-1", correct for an agent that has never
+            rotated its key (issue #42) but STALE — the wrong id — the
+            moment it has: pass the resolved id explicitly whenever the
+            caller can, especially in a long-running process that might
+            outlive a rotation of this agent's own key.
 
     Returns:
         None if the agent has no signing key yet, or no cached
@@ -197,7 +208,7 @@ def load_identity_presenter(
     return IdentityPresenter(
         holder_did=holder_did,
         holder_signing_key=holder_key,
-        holder_verification_method_id=f"{holder_did}#key-1",
+        holder_verification_method_id=verification_method_id or f"{holder_did}#key-1",
         credentials=[credential],
     )
 
@@ -208,12 +219,17 @@ def load_delegation_presenter(
     grantor_identity_credential: NetworkAuthorityCredential,
     *,
     governing_authority_host: str,
+    verification_method_id: str | None = None,
 ) -> IdentityPresenter | None:
     """
     Loads an already-received Operational Credential (a delegation)
     as a ready-to-present IdentityPresenter — issue #54's follow-up to
     load_identity_presenter() above, for a Requestor presenting a
     delegated permission instead of its own plain identity.
+
+    verification_method_id: same meaning and same STALE-after-rotation
+    caveat as load_identity_presenter()'s own parameter (issue #42) —
+    defaults to "{holder_did}#key-1" when omitted.
 
     Deliberately does NOT resolve grantor_identity_credential itself —
     the Requestor must already have it (e.g. via
@@ -259,7 +275,7 @@ def load_delegation_presenter(
     return IdentityPresenter(
         holder_did=holder_did,
         holder_signing_key=holder_key,
-        holder_verification_method_id=f"{holder_did}#key-1",
+        holder_verification_method_id=verification_method_id or f"{holder_did}#key-1",
         credentials=[operational_credential, grantor_identity_credential],
     )
 
@@ -294,6 +310,22 @@ def identity_challenge_handler_from_env(
         ValueError: `agent_id_env_var` is set but `host_env_var` isn't —
             a half-configured identity is worse than none, fail loudly
             rather than silently presenting nothing.
+
+    LIMITATION (issue #42): called once, synchronously, typically at
+    module import time (see the docstring example above) — there is no
+    event loop available here to resolve this agent's CURRENT
+    verification_method_id from its DID Document, so the presenter
+    built here always falls back to load_identity_presenter()'s
+    "{holder_did}#key-1" default. Correct for an agent that never
+    rotates its key after this process starts; STALE the moment it
+    does, until the process restarts and re-imports. A caller that
+    needs correctness across a live rotation must resolve
+    verification_method_id itself (e.g. inside an async lifespan hook,
+    once a DIDDocumentStoreBase is available — see
+    samples/server/sofia-admin/server/identity_manager/server.py's
+    `_populate_coordinator_key()` for the same event-loop-timing
+    constraint solved the same way) and call load_identity_presenter()
+    directly instead of this convenience wrapper.
     """
     agent_id = os.environ.get(agent_id_env_var, "").strip()
     if not agent_id:

@@ -2,6 +2,70 @@
 
 All relevant changes to this package, in reverse chronological order.
 
+## [0.1.7] — 2026-11-27
+
+Issue #42: an individual agent had no equivalent of the Trust Anchor
+Registry's key history — a DID Document carried exactly one
+`verificationMethod`, so rotating an agent's own signing key made every
+credential/presentation it had already signed (and anything it signed
+with the old key afterward) unverifiable the moment the DID Document
+published only the new key. `verify_presentation_proof()`'s holder
+binding also had no historical-fallback path at all (it only checked
+`trusted_issuer_keys`), unlike `verify_signature()`'s issuer-key
+fallback via `TrustAnchorRegistryClient.resolve_historical()`.
+
+### Added
+
+- `VerificationMethod` (`stls_id_models.py`) gains `valid_from`/
+  `valid_until`/`revoked_at`, all optional (`None` default, backward
+  compatible with every DID Document published before this change) —
+  same semantics as `TrustAnchorEntry`'s own fields.
+- `stls_id_did.py`: `rotate_agent_signing_key()` (pure, in-memory:
+  closes the current verification method, appends a new one, repoints
+  `authentication`/`assertionMethod`), `rotate_signing_key()` (full
+  orchestration: new private key via `IdentityKeystoreBase.rotate()` +
+  persisted, updated DID Document), `current_verification_method()`
+  (the rotation-safe replacement for `verification_method[0]`),
+  `resolve_holder_key_at()` (resolves the key generation valid for a
+  given signing timestamp), `agent_id_from_verification_method_id()`,
+  and `make_did_document_holder_key_resolver()` (builds the resolver
+  `Sentinel` now accepts, see below).
+- `IdentityKeystoreBase.rotate(agent_id)` — unconditionally generates
+  and persists a new signing key, unlike `get_or_create()`.
+- `Sentinel.__init__` gains `holder_key_resolver`, an async callable
+  checked as a fallback by `verify_presentation_proof()` when a holder
+  key isn't in `trusted_issuer_keys` — the per-agent analogue of
+  `trust_registry`, intentionally a separate parameter since an
+  agent's key history lives in its own DID Document, not the shared
+  Trust Anchor Registry.
+
+### Changed
+
+- `Sentinel.verify_presentation_proof()` is now `async def` (was
+  sync) — required to await the new `holder_key_resolver` fallback,
+  same reason `verify_signature()` is already async. Every caller in
+  this package and its tests now awaits it.
+
+### Fixed
+
+- `load_identity_presenter()`, `load_delegation_presenter()`
+  (`stls_id_presentation.py`) and `load_delegation_manager()`
+  (`stls_id_delegation.py`) always hardcoded
+  `verification_method_id={holder_did}#key-1` — correct before this
+  release (there was only ever one key generation), but WRONG the
+  moment an agent actually rotates: a `DelegationManager`/
+  `IdentityPresenter` built with a stale id signs with the CURRENT
+  private key while claiming a verification method a verifier finds
+  CLOSED at the signature's own timestamp, failing verification
+  outright. All three now accept an optional `verification_method_id`
+  the caller can resolve itself (e.g. via `current_verification_method()`
+  on the agent's own `DIDDocument`) and pass through; omitted, they
+  keep the exact same `#key-1` default as before — fully backward
+  compatible. Found while checking `samples/server/sofia-admin`'s
+  Grantor agent for issue #42 fallout: its own `tools_delegation.py`
+  docstring already flagged "no rotation yet, issue #42" as the reason
+  it caches its `DelegationManager` for the life of the process.
+
 ## [0.1.6] — 2026-11-27
 
 Issue #74: authorization scope was never propagated from identity

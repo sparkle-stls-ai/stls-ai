@@ -91,6 +91,26 @@ class IdentityKeystoreBase(ABC):
         self.put(agent_id, new_key)
         return new_key, True
 
+    def rotate(self, agent_id: str) -> Ed25519PrivateKey:
+        """Key rotation (issue #42): unconditionally generates a NEW
+        signing key and overwrites whatever was stored, regardless of
+        whether one already existed. Unlike get_or_create(), always
+        returns a fresh key — this IS the point of rotation, not a
+        fallback for a missing one.
+
+        The old private key is simply gone after this call, by design:
+        nothing ever needs to sign with it again, only to verify
+        signatures made with it before rotation, which only needs its
+        PUBLIC half — kept resolvable via the agent's updated
+        DIDDocument (see stls_id_did.rotate_agent_signing_key()), never
+        via this keystore. Callers must update that DIDDocument in the
+        same operation (stls_id_did.rotate_signing_key() does both) —
+        calling this alone leaves the agent unable to sign anything
+        verifiers can still resolve."""
+        new_key = Ed25519PrivateKey.generate()
+        self.put(agent_id, new_key)
+        return new_key
+
 
 class InMemoryIdentityKeystore(IdentityKeystoreBase):
     """Dev/test only — does not survive a process restart, same caveat

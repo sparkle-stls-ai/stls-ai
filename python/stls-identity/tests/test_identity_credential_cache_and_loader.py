@@ -171,7 +171,7 @@ async def test_load_identity_presenter_full_roundtrip(monkeypatch):
     import json
     from stls_identity import VerifiablePresentation
     vp = VerifiablePresentation.model_validate(json.loads(base64.b64decode(headers["X-STLS-Identity-Presentation"])))
-    sentinel.verify_presentation_proof(vp, expected_challenge=challenge)  # must not raise
+    await sentinel.verify_presentation_proof(vp, expected_challenge=challenge)  # must not raise
 
 
 # ---------------------------------------------------------------------------

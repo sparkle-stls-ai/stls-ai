@@ -331,7 +331,7 @@ was transactional there.
 ## Keeping in sync with the Python version
 
 The version number in `package.json` follows
-`python/stls-identity/pyproject.toml` (currently `0.1.6`) — same
+`python/stls-identity/pyproject.toml` (currently `0.1.7`) — same
 convention as `stls-core`/`stls-mcp`. Not yet implemented: `bridge.ts`/
 `trust-registry-bridge.ts` (the FastAPI route wiring — no Node HTTP
 framework has been chosen for this package yet). `node/stls-mcp`'s own

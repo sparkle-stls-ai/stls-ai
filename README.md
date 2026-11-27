@@ -106,11 +106,11 @@ stls-ai/
 | Package | Language | Version | What it provides |
 |---|---|---|---|
 | [`stls-core`](python/stls-core) | Python ≥3.12 | 0.1.11 | Protocol-agnostic crypto, session cache, handshake, key providers, API-key auth. The common foundation. |
-| [`stls-identity`](python/stls-identity) | Python ≥3.12 | 0.1.6 | DID documents, Identity/Operational Verifiable Credentials, delegation, revocation, Trust Anchor Registry, Sentinel verifier. |
+| [`stls-identity`](python/stls-identity) | Python ≥3.12 | 0.1.7 | DID documents, Identity/Operational Verifiable Credentials, delegation, revocation, Trust Anchor Registry, Sentinel verifier, per-agent key rotation. |
 | [`stls-a2a`](python/stls-a2a) | Python ≥3.12 | 0.1.13 | Secure A2A transport, task lifecycle, agent cards, agent registry, optional DID/VC identity-presentation hook. Framework adapters (Google ADK, LangChain, LangGraph, Semantic Kernel) are optional extras, not installed by default. |
 | [`stls-mcp`](python/stls-mcp) | Python ≥3.12 | 0.1.10 | Encrypted MCP endpoint (`/mcp-stls`) alongside a 100%-standard MCP endpoint (`/mcp`), built on the official MCP SDK; optional DID/VC identity-presentation hook. |
 | [`stls-core`](node/stls-core) | Node.js ≥20 / TS | 0.1.11 | TypeScript port of `python/stls-core` — bit-compatible wire format, cross-language tested. |
-| [`stls-identity`](node/stls-identity) | Node.js ≥20 / TS | 0.1.6 | TypeScript port of `python/stls-identity` — same DID/VC wire format, cross-language tested. |
+| [`stls-identity`](node/stls-identity) | Node.js ≥20 / TS | 0.1.7 | TypeScript port of `python/stls-identity` — same DID/VC wire format, cross-language tested. |
 | [`stls-mcp`](node/stls-mcp) | Node.js ≥20 / TS | 0.1.10 | TypeScript port of `python/stls-mcp` — same dual-endpoint design, verified against the Python server/client. |
 
 Each package README documents its own installation, configuration, and
@@ -137,9 +137,11 @@ system.
   spec-compliant client never knows `/mcp-stls` exists.
 - **DID + Verifiable Credential identity** (`stls-identity`): agents get
   a persistent, third-party-verifiable identity — separate from
-  authorization — with delegation chains, revocation, and a Trust
-  Anchor Registry, built on real RFC 8785 (JCS) canonicalization and
-  Ed25519 signatures.
+  authorization — with delegation chains, revocation, a Trust Anchor
+  Registry, and per-agent key rotation (an agent's own DID Document
+  keeps every past key generation, so a credential/presentation signed
+  before a rotation still verifies), built on real RFC 8785 (JCS)
+  canonicalization and Ed25519 signatures.
 - **Delegated scope reaches the tool/action executor, not just the
   identity gate**: `stls-a2a`'s agent handler and `stls-mcp`'s tool
   callback can both read the caller's verified, delegated scope

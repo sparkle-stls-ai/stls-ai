@@ -115,7 +115,7 @@ class RequestPresentationVerifier:
             return PresentationVerificationResult(ok=False, error=f"malformed presentation: {exc}")
 
         try:
-            self._sentinel.verify_presentation_proof(presentation, expected_challenge=challenge)
+            await self._sentinel.verify_presentation_proof(presentation, expected_challenge=challenge)
             shape = self._sentinel.unpack_presentation(presentation)
 
             if len(shape) == 1:

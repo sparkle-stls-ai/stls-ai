@@ -65,6 +65,7 @@ from stls_identity import (
     TrustAnchorRegistryClient,
     bootstrap_signing_key,
     build_did_document,
+    current_verification_method,
     decode_multibase_ed25519_public_key,
     fetch_status_bit,
 )
@@ -1094,7 +1095,7 @@ async def validate_operational_credential(
             "reason": f"grantor '{grantor_agent_id}' has no published DID — cannot resolve its signing key",
         }
     try:
-        grantor_vm = grantor_document.verification_method[0]
+        grantor_vm = current_verification_method(grantor_document)
         grantor_pub = decode_multibase_ed25519_public_key(grantor_vm.public_key_multibase)
     except Exception as e:
         return {"valid": False, "reason": f"malformed grantor DID Document: {e}"}

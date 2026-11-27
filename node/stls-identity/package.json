@@ -1,6 +1,6 @@
 {
   "name": "stls-identity",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "DID + Verifiable Credential identity layer for the STLS AI ecosystem (Node.js port of python/stls-identity)",
   "license": "(AGPL-3.0-or-later OR LicenseRef-Commercial)",
   "repository": {
@@ -22,9 +22,10 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run test:jcs-canonicalization-smoke && npm run test:did-smoke && npm run test:presentation-smoke && npm run test:golden-vector-interop && npm run test:verifier-smoke && npm run test:request-verifier-smoke && npm run test:keystore-smoke && npm run test:credential-cache-smoke && npm run test:status-smoke && npm run test:postgres-store-smoke && npm run test:trust-registry-smoke && npm run test:issuer-smoke && npm run test:delegation-smoke",
+    "test": "npm run test:jcs-canonicalization-smoke && npm run test:did-smoke && npm run test:key-rotation-smoke && npm run test:presentation-smoke && npm run test:golden-vector-interop && npm run test:verifier-smoke && npm run test:request-verifier-smoke && npm run test:keystore-smoke && npm run test:credential-cache-smoke && npm run test:status-smoke && npm run test:postgres-store-smoke && npm run test:trust-registry-smoke && npm run test:issuer-smoke && npm run test:delegation-smoke",
     "test:jcs-canonicalization-smoke": "tsx tests/jcs-canonicalization.smoke.ts",
     "test:did-smoke": "tsx tests/did.smoke.ts",
+    "test:key-rotation-smoke": "tsx tests/key-rotation.smoke.ts",
     "test:presentation-smoke": "tsx tests/presentation.smoke.ts",
     "test:verifier-smoke": "tsx tests/verifier.smoke.ts",
     "test:request-verifier-smoke": "tsx tests/request-verifier.smoke.ts",

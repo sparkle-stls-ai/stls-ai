@@ -132,6 +132,15 @@ export class IdentityPresenter {
 
 export interface LoadIdentityPresenterOptions {
   governingAuthorityHost: string;
+  /**
+   * The CURRENT verification method id to present with, if the caller
+   * already knows it (e.g. via currentVerificationMethod() on this
+   * agent's own DIDDocument, resolved separately — this function
+   * never touches DIDDocumentStoreBase itself). Defaults to
+   * "{holderDid}#key-1", correct for an agent that has never rotated
+   * its key (issue #42) but STALE — the wrong id — the moment it has.
+   */
+  verificationMethodId?: string;
 }
 
 /**
@@ -163,11 +172,18 @@ export async function loadIdentityPresenter(
   }
 
   const holderDid = domainAndPathToDid(options.governingAuthorityHost, "agents", agentId);
-  return new IdentityPresenter(holderDid, holderKey, `${holderDid}#key-1`, [credential]);
+  return new IdentityPresenter(
+    holderDid,
+    holderKey,
+    options.verificationMethodId ?? `${holderDid}#key-1`,
+    [credential],
+  );
 }
 
 export interface LoadDelegationPresenterOptions {
   governingAuthorityHost: string;
+  /** Same meaning and same STALE-after-rotation caveat as LoadIdentityPresenterOptions's own field (issue #42). */
+  verificationMethodId?: string;
 }
 
 /**
@@ -204,10 +220,12 @@ export async function loadDelegationPresenter(
   }
 
   const holderDid = domainAndPathToDid(options.governingAuthorityHost, "agents", agentId);
-  return new IdentityPresenter(holderDid, holderKey, `${holderDid}#key-1`, [
-    operationalCredential,
-    grantorIdentityCredential,
-  ]);
+  return new IdentityPresenter(
+    holderDid,
+    holderKey,
+    options.verificationMethodId ?? `${holderDid}#key-1`,
+    [operationalCredential, grantorIdentityCredential],
+  );
 }
 
 export interface IdentityChallengeHandlerFromEnvOptions {

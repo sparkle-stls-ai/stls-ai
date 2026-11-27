@@ -52,7 +52,28 @@ _MODEL_CONFIG = ConfigDict(
 # ---------------------------------------------------------------------------
 
 class VerificationMethod(BaseModel):
-    """A single Ed25519 verification key published in the DID Document."""
+    """
+    A single Ed25519 verification key published in the DID Document.
+
+    Key history (issue #42, the per-agent analogue of TrustAnchorEntry's
+    own key history — see TrustAnchorRegistryStoreBase's module
+    docstring): an agent's DIDDocument.verification_method can hold
+    MULTIPLE entries over the agent's lifetime, one per key rotation.
+    Older entries are kept, not removed, specifically so a credential/
+    presentation signed before a rotation still resolves against the
+    key that was actually valid when it was signed (see
+    stls_id_did.resolve_holder_key_at()). `authentication`/
+    `assertion_method` on the owning DIDDocument always point at ONLY
+    the current entry — these three fields are what make that entry
+    "current" or "historical", not its position in the list.
+
+    valid_from/valid_until/revoked_at default to None for backward
+    compatibility with DID Documents published before this field
+    existed (a single, un-rotated key): None valid_from means "no
+    known lower bound" (treat as always valid up to valid_until), not
+    "invalid". A document built fresh via build_did_document() always
+    sets valid_from explicitly.
+    """
 
     model_config = _MODEL_CONFIG
 
@@ -60,6 +81,21 @@ class VerificationMethod(BaseModel):
     type: Literal["Ed25519VerificationKey2020"] = "Ed25519VerificationKey2020"
     controller: str  # the Governing Authority DID
     public_key_multibase: str  # multibase-encoded raw Ed25519 public key
+
+    valid_from: dt.datetime | None = None
+    """When this key generation started being valid. None = no known
+    lower bound (legacy pre-#42 documents, or intentionally open)."""
+
+    valid_until: dt.datetime | None = None
+    """None = this is the CURRENTLY active key generation. Set (to the
+    rotation timestamp) once a newer key generation replaces it — same
+    semantics as TrustAnchorEntry.valid_until."""
+
+    revoked_at: dt.datetime | None = None
+    """Emergency revocation of THIS SPECIFIC key generation — stronger
+    than rotation: resolve_holder_key_at() must refuse this key even
+    for timestamps before revoked_at that would otherwise be inside its
+    validity window. Same semantics as TrustAnchorEntry.revoked_at."""
 
 
 class DIDDocument(BaseModel):

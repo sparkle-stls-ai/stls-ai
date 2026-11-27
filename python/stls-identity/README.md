@@ -22,6 +22,7 @@ parallel throughout the migration.
 | Verifiable Presentation (Identity + Operational bundle) | `stls_id_presentation.py` | ✅ tested |
 | Identity Bridge (HTTP: DID Document + status list) | `stls_id_bridge.py`, `stls_id_postgres_store.py` | ✅ tested (real Postgres) |
 | Trust Anchor Registry — recognized Authorities + key history | `stls_id_trust_registry_*.py` | ✅ tested (real Postgres), hooked up live to the Sentinel |
+| Single-agent key rotation (issue #42) — `rotate_signing_key()`/`rotate_agent_signing_key()`: an agent's own DID Document keeps every past `verificationMethod` generation, so a credential/presentation signed before a rotation still resolves via `resolve_holder_key_at()`/`Sentinel`'s `holder_key_resolver` | `stls_id_did.py`, `stls_id_keystore.py`, `stls_id_verifier.py` | ✅ tested |
 | Verification (`Sentinel`) — signature, validity, revocation, delegation chain | `stls_id_verifier.py` | ✅ tested |
 | `stls-a2a` request bridge (issue #15 gap #1) — `X-STLS-Identity-Presentation` header, server-side verification, client-side `IdentityPresenter` | `stls_id_request_verifier.py`, `stls_id_presentation.py` | ✅ tested |
 | Identity Credential cache (issue #45) — `IdentityCredentialCacheBase`/`IdentityCredentialCacheFactory` (memory/redis), separate lifecycle from the signing-key keystore (TTL = the credential's own `validUntil`, no manual cleanup) | `stls_id_credential_cache.py` | ✅ tested |
@@ -39,10 +40,6 @@ Ed25519, proof type `DataIntegrityProof` /
 
 Listed explicitly so it doesn't look like it was forgotten:
 
-- **Single-agent key rotation** — key history only exists for
-  Governing Authorities in the Trust Anchor Registry. An agent that
-  rotates its own key doesn't have the same mechanism (its DID
-  Documents have no history).
 - **Hardware-backed keystore** — `IdentityKeystoreBase` only has
   software backends (`memory`, `redis`, the latter optionally
   encrypted at rest since issue #49); every credential honestly
@@ -106,7 +103,7 @@ loaded automatically by `tests/conftest.py`). Tests that don't touch
 external infrastructure still run with nothing configured.
 
 68 tests as of 0.1.0, 91 as of 0.1.1, 95 as of 0.1.2, 99 as of 0.1.3,
-109 as of 0.1.4, 112 as of 0.1.6, all against real crypto/DB/cache where relevant —
+109 as of 0.1.4, 112 as of 0.1.6, 125 as of 0.1.7, all against real crypto/DB/cache where relevant —
 never against Python stubs for the parts that matter (signing, canonicalization,
 persistence, revocation).
 

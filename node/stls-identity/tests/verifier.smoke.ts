@@ -232,9 +232,9 @@ const FRESH = { statusBitstringFetchTime: new Date(), isRevoked: false };
     challenge: "the-real-challenge",
   });
 
-  sentinel.verifyPresentationProof(vp, { expectedChallenge: "the-real-challenge" }); // must not throw
+  await sentinel.verifyPresentationProof(vp, { expectedChallenge: "the-real-challenge" }); // must not throw
 
-  assert.throws(
+  await assert.rejects(
     () => sentinel.verifyPresentationProof(vp, { expectedChallenge: "a-different-challenge" }),
     CredentialVerificationError,
   );
