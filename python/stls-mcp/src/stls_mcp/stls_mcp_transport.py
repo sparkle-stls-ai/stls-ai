@@ -26,14 +26,15 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Awaitable, Callable, Optional
+import inspect
+from typing import Any, Awaitable, Callable, Optional, Union
 
 import httpx
 
 from stls_core import HEADER_SESSION_ID
 from stls_core.stls_core_crypto import StlsTransport
 
-from .stls_mcp_constants import ERR_SESSION_EXPIRED
+from .stls_mcp_constants import ERR_IDENTITY_CHALLENGE_REQUIRED, ERR_SESSION_EXPIRED
 
 # perform_client_handshake(), perform_pqc_client_handshake() and
 # StlsHandshakeFailed moved to stls-core (stls_core_client_handshake.py)
@@ -49,6 +50,23 @@ from stls_core import (  # noqa: F401 — re-export
 )
 
 logger = logging.getLogger(__name__)
+
+IdentityChallengeHandler = Callable[[str], Union[dict[str, str], Awaitable[dict[str, str]]]]
+"""
+Signature stls-mcp expects for identity_challenge_handler (issue #15
+gap #1, brought here in #46): given the server-issued challenge string,
+returns (sync or async) the headers to merge into the retried request —
+typically stls_identity.IdentityPresenter.on_challenge, passed directly.
+stls-mcp never imports stls_identity; this is a duck type, same posture
+as identity_verifier on the server side (_AuthGateASGI). Same shape as
+stls-a2a's own IdentityChallengeHandler (stls_a2a_secure_remote.py).
+"""
+
+
+async def _maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 class StlsHttpxTransport(httpx.AsyncBaseTransport):
@@ -81,6 +99,17 @@ class StlsHttpxTransport(httpx.AsyncBaseTransport):
                        credentials apply (perform_client_handshake() needs
                        a pre-shared session_key; perform_pqc_client_handshake()
                        needs none) — this class stays provider-agnostic.
+        identity_challenge_handler: optional (issue #15 gap #1, #46) —
+                       see IdentityChallengeHandler's own docstring. None
+                       here (the default) means every
+                       ERR_IDENTITY_CHALLENGE_REQUIRED simply propagates
+                       as a normal httpx.HTTPStatusError, same as before
+                       this hook existed. Independent retry budget from
+                       `rehandshake` — a single request can legitimately
+                       retry once for session expiry AND once for an
+                       identity challenge (two different causes, same
+                       "retry exactly once per cause" contract as
+                       stls-a2a's STLSHttpxTransport).
     """
 
     def __init__(
@@ -91,21 +120,25 @@ class StlsHttpxTransport(httpx.AsyncBaseTransport):
         stls_path: str = "/mcp-stls",
         inner_transport: httpx.AsyncBaseTransport | None = None,
         rehandshake: Optional[Callable[[], Awaitable[tuple[str, StlsTransport]]]] = None,
+        identity_challenge_handler: Optional[IdentityChallengeHandler] = None,
     ) -> None:
         self._session_id = session_id
         self._transport = transport
         self._stls_path = stls_path
         self._inner = inner_transport or httpx.AsyncHTTPTransport()
         self._rehandshake = rehandshake
+        self._identity_challenge_handler = identity_challenge_handler
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         if request.url.path != self._stls_path or request.method != "POST":
             # Pass-through for any request not aimed at the STLS path
             # (e.g. GET for an SSE stream, requests to other endpoints).
             return await self._inner.handle_async_request(request)
-        return await self._handle_stls_request(request, _retried=False)
+        return await self._handle_stls_request(request, _retried=False, _identity_retried=False)
 
-    async def _handle_stls_request(self, request: httpx.Request, *, _retried: bool) -> httpx.Response:
+    async def _handle_stls_request(
+        self, request: httpx.Request, *, _retried: bool, _identity_retried: bool = False
+    ) -> httpx.Response:
         # ── Encrypt the outgoing body ───────────────────────────────────────────
         try:
             plaintext_payload = json.loads(request.content)
@@ -117,7 +150,9 @@ class StlsHttpxTransport(httpx.AsyncBaseTransport):
         encrypted_body = json.dumps(envelope).encode("utf-8")
 
         # Native MCP headers (mcp-session-id, accept, etc.) are preserved;
-        # we only add the STLS session header and fix up content-length.
+        # we only add the STLS session header (plus, on an identity retry,
+        # the presentation header merged in by the caller) and fix up
+        # content-length.
         headers = httpx.Headers(request.headers)
         headers[HEADER_SESSION_ID] = self._session_id
         headers["content-length"] = str(len(encrypted_body))
@@ -135,13 +170,10 @@ class StlsHttpxTransport(httpx.AsyncBaseTransport):
         # server-side (see StlsMcpMiddleware._send_json_error) — never try
         # to decrypt them.
         if response.status_code >= 400:
-            if (
-                response.status_code == 401
-                and not _retried
-                and self._rehandshake is not None
-            ):
+            if response.status_code == 401:
                 await response.aread()
-                if _looks_like_session_expired(response):
+
+                if not _retried and self._rehandshake is not None and _looks_like_session_expired(response):
                     logger.info(
                         "StlsHttpxTransport: session expired, re-handshaking and retrying"
                     )
@@ -149,7 +181,29 @@ class StlsHttpxTransport(httpx.AsyncBaseTransport):
                     # immediately, with no retry — same fail-fast contract
                     # as stls-a2a's STLSHttpxTransport.
                     self._session_id, self._transport = await self._rehandshake()
-                    return await self._handle_stls_request(request, _retried=True)
+                    return await self._handle_stls_request(
+                        request, _retried=True, _identity_retried=_identity_retried,
+                    )
+
+                if not _identity_retried and self._identity_challenge_handler is not None:
+                    challenge = _looks_like_identity_challenge_required(response)
+                    if challenge is not None:
+                        logger.info(
+                            "StlsHttpxTransport: identity presentation required, "
+                            "signing and retrying"
+                        )
+                        identity_headers = await _maybe_await(
+                            self._identity_challenge_handler(challenge)
+                        )
+                        retried_request = httpx.Request(
+                            method=request.method,
+                            url=request.url,
+                            headers={**dict(request.headers), **identity_headers},
+                            content=request.content,
+                        )
+                        return await self._handle_stls_request(
+                            retried_request, _retried=_retried, _identity_retried=True,
+                        )
             return response
 
         # ── Decrypt the inbound body ───────────────────────────────────────
@@ -192,12 +246,34 @@ def _looks_like_session_expired(response: httpx.Response) -> bool:
     return isinstance(error, dict) and error.get("code") == ERR_SESSION_EXPIRED
 
 
+def _looks_like_identity_challenge_required(response: httpx.Response) -> Optional[str]:
+    """
+    Recognizes a 401 response as ERR_IDENTITY_CHALLENGE_REQUIRED (-32005)
+    and extracts the challenge to sign over — distinct from
+    ERR_SESSION_EXPIRED's own 401 (that one justifies a re-handshake;
+    this one justifies calling identity_challenge_handler and retrying
+    with a signed VerifiablePresentation header instead). Mirrors
+    stls-a2a's helper of the same name (stls_a2a_secure_remote.py).
+
+    Returns the challenge string, or None if this isn't that error.
+    """
+    try:
+        body = response.json()
+    except Exception:
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    if isinstance(error, dict) and error.get("code") == ERR_IDENTITY_CHALLENGE_REQUIRED:
+        return error.get("challenge")
+    return None
+
+
 def stls_httpx_factory(
     session_id: str,
     transport: StlsTransport,
     *,
     stls_path: str = "/mcp-stls",
     rehandshake: Optional[Callable[[], Awaitable[tuple[str, StlsTransport]]]] = None,
+    identity_challenge_handler: Optional[IdentityChallengeHandler] = None,
 ):
     """
     Builds a factory compatible with
@@ -219,6 +295,9 @@ def stls_httpx_factory(
                              return await perform_pqc_client_handshake(
                                  base_url, client_id="my-client",
                              )
+        identity_challenge_handler: see StlsHttpxTransport's docstring —
+                     typically stls_identity.load_identity_presenter(...).on_challenge
+                     or stls_identity.identity_challenge_handler_from_env().
 
     Typical usage:
 
@@ -249,6 +328,7 @@ def stls_httpx_factory(
     ) -> httpx.AsyncClient:
         stls_transport = StlsHttpxTransport(
             session_id, transport, stls_path=stls_path, rehandshake=rehandshake,
+            identity_challenge_handler=identity_challenge_handler,
         )
         kwargs: dict[str, Any] = {"transport": stls_transport, "follow_redirects": True}
         if headers is not None:

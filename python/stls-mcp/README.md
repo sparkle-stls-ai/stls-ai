@@ -276,6 +276,56 @@ Every framework exposes `headers` at the connection configuration level —
 see the next section for full examples with
 `STLSMCPToolset`/`MultiServerMCPClient`/`MCPStreamableHttpPlugin`.
 
+### Optional: DID/VC identity check (issue #15 gap #1)
+
+`identity_verifier=` adds an ADDITIONAL check on top of `api_key_manager`/`auth`
+— never a substitute for them. It's a duck type, same posture as
+`api_key_manager`: `stls-mcp` never imports `stls-identity`, it only calls
+`await identity_verifier.verify_request(request, challenge=...)` expecting
+an object with `.ok`/`.error`. `stls-identity`'s `RequestPresentationVerifier`
+(`from stls_identity import RequestPresentationVerifier, Sentinel`) is the
+ready-made implementation, built on `Sentinel` — same object `stls-a2a`
+already uses for this. Omitting it (the default) means zero header
+parsing, zero challenge-cache use, zero behavior change.
+
+```python
+from stls_mcp import create_secure_mcp_app
+
+app = create_secure_mcp_app(
+    mcp, provider,
+    api_key_manager=api_key_manager,   # optional, independent of identity
+    identity_verifier=my_identity_verifier,
+)
+```
+
+On the client side, `StlsHttpxTransport`/`stls_httpx_factory()` take a
+matching `identity_challenge_handler=` — typically
+`stls_identity.IdentityPresenter(...).on_challenge`, or
+`stls_identity.identity_challenge_handler_from_env()`, passed directly.
+The first call on a session gets `ERR_IDENTITY_CHALLENGE_REQUIRED`
+(-32005) with a fresh challenge; the handler signs a
+`VerifiablePresentation` over it and the SAME call retries
+automatically, exactly once — independent retry budget from the
+existing re-handshake-on-`ERR_SESSION_EXPIRED` behavior (a single
+request can legitimately retry once for each cause).
+
+```python
+from stls_mcp import stls_httpx_factory
+
+factory = stls_httpx_factory(
+    session_id, transport,
+    identity_challenge_handler=my_presenter.on_challenge,
+)
+```
+
+Keyed off `stls-core`'s own `X-STLS-Session-ID` header — unlike
+`stls-a2a` (which has its own `X-A2A-Session-ID`), `stls-mcp` already
+uses the generic `stls-core` session header for the STLS crypto
+binding, so there's no second header to introduce. Scoped to the
+encrypted endpoint in practice: the plain MCP endpoint never carries
+that header, so the check is naturally a no-op there even when
+`identity_verifier` is configured.
+
 ## Quick usage
 
 ### Server

@@ -98,3 +98,33 @@ from any other 401 (e.g. an auth-layer API-key rejection), so only this
 code justifies an automatic retry after re-handshake — see
 StlsHttpxTransport's rehandshake parameter in stls_mcp_transport.py.
 """
+
+ERR_IDENTITY_CHALLENGE_REQUIRED: int = -32005
+"""
+Same numeric value and meaning as stls_a2a's ERR_IDENTITY_CHALLENGE_REQUIRED
+(stls_a2a_adapters_model.py, issue #15 gap #1) — brought here for #46.
+Raised by _AuthGateASGI (stls_mcp_auth.py) with status 401 when
+identity_verifier is configured and the caller hasn't yet presented a
+valid VerifiablePresentation for its current STLS session. Distinct
+from ERR_SESSION_EXPIRED: this code justifies calling
+identity_challenge_handler and retrying with a signed presentation
+header, not a re-handshake — see StlsHttpxTransport's
+identity_challenge_handler parameter in stls_mcp_transport.py.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Identity presentation header (issue #15 gap #1 / #46)
+# ---------------------------------------------------------------------------
+
+HEADER_IDENTITY_PRESENTATION: str = "X-STLS-Identity-Presentation"
+"""
+MUST match stls_identity.PRESENTATION_HEADER (stls_id_models.py) exactly
+— hardcoded as a literal here, deliberately NOT imported from
+stls_identity, to preserve the same one-way dependency rule already
+documented for identity_verifier/identity_challenge_handler: stls-mcp
+must stay fully usable without stls_identity installed. python/stls-a2a
+makes the same choice (stls_a2a_integration.py/stls_a2a_secure_remote.py
+hardcode this same literal rather than importing it) — kept consistent
+here rather than introducing a different convention.
+"""

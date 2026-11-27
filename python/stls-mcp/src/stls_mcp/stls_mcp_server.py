@@ -112,6 +112,7 @@ def create_secure_mcp_app(
     session_cache: SessionCacheBase | None = None,
     auth: AuthConfig | None = None,
     api_key_manager: Any | None = None,
+    identity_verifier: Any | None = None,
 ) -> Any:
     """
     Builds the complete ASGI app with plain + STLS-encrypted MCP endpoints.
@@ -162,6 +163,21 @@ def create_secure_mcp_app(
                               not just the encrypted channel (same behavior
                               as stls-a2a). The handshake endpoints stay
                               always open, by design.
+        identity_verifier:     optional DID/VC identity check (issue #15
+                              gap #1, brought to stls-mcp in #46),
+                              duck-typed like api_key_manager — this
+                              package never imports stls_identity, it
+                              only calls `await identity_verifier.verify_request(
+                              request, challenge=...)` expecting an
+                              object with `.ok`/`.error`. Runs as an
+                              ADDITIONAL check, strictly after
+                              api_key_manager/auth have already passed.
+                              None (default) = disabled, zero behavior
+                              change. Scoped to {stls_path} in practice:
+                              it keys off the STLS session header, which
+                              {plain_path} requests never carry — see
+                              _AuthGateASGI._check_identity_async() in
+                              stls_mcp_auth.py.
 
     Returns:
         ASGI app ready to be served with uvicorn (uvicorn.run(app, ...)
@@ -212,8 +228,12 @@ def create_secure_mcp_app(
     # (the "bare" plain_app above stays shared and unprotected for
     # StlsMcpMiddleware's internal forwarding). If auth and api_key_manager
     # are both None, wrap_with_auth returns the app unchanged — no overhead.
-    guarded_plain_app = wrap_with_auth(plain_app, auth=auth, api_key_manager=api_key_manager)
-    guarded_stls_app = wrap_with_auth(stls_app, auth=auth, api_key_manager=api_key_manager)
+    guarded_plain_app = wrap_with_auth(
+        plain_app, auth=auth, api_key_manager=api_key_manager, identity_verifier=identity_verifier,
+    )
+    guarded_stls_app = wrap_with_auth(
+        stls_app, auth=auth, api_key_manager=api_key_manager, identity_verifier=identity_verifier,
+    )
 
     # ── Standard STLS handshake endpoint (HMAC challenge/response) ────────
     async def handshake_endpoint(request: Request) -> JSONResponse:
