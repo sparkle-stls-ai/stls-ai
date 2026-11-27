@@ -75,15 +75,20 @@ _IDENTITY_CHALLENGE_TTL_SECONDS = 120
 __all__ = ["AuthConfig", "wrap_with_auth"]
 
 # AuthConfig now lives in stls_core.auth — shared with stls-a2a, no longer
-# duplicated. Same try/except pattern already used for ApiKeyManager: its
-# absence (redis/yaml/asyncpg not installed) must not prevent importing
-# this module, even though in practice AuthConfig itself requires no
-# external dependency — see the comment on its definition in
-# stls_core_auth_models.py.
-try:
-    from stls_core.auth.stls_core_auth_models import AuthConfig
-except ImportError:
-    AuthConfig = None  # type: ignore[assignment,misc]
+# duplicated.
+#
+# Issue #65: this used to be guarded with try/except ImportError, as if
+# stls_core (or its auth submodule) might be absent. It can't be: stls_core
+# is a MANDATORY dependency of stls-mcp (pyproject.toml's unconditional
+# `dependencies`, no extras group involved), and AuthConfig itself needs
+# no external dependency beyond stls_core (see its own docstring in
+# stls_core_auth_models.py) — unlike ApiKeyManager, whose redis/postgres
+# *backends* genuinely are optional and DO warrant a guard elsewhere.
+# A plain import here fails loudly (ModuleNotFoundError at `import
+# stls_mcp` time) if stls_core's own install is ever genuinely broken,
+# instead of silently degrading to AuthConfig = None — the right failure
+# mode for a dependency this module can always assume is present.
+from stls_core.auth.stls_core_auth_models import AuthConfig
 
 
 class _Denial:

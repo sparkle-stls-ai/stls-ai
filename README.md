@@ -108,7 +108,7 @@ stls-ai/
 | [`stls-core`](python/stls-core) | Python ≥3.12 | 0.1.11 | Protocol-agnostic crypto, session cache, handshake, key providers, API-key auth. The common foundation. |
 | [`stls-identity`](python/stls-identity) | Python ≥3.12 | 0.1.4 | DID documents, Identity/Operational Verifiable Credentials, delegation, revocation, Trust Anchor Registry, Sentinel verifier. |
 | [`stls-a2a`](python/stls-a2a) | Python ≥3.12 | 0.1.12 | Secure A2A transport, task lifecycle, agent cards, agent registry, optional DID/VC identity-presentation hook. Framework adapters (Google ADK, LangChain, LangGraph, Semantic Kernel) are optional extras, not installed by default. |
-| [`stls-mcp`](python/stls-mcp) | Python ≥3.12 | 0.1.8 | Encrypted MCP endpoint (`/mcp-stls`) alongside a 100%-standard MCP endpoint (`/mcp`), built on the official MCP SDK; optional DID/VC identity-presentation hook. |
+| [`stls-mcp`](python/stls-mcp) | Python ≥3.12 | 0.1.9 | Encrypted MCP endpoint (`/mcp-stls`) alongside a 100%-standard MCP endpoint (`/mcp`), built on the official MCP SDK; optional DID/VC identity-presentation hook. |
 | [`stls-core`](node/stls-core) | Node.js ≥20 / TS | 0.1.11 | TypeScript port of `python/stls-core` — bit-compatible wire format, cross-language tested. |
 | [`stls-identity`](node/stls-identity) | Node.js ≥20 / TS | 0.1.4 | TypeScript port of `python/stls-identity` — same DID/VC wire format, cross-language tested. |
 | [`stls-mcp`](node/stls-mcp) | Node.js ≥20 / TS | 0.1.8 | TypeScript port of `python/stls-mcp` — same dual-endpoint design, verified against the Python server/client. |

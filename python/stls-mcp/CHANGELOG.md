@@ -7,6 +7,35 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.9] — 2026-11-27
+
+Issue #65 audit (the `stls-mcp` part — see `python/stls-a2a` 0.1.12 for
+the larger framework-extras pass this followed): two `except ImportError`
+guards in this package turned out to be guarding imports from `stls_core`,
+which is a MANDATORY dependency here, not an optional one — dead code,
+not real optionality.
+
+### Fixed
+
+- `stls_mcp_auth.py`: `AuthConfig` is now imported directly from
+  `stls_core.auth.stls_core_auth_models`, no `try/except ImportError`
+  fallback to `None`. `AuthConfig` itself needs no external dependency
+  beyond `stls_core` (unlike `ApiKeyManager`'s genuinely-optional redis/
+  postgres backends, which still warrant their own guards elsewhere) —
+  a plain import now fails loudly if `stls_core`'s own install is ever
+  genuinely broken, instead of silently degrading.
+- `stls_mcp_server.py`: `HANDSHAKE_PATH`/`HANDSHAKE_PQC_PATH` are now
+  imported directly from `stls_core`, no hardcoded-string fallback —
+  both constants have existed since well below this package's own
+  `stls_core` floor; the removed guards carried their own
+  `# pragma: no cover`, i.e. the previous author already knew the
+  except branch was dead.
+
+`node/stls-mcp` was also re-checked for the same issue and found
+already clean: no dynamic/guarded imports at all, and all three
+`package.json` dependencies (`stls-core`, the MCP SDK, `zod`) are
+genuinely mandatory. No change needed there.
+
 ## [0.1.8] — 2026-11-27
 
 Brings the DID/VC identity-presentation hook (issue #15 gap #1,
