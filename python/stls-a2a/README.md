@@ -322,12 +322,19 @@ Main dependencies declared in [pyproject.toml](./pyproject.toml):
 - `redis` (base dependency — `import stls_a2a` always fails without it on a clean venv)
 - `psycopg2-binary` (for `PostgresLoader`/`AgentRegistry`)
 - `jwt`/`PyJWT`
-- `opentelemetry-api`, `opentelemetry-sdk`
-- `google-adk[a2a]`, `google-genai`
-- `langchain`, `langchain-community`, `langchain-openai`, `langgraph`
-- `semantic-kernel`
 - `python-dotenv`
-- `yfinance` (optional, `[examples]` extra)
+
+Agent-framework SDKs are **optional extras** (issue #65) — `import stls_a2a`
+itself never requires any of them; only actually constructing the
+matching adapter does, with a clear `ImportError` naming the extra to
+install if it's missing:
+
+- `google-adk[a2a]`, `google-genai`, `opentelemetry-api`, `opentelemetry-sdk` → `stls_a2a[google-adk]`
+- `langchain`, `langchain-community`, `langchain-openai` → `stls_a2a[langchain]`
+- `langgraph` → `stls_a2a[langgraph]`
+- `semantic-kernel` → `stls_a2a[semantic-kernel]`
+- `yfinance` → `stls_a2a[examples]`
+- all of the above → `stls_a2a[all]`
 
 ## Installation
 
@@ -364,6 +371,24 @@ uv pip install -e ".[arqit_py]" \
   --find-links arqit_wheels/arqit-skaplatform-peering/ \
   --find-links arqit_wheels/arqit-skaplatform-monitoring/
 ```
+
+With an agent-framework adapter (issue #65 — none of these are installed
+by default, see the extras list above):
+
+```bash
+uv pip install -e ".[google-adk]"
+uv pip install -e ".[langchain]"
+uv pip install -e ".[langgraph]"
+uv pip install --prerelease=allow -e ".[semantic-kernel]"   # see note below
+uv pip install --prerelease=allow -e ".[all]"                # everything, previous default behavior
+```
+
+**`semantic-kernel` needs `--prerelease=allow` with `uv`**:
+`semantic-kernel>=1.39.4` (the floor here, raised for CVE-2026-26030 — a
+remote code execution vulnerability) depends on `azure-ai-agents`, which
+only publishes pre-release versions satisfying that floor. `uv` rejects
+pre-releases by default; plain `pip install` does not need the flag.
+This is an upstream `semantic-kernel` packaging choice.
 
 ### Package Build
 

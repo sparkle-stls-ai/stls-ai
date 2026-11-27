@@ -12,10 +12,22 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # ADAPTER FOR SEMANTIC KERNEL
 # ============================================================================
+# semantic-kernel is an optional extra (issue #65: stls_a2a[semantic-kernel]),
+# not a mandatory dependency — this module must stay importable without it
+# (create_adapter() in stls_a2a_adapters.py imports SemanticKernelAdapter
+# lazily for exactly this reason). The actual failure is deferred to
+# SemanticKernelAdapter.__init__ below, which raises a clear ImportError
+# before _detect_mode() (the first thing that would otherwise dereference
+# ChatCompletionAgent) ever runs.
 
-from semantic_kernel.contents import ChatHistory
-from semantic_kernel.functions.kernel_arguments import KernelArguments
-from semantic_kernel.agents import ChatCompletionAgent
+try:
+    from semantic_kernel.contents import ChatHistory
+    from semantic_kernel.functions.kernel_arguments import KernelArguments
+    from semantic_kernel.agents import ChatCompletionAgent
+except ImportError:
+    ChatHistory = None  # type: ignore[assignment,misc]
+    KernelArguments = None  # type: ignore[assignment,misc]
+    ChatCompletionAgent = None  # type: ignore[assignment,misc]
 
 class SemanticKernelAdapter(AgentAdapter):
     """
@@ -32,6 +44,12 @@ class SemanticKernelAdapter(AgentAdapter):
             agent_or_kernel: ChatCompletionAgent or Kernel
             function_name: only for direct Kernel, e.g. 'PluginName.FunctionName'
         """
+        if ChatCompletionAgent is None:
+            raise ImportError(
+                "SemanticKernelAdapter requires semantic-kernel. "
+                "Install with: pip install stls_a2a[semantic-kernel]"
+            )
+
         self.agent_or_kernel = agent_or_kernel
         self.function_name = function_name
         self._mode = self._detect_mode()
