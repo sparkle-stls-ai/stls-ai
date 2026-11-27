@@ -49,6 +49,16 @@ HERE = Path(__file__).parent
 PORT = int(os.getenv("PORT", "8019"))
 IDENTITY_ENABLED = os.getenv("IDENTITY_ENABLED", "true").strip().lower() != "false"
 
+# This sample is specifically about the PQC handshake path (see
+# README) — create_secure_a2a_endpoint() only registers
+# /stls/pqc/handshake when it sees KEY_PROVIDER_NAME=pqc itself, so
+# this is set explicitly rather than left to the caller's environment.
+# Previously this "worked" without it only by accident, via
+# stls_a2a's own dev .env leaking KEY_PROVIDER_NAME=pqc into every
+# process that imports it (fixed in stls_a2a 0.1.13, see its
+# CHANGELOG) — this sample never actually declared the dependency.
+os.environ.setdefault("KEY_PROVIDER_NAME", "pqc")
+
 
 async def _whoami_handler(request):
     """Plain function agent (framework='custom') — just echoes the
@@ -101,6 +111,7 @@ def _build_identity_verifier() -> RequestPresentationVerifier | None:
 def start_server() -> None:
     key_session_provider: KeySessionProvider = KeySessionProviderFactory().get_session_provider(
         session_type=KeySessionProvider.KeySessionProviderType.SERVER, port=PORT,
+        name="pqc",
     )
 
     app = FastAPI(title="Identity Presentation sample — Verifier agent")

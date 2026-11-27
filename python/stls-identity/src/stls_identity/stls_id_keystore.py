@@ -56,6 +56,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 
+import redis as redis_lib
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
 )
@@ -121,14 +122,6 @@ class RedisIdentityKeystore(IdentityKeystoreBase):
         redis_url: str = "redis://localhost:6379",
         namespace: str = "stls:identity:signingkey",
     ) -> None:
-        try:
-            import redis as redis_lib
-        except ImportError as exc:
-            raise ImportError(
-                "redis>=5.0 is required for IDENTITY_KEYSTORE_BACKEND=redis. "
-                "Install with: pip install 'redis>=5.0'"
-            ) from exc
-
         self._r = redis_lib.Redis.from_url(redis_url, decode_responses=False)
         self._ns = namespace
 

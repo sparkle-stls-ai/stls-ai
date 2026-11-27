@@ -5,9 +5,9 @@ pydantic>=2.0.0
 httpx>=0.27.0
 redis>=5.0.0
 
-# stls_a2a wheel bundled under ./wheels (see Dockerfile --find-links).
+# Installed straight from PyPI — no bundled wheel anymore (see Dockerfile).
 # The [pqc] extra pulls in stls_core[pqc] -> liboqs-python>=0.14.1.
 # liboqs-python is a ctypes wrapper: it MUST match the liboqs C library
 # version baked into the image (see ARG LIBOQS_VERSION in the Dockerfile).
 # A version mismatch causes AttributeError at runtime, not at install time.
-stls_a2a[pqc]==0.1.5
+stls_a2a[pqc]>=0.1.11

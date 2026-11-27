@@ -21,6 +21,13 @@ but runner.run_async() monkeypatched to a fake event sequence — no
 real LLM call, no network, isolates exactly the fixed logic.
 """
 
+import pytest
+
+# google-adk is an optional extra as of issue #65 (stls_a2a[google-adk]) —
+# skip cleanly instead of aborting collection for the whole test
+# session when it isn't installed.
+pytest.importorskip("google.adk")
+
 from google.adk.agents import Agent
 
 from stls_a2a.stls_a2a_adapters_model import AgentRequest

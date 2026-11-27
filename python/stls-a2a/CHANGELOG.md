@@ -7,6 +7,120 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.12] — 2026-11-27
+
+Issue #65 audit: `google-adk`, `langchain`/`langchain-community`/
+`langchain-openai`, `langgraph`, and `semantic-kernel` were declared
+as MANDATORY dependencies while the code already treated each one as
+optional in several places (lazy, guarded imports with
+"pip install stls_a2a[google-adk]"-style messages pointing at extras
+groups that didn't exist). Fixed both directions: the extras groups
+now actually exist, and the remaining unconditional import chain
+(`__init__.py` → `stls_a2a_integration.py` → `stls_a2a_adapters.py` →
+`stls_a2a_google_adapter.py`/`stls_a2a_sk_adapter.py`) that WAS
+genuinely requiring `google-genai`/`semantic-kernel` at `import stls_a2a`
+time, contradicting that same intent, is now lazy too.
+
+### Changed (breaking)
+
+- `google-adk[a2a]`, `google-genai`, `opentelemetry-api`, `opentelemetry-sdk`,
+  `langchain`, `langchain-community`, `langchain-openai`, `langgraph`,
+  and `semantic-kernel` are no longer installed by `pip install stls_a2a`
+  alone — moved to new optional extras: `stls_a2a[google-adk]`,
+  `stls_a2a[langchain]`, `stls_a2a[langgraph]`, `stls_a2a[semantic-kernel]`.
+  **Migration**: add the extra(s) your code actually uses, or
+  `stls_a2a[all]` to keep the exact previous behavior (everything
+  installed).
+- `GoogleADKAdapter`/`SemanticKernelAdapter` are now imported lazily
+  inside `create_adapter()` (`stls_a2a_adapters.py`), not at module
+  level — `import stls_a2a` no longer requires either framework.
+  `LangChainAdapter`/`CustomFunctionAdapter` were already safe (no
+  hard dependency at their own module level) and needed no change.
+
+### Fixed
+
+- `stls_a2a_card_model.py`/`stls_a2a_utils.py` called bare
+  `load_dotenv()` at module import time. `python-dotenv` searches
+  upward from the *library's own* file location, so this resolved to
+  this package's own dev `.env` (e.g. `PORT=8001`,
+  `KEY_PROVIDER_NAME=pqc`) and silently injected those values into
+  `os.environ` of ANY process that imports `stls_a2a` — overriding
+  env vars the importing application never meant to share, with no
+  indication anything happened. The root cause was already documented
+  from a previous incident (`KEY_PROVIDER_NAME` override, found
+  2026-11-07) but only patched in one consumer at the time, not fixed
+  at the source. Both `load_dotenv()` calls are removed entirely —
+  loading `.env` files is an application's own concern, not a
+  library's. `stls_a2a_card_model.py`'s `KEY_PROVIDER_NAME` module
+  constant was also dead code (assigned, never read anywhere) and
+  removed with it. `stls_a2a_utils.py`'s copy (actually used, in
+  `_build_stls_extension`/`_get_security_scheme`) is now read via
+  `os.getenv("KEY_PROVIDER_NAME")` at call time instead of cached once
+  at import time, matching the pattern already used elsewhere in this
+  package (`stls_a2a_integration.py`, `stls_a2a_secure_remote.py`).
+  Found while re-testing samples against this release's updated
+  dependencies — `samples/server/19_identity_presentation`'s server
+  silently relied on the leaked `KEY_PROVIDER_NAME=pqc` and never
+  declared that dependency itself; fixed there too (now passes
+  `name="pqc"` explicitly to `KeySessionProviderFactory` and sets
+  `KEY_PROVIDER_NAME=pqc` via `os.environ.setdefault(...)` before
+  anything PQC-dependent is imported).
+- CI (`python-tests.yml`, `publish-python.yml`): `tests/google_adapter_error_surfacing_test.py`
+  imports `google.adk.agents` directly (not through this package's own
+  lazy-import wrapper, since it's constructing a real `Agent`/
+  `InMemoryRunner` for the test itself) — once `google-adk` became an
+  optional extra, CI's plain `pip install -e ".[dev]"` stopped
+  installing it, and that one file's `ModuleNotFoundError` aborted the
+  *entire* test session at collection time (pytest treats a collection
+  error as fatal to the whole run, not just that file). Added
+  `pytest.importorskip("google.adk")` so it degrades to a clean skip
+  instead — the same fragility class this whole issue is about, just
+  in a test file instead of library code. Both workflows now also
+  install `stls_a2a[dev,google-adk]` specifically for this package
+  (others stay `[dev]`-only), so the test actually runs in CI rather
+  than permanently skipping there.
+
+### Security
+
+Vulnerability floors raised (checked via PyPI's vulnerability API
+against both the previous floor and latest, as of 2026-11-27):
+
+- `PyJWT`: `>=2.8.0` → `>=2.15.1` — the old floor was vulnerable to a
+  long string of real CVEs across 2.8.0–2.14.x (header `crit` bypass,
+  `PyJWKClient` SSRF/DoS, signature-verification issues). This package
+  stays mandatory (used directly, not just via `google-adk`).
+- `semantic-kernel` extra: `>=1.36.0` → `>=1.39.4` — **CVE-2026-26030
+  is a remote code execution vulnerability**, plus CVE-2026-25592,
+  both fixed by 1.39.4.
+- `langchain` extra: `>=1.3.2` → `>=1.3.9` — fixes CVE-2026-55443.
+- `google-adk` extra: `>=1.25.0` → `>=1.28.1` (ceiling `<2.0.0`
+  unchanged) — fixes CVE-2026-4810.
+- `opentelemetry-api`/`-sdk` ceiling (`<1.39.0`) **left unchanged,
+  deliberately** — CVE-2026-114603 (fixed 1.45.1) and CVE-2026-126360
+  (fixed 1.45.2) remain genuinely unpatched in this dependency set.
+  Confirmed via `google-adk`'s own published metadata
+  (`opentelemetry-api/-sdk>=1.36,<=1.41.1`) that even the latest 1.x
+  `google-adk` release caps otel below the fixed versions — the actual
+  fix requires `google-adk>=2.0`, a separate, higher-risk migration
+  (ADK's 2.x async-runner rewrite is exactly what the `google-adk<2.0`
+  ceiling already guards against — see e.g. still-open
+  `google/adk-python#3708`/`#3692` for the same class of
+  OpenTelemetry-context-across-asyncio-task bug). Documented here as a
+  known, visible, residual exposure rather than left as a silent one.
+- `google-genai`, `fastapi`, `psycopg2-binary`, `httpx`,
+  `langchain-community`, `langchain-openai`, `langgraph`: already
+  clean at their existing floors, no change.
+
+### Known issue
+
+Installing the `semantic-kernel` extra with `uv` requires
+`uv pip install --prerelease=allow -e ".[semantic-kernel]"` (or
+`[all]`) — `semantic-kernel>=1.39.x` depends on `azure-ai-agents`,
+which only publishes pre-release versions satisfying that floor, and
+`uv`'s resolver rejects pre-releases by default. Plain `pip install`
+does not need the flag. This is an upstream `semantic-kernel`
+packaging choice, not something fixable from here.
+
 ## [0.1.11] — 2026-11-20
 
 Issue #15 gap #1 — the VP wire format — plus two real bugs found

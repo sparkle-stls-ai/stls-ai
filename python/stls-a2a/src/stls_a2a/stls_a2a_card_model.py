@@ -1,14 +1,9 @@
-import os
 from typing import Literal,Annotated
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field,ConfigDict, model_validator
 from pydantic.alias_generators import to_camel
 
 import logging
 logger = logging.getLogger(__name__)
-load_dotenv()
-
-KEY_PROVIDER_NAME= os.getenv("KEY_PROVIDER_NAME")
 
 # ── A2A Agent Card models (spec-compliant) ────────────────────────────────────
 class AgentSkill(BaseModel):

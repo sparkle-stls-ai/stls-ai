@@ -17,9 +17,15 @@ from typing import Dict, Any, Optional
 
 from .stls_a2a_adapters_model import AgentAdapter,AgentRequest,AgentResponse
 
-from .stls_a2a_google_adapter import GoogleADKAdapter
+# GoogleADKAdapter/SemanticKernelAdapter are imported lazily, inside
+# create_adapter() below, not here — their own modules unconditionally
+# import google-genai/semantic-kernel at module level (issue #65: these
+# are optional extras, not mandatory dependencies, so `import stls_a2a`
+# must not require either). LangChainAdapter/CustomFunctionAdapter have
+# no such dependency (stls_a2a_lc_adapter.py never imports langchain/
+# langgraph itself — it duck-types against the agent instance), so
+# importing them unconditionally here is safe and keeps the diff small.
 from .stls_a2a_lc_adapter import LangChainAdapter
-from .stls_a2a_sk_adapter import SemanticKernelAdapter
 from .stls_a2a_custom_adapter import CustomFunctionAdapter
 
 import logging
@@ -64,12 +70,16 @@ def create_adapter(
                 "Please specify framework explicitly."
             )
     
-    # Create the appropriate adapter
+    # Create the appropriate adapter. GoogleADKAdapter/SemanticKernelAdapter
+    # are imported here, not at module level — see the comment on the
+    # module-level imports above (issue #65).
     if framework == 'google-adk':
+        from .stls_a2a_google_adapter import GoogleADKAdapter
         return GoogleADKAdapter(agent, **kwargs)
     elif framework == 'langchain':
         return LangChainAdapter(agent, **kwargs)
     elif framework == 'semantic-kernel':
+        from .stls_a2a_sk_adapter import SemanticKernelAdapter
         return SemanticKernelAdapter(agent, **kwargs)
     elif framework == 'custom':
         return CustomFunctionAdapter(agent, **kwargs)

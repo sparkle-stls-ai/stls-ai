@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stls-identity"
-version = "0.1.4"
+version = "0.1.5"
 description = "DID + Verifiable Credential identity layer for the STLS AI ecosystem"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,13 +21,24 @@ dependencies = [
     "fastapi>=0.110",
     "rfc8785>=0.1.4",
     "asyncpg>=0.29",
+    # Issue #65 audit: fetch_status_bit()/fetch_remote_credential_status()
+    # (stls_id_status.py) import httpx unconditionally at module level,
+    # reachable from __init__.py — this was previously declared only in
+    # [dev] below, which happened to work only because stls_core's own
+    # mandatory dependencies already pull in httpx transitively (verified:
+    # a clean venv with ONLY stls_identity's own declared deps installed
+    # already had httpx, solely via that transitive path). Declaring it
+    # explicitly here stops this package's own import-ability depending
+    # on a sibling's dependency graph staying the way it happens to be
+    # today — same class of bug stls-a2a's own redis>=5.0 comment
+    # documents from a past real incident.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "pytest-asyncio",
-    "httpx>=0.27",
     "python-dotenv>=1.0",
 ]
 

@@ -56,15 +56,17 @@ from .stls_mcp_auth import AuthConfig, wrap_with_auth
 
 logger = logging.getLogger(__name__)
 
-try:
-    from stls_core import HANDSHAKE_PATH
-except ImportError:  # pragma: no cover
-    HANDSHAKE_PATH = "/stls/handshake"
-
-try:
-    from stls_core import HANDSHAKE_PQC_PATH
-except ImportError:  # pragma: no cover
-    HANDSHAKE_PQC_PATH = "/stls/pqc/handshake"
+# Issue #65: these two used to be guarded with try/except ImportError +
+# a hardcoded-string fallback, as if stls_core (or these two constants)
+# might be absent. stls_core is a MANDATORY dependency of stls-mcp
+# (pyproject.toml's unconditional `dependencies`), and both constants
+# have existed since well below this package's own stls_core floor —
+# the `# pragma: no cover` these guards carried was the previous
+# author's own signal that the except branch was known-dead. A plain
+# import fails loudly if that ever stops being true, instead of
+# silently serving a hardcoded path that's quietly out of sync with
+# whatever a newer stls_core actually uses.
+from stls_core import HANDSHAKE_PATH, HANDSHAKE_PQC_PATH
 
 
 class _ExactMountPathNormalizer:

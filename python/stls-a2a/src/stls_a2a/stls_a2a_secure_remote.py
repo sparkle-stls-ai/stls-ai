@@ -859,7 +859,7 @@ class ContextualSecureRemoteA2aAgent:
             raise ImportError(
                 "ContextualSecureRemoteA2aAgent requires google-adk. "
                 "Install it with: pip install stls_a2a[google-adk] "
-                "or: pip install 'google-adk[a2a]>=1.25.0'"
+                "or: pip install 'google-adk[a2a]>=1.28.1,<2.0.0'"
             ) from exc
 
         _keys = context_keys if context_keys is not None else _DEFAULT_CONTEXT_KEYS

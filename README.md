@@ -74,10 +74,11 @@ flowchart TB
 ```
 
 Every box above exists twice: once in Python (the reference
-implementation) and, for `stls-core` and `stls-mcp`, again in Node.js —
-verified against each other with real cross-language tests, not just
-"should be compatible" (`node/stls-core`, `node/stls-mcp`).
-`stls-identity` and `stls-a2a` are Python-only today.
+implementation) and, for `stls-core`, `stls-identity`, and `stls-mcp`,
+again in Node.js — verified against each other with real
+cross-language tests, not just "should be compatible"
+(`node/stls-core`, `node/stls-identity`, `node/stls-mcp`).
+`stls-a2a` is Python-only today.
 
 ## Repository layout
 
@@ -86,10 +87,11 @@ stls-ai/
 ├── python/
 │   ├── stls-core/        # crypto, handshake, session cache, key providers, API-key auth
 │   ├── stls-identity/     # DID + Verifiable Credential identity layer
-│   ├── stls-a2a/          # A2A protocol extension (Google ADK, LangChain, Semantic Kernel, custom)
+│   ├── stls-a2a/          # A2A protocol extension (optional adapters: Google ADK, LangChain, LangGraph, Semantic Kernel, custom)
 │   └── stls-mcp/          # MCP protocol extension (official MCP SDK, zero modifications)
 ├── node/
 │   ├── stls-core/         # TypeScript port of python/stls-core
+│   ├── stls-identity/     # TypeScript port of python/stls-identity
 │   └── stls-mcp/          # TypeScript port of python/stls-mcp
 └── samples/
     ├── client/             # example A2A/MCP clients (plain SDK, secure React chat client)
@@ -104,11 +106,12 @@ stls-ai/
 | Package | Language | Version | What it provides |
 |---|---|---|---|
 | [`stls-core`](python/stls-core) | Python ≥3.12 | 0.1.11 | Protocol-agnostic crypto, session cache, handshake, key providers, API-key auth. The common foundation. |
-| [`stls-identity`](python/stls-identity) | Python ≥3.12 | 0.1.4 | DID documents, Identity/Operational Verifiable Credentials, delegation, revocation, Trust Anchor Registry, Sentinel verifier. |
-| [`stls-a2a`](python/stls-a2a) | Python ≥3.12 | 0.1.11 | Secure A2A transport, framework adapters (Google ADK, LangChain, Semantic Kernel, custom), task lifecycle, agent cards, agent registry. |
-| [`stls-mcp`](python/stls-mcp) | Python ≥3.12 | 0.1.7 | Encrypted MCP endpoint (`/mcp-stls`) alongside a 100%-standard MCP endpoint (`/mcp`), built on the official MCP SDK. |
+| [`stls-identity`](python/stls-identity) | Python ≥3.12 | 0.1.5 | DID documents, Identity/Operational Verifiable Credentials, delegation, revocation, Trust Anchor Registry, Sentinel verifier. |
+| [`stls-a2a`](python/stls-a2a) | Python ≥3.12 | 0.1.12 | Secure A2A transport, task lifecycle, agent cards, agent registry, optional DID/VC identity-presentation hook. Framework adapters (Google ADK, LangChain, LangGraph, Semantic Kernel) are optional extras, not installed by default. |
+| [`stls-mcp`](python/stls-mcp) | Python ≥3.12 | 0.1.9 | Encrypted MCP endpoint (`/mcp-stls`) alongside a 100%-standard MCP endpoint (`/mcp`), built on the official MCP SDK; optional DID/VC identity-presentation hook. |
 | [`stls-core`](node/stls-core) | Node.js ≥20 / TS | 0.1.11 | TypeScript port of `python/stls-core` — bit-compatible wire format, cross-language tested. |
-| [`stls-mcp`](node/stls-mcp) | Node.js ≥20 / TS | 0.1.7 | TypeScript port of `python/stls-mcp` — same dual-endpoint design, verified against the Python server/client. |
+| [`stls-identity`](node/stls-identity) | Node.js ≥20 / TS | 0.1.5 | TypeScript port of `python/stls-identity` — same DID/VC wire format, cross-language tested. |
+| [`stls-mcp`](node/stls-mcp) | Node.js ≥20 / TS | 0.1.9 | TypeScript port of `python/stls-mcp` — same dual-endpoint design, verified against the Python server/client. |
 
 Each package README documents its own installation, configuration, and
 internals in depth — this document stays at the level of the whole

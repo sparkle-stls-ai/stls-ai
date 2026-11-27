@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stls_a2a"
-version = "0.1.11"
+version = "0.1.12"
 description = "SDK for building Agentic A2A comunication using quantum-safe encrypted channels"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -22,24 +22,19 @@ dependencies = [
     # pairing with a pre-fix stls_core.
     "stls_core>=0.1.9",
     "fastapi>=0.129.0",
-    # ADK 2.x introduces breaking changes in the async runner that cause
-    # GeneratorExit / OpenTelemetry context detach errors. Tested with 1.26.0.
-    "google-adk[a2a]>=1.25.0,<2.0.0",
-    "google-genai>=1.63.0",
     "httpx>=0.28.1",
     # jwt==1.3.1 required by arqit-skaplatform-common and provisioning (JWT class).
-    # PyJWT>=2.x required by mcp/msal (ADK transitive dependency).
-    # Both must coexist: whichever jwt is installed last wins on the jwt module.
+    # PyJWT>=2.x required by mcp/msal (ADK transitive dependency, pulled in
+    # via the google-adk extra below, not by this package's own code) —
+    # kept mandatory here anyway since it's also used directly by the
+    # arqit/provisioning path. Both must coexist: whichever jwt is
+    # installed last wins on the jwt module.
+    # >=2.15.1 (issue #65): the 2.8.0 floor this used to carry was
+    # vulnerable to a long string of real CVEs fixed across 2.12.0-2.15.0
+    # (header `crit` bypass, JWK endpoint SSRF/DoS, signature verification
+    # issues) — 2.15.1 has zero reported vulnerabilities as of this audit.
     "jwt==1.3.1",
-    "PyJWT>=2.8.0,<3.0.0",
-    "langchain>=1.3.2",
-    "langchain-community>=0.4.2",
-    "langchain-openai>=1.2.2",
-    "langgraph>=1.2.2,<1.3.0",
-    # opentelemetry 1.39+ is incompatible with google-adk<2.0 in async
-    # cancellation scenarios (Token created in a different Context).
-    "opentelemetry-api>=1.35.0,<1.39.0",
-    "opentelemetry-sdk>=1.35.0,<1.39.0",
+    "PyJWT>=2.15.1,<3.0.0",
     "psycopg2-binary>=2.9.12",
     "python-dotenv>=1.2.1",
     # Unconditional module-level import in stls_a2a_task.py (TaskStore),
@@ -47,7 +42,6 @@ dependencies = [
     # Without this entry "import stls_a2a" always fails on a clean venv,
     # even if the Redis backend is never used.
     "redis>=5.0",
-    "semantic-kernel>=1.36.0",
     "uvicorn>=0.40.0",
 ]
 
@@ -100,10 +94,79 @@ postgres = [
     "stls_core[postgres]",
 ]
 
+# Google ADK agent adapter (GoogleADKAdapter, ContextualRemoteA2aAgent/
+# ContextualSecureRemoteA2aAgent's RemoteA2aAgent). Moved out of the
+# mandatory dependencies (issue #65): the adapter modules already
+# lazy-import these and raise a clear ImportError pointing at this exact
+# extra if it's missing — `import stls_a2a` itself never needed them
+# unconditionally once that lazy-import fix landed.
+# opentelemetry-api/-sdk are bundled here, not left mandatory either —
+# they exist in this dependency set only because google-adk uses them
+# internally; stls_a2a's own code never imports opentelemetry directly.
+# CEILING NOTE: google-adk 1.39.1 (the latest 1.x release as of this
+# audit) itself declares `opentelemetry-api/-sdk>=1.36,<=1.41.1` in its
+# own metadata (confirmed via `pip download` + wheel METADATA, not
+# guesswork) — so even raising stls_a2a's own otel ceiling can never
+# reach 1.45.1/1.45.2, where CVE-2026-114603/CVE-2026-126360 are
+# actually fixed. That fix genuinely requires google-adk>=2.0 (a
+# separate, higher-risk migration — ADK's 2.x async-runner rewrite is
+# exactly what the google-adk<2.0 ceiling below still guards against;
+# see e.g. still-open google/adk-python#3708/#3692 for the same class
+# of OpenTelemetry-context-across-asyncio-task bug this codebase's
+# ceiling was originally added for). Until that migration happens,
+# these two CVEs are a known, documented, residual exposure for anyone
+# using the google-adk extra — not a silent one.
+# Install: uv pip install -e ".[google-adk]"
+google-adk = [
+    "google-adk[a2a]>=1.28.1,<2.0.0",
+    "google-genai>=1.63.0",
+    "opentelemetry-api>=1.35.0,<1.39.0",
+    "opentelemetry-sdk>=1.35.0,<1.39.0",
+]
+
+# LangChain/LangGraph agent adapter (LangChainAdapter's isinstance checks
+# against CompiledStateGraph/BaseChatModel, stls_a2a_utils.py's
+# auto-detect dispatcher). Moved out of mandatory dependencies (issue
+# #65) — LangChainAdapter itself never imports these packages (it
+# duck-types against the agent instance's class name/module), so this
+# extra only matters if the caller's OWN agent actually needs them.
+# Install: uv pip install -e ".[langchain]"
+langchain = [
+    "langchain>=1.3.9",
+    "langchain-community>=0.4.2",
+    "langchain-openai>=1.2.2",
+]
+
+# Install: uv pip install -e ".[langgraph]"
+langgraph = [
+    "langgraph>=1.2.2,<1.3.0",
+]
+
+# Semantic Kernel agent adapter (SemanticKernelAdapter). Moved out of
+# mandatory dependencies (issue #65) — the adapter module already
+# lazy-imports this and raises a clear ImportError pointing at this
+# exact extra if it's missing.
+# >=1.39.4 (issue #65): the 1.36.0 floor this used to carry was
+# vulnerable to CVE-2026-25592 and CVE-2026-26030 — the latter a
+# REMOTE CODE EXECUTION vulnerability, both fixed by 1.39.4.
+# Install: uv pip install -e ".[semantic-kernel]"
+semantic-kernel = [
+    "semantic-kernel>=1.39.4",
+]
+
 # All extras (excluding the Arqit wheels, which need --find-links).
 all = [
     "yfinance>=1.2.0",
     "stls_core[redis]",
+    "google-adk[a2a]>=1.28.1,<2.0.0",
+    "google-genai>=1.63.0",
+    "opentelemetry-api>=1.35.0,<1.39.0",
+    "opentelemetry-sdk>=1.35.0,<1.39.0",
+    "langchain>=1.3.9",
+    "langchain-community>=0.4.2",
+    "langchain-openai>=1.2.2",
+    "langgraph>=1.2.2,<1.3.0",
+    "semantic-kernel>=1.39.4",
 ]
 
 [tool.pytest.ini_options]

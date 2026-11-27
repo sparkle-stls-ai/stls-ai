@@ -72,7 +72,18 @@ async def _assert_safe_remote_file_url(uri: str) -> None:
 # ============================================================================
 # ADAPTER FOR GOOGLE ADK
 # ============================================================================
-from google.genai import types
+# google-genai is an optional extra (issue #65: stls_a2a[google-adk]), not
+# a mandatory dependency — this module must stay importable without it
+# (create_adapter() in stls_a2a_adapters.py imports GoogleADKAdapter lazily
+# for exactly this reason). The actual failure is deferred to
+# GoogleADKAdapter.__init__ below, which raises a clear ImportError with
+# install instructions the moment someone tries to construct one — every
+# other `types.*` call site in this file runs only after that guard has
+# already passed, so `types` is never actually None by the time it's used.
+try:
+    from google.genai import types
+except ImportError:
+    types = None  # type: ignore[assignment]
 
 class GoogleADKAdapter(AgentAdapter):
     """
@@ -106,20 +117,26 @@ class GoogleADKAdapter(AgentAdapter):
             runner_class: Runner class (default: InMemoryRunner if available)
             session_config: Optional configuration for sessions
         """
+        if types is None:
+            raise ImportError(
+                "GoogleADKAdapter requires google-genai/google-adk. "
+                "Install with: pip install stls_a2a[google-adk]"
+            )
+
         self.agent = agent
         self.app_name = app_name
         self.session_config = session_config or {}
         self._closed = False
-        
+
         # Imports InMemoryRunner if not provided
         if runner_class is None:
             try:
-                from google.adk.runners import InMemoryRunner 
+                from google.adk.runners import InMemoryRunner
                 self.runner_class = InMemoryRunner
             except ImportError as exc:
                 raise ImportError(
                     "Cannot import InMemoryRunner. "
-                    "Make sure google-genai is installed: pip install google-genai"
+                    "Make sure google-adk is installed: pip install stls_a2a[google-adk]"
                 ) from exc
         else:
             self.runner_class = runner_class

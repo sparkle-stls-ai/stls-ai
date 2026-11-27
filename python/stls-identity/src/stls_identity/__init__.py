@@ -93,7 +93,7 @@ from .stls_id_trust_registry_client import (
 )
 from .stls_id_trust_registry_bridge import create_trust_registry_router
 
-__version__ = "0.1.3"
+__version__ = "0.1.5"
 
 __all__ = [
     # models
