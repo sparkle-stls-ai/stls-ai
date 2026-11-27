@@ -47,11 +47,11 @@ flowchart LR
 
 ### 1. Install Python dependencies (includes stls_a2a)
 
-The `stls_a2a` wheel is bundled in `python/wheels/`.  
+`stls_a2a` is installed straight from PyPI (see `python/requirements.txt`).
 Install everything with a single command from the project root:
 
 ```bash
-pip install -r python/requirements.txt --find-links python/wheels
+pip install -r python/requirements.txt
 ```
 
 ### 3. Install Node.js dependencies
@@ -92,6 +92,25 @@ npm run dev:server
 npm run dev
 # → http://localhost:5173
 ```
+
+### Alternative: steps 6-8 in one command
+
+`scripts/dev-all.sh` starts the Python secure transport service, the
+Express backend, and the React dev server together, in one terminal:
+
+```bash
+npm run dev:all      # or: bash scripts/dev-all.sh
+```
+
+Ctrl+C stops all three. If it was started in the background instead
+(no terminal to Ctrl+C in), stop it with:
+
+```bash
+npm run stop:all     # or: bash scripts/stop-all.sh
+```
+
+Doesn't start the key-exchange sidecar (step 5) — only needed for
+`KEY_PROVIDER_NAME=base`/`arqit_py`, not `pqc`.
 
 ---
 
@@ -215,8 +234,10 @@ The `app` container runs `docker-entrypoint.sh` which:
 
 ### stls_a2a in Docker
 
-The `stls_a2a`/`stls_core` wheels under `python/wheels/` are already in the repo, and the `Dockerfile` installs them
-automatically via `--find-links` (`stls_a2a[pqc]==0.1.3` in `python/requirements.txt`). No manual steps required.
+`stls_a2a`/`stls_core` are installed straight from PyPI at build time —
+the `Dockerfile` just runs `pip install -r python/requirements.txt`
+(see that file's `stls_a2a[pqc]>=...` floor). No bundled wheels, no
+manual steps required.
 
 ### Arqit SKA-Platform key provider
 

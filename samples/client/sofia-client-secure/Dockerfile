@@ -57,14 +57,13 @@ COPY --from=liboqs-build /opt/liboqs/lib/ /usr/local/lib/
 COPY --from=liboqs-build /opt/liboqs/include/ /usr/local/include/
 ENV LD_LIBRARY_PATH=/usr/local/lib
 
-# ── Python dependencies + stls_a2a / stls_core wheels ──────────────────────
-# python/wheels/ contains the pre-built stls_a2a/stls_core wheels bundled
-# with the repo. pip is run from /app/python so the relative path
-# ./wheels/... resolves correctly. The stls_a2a[pqc] extra additionally
-# pulls liboqs-python from PyPI (network access required at build time).
+# ── Python dependencies, incl. stls_a2a / stls_core straight from PyPI ────
+# requirements.txt pins stls_a2a[pqc]'s floor directly (no bundled
+# wheels — network access required at build time either way, since
+# the [pqc] extra also pulls liboqs-python from PyPI).
+COPY python/requirements.txt ./python/requirements.txt
+RUN pip install --break-system-packages --no-cache-dir -r /app/python/requirements.txt
 COPY python/ ./python/
-RUN pip install --break-system-packages --no-cache-dir -r /app/python/requirements.txt \
-    --find-links /app/python/wheels
 
 # ── Node production deps ───────────────────────────────────────────────────
 COPY package.json package-lock.json ./

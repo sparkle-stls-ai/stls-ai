@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "vite",
+    "dev:all": "bash scripts/dev-all.sh",
+    "stop:all": "bash scripts/stop-all.sh",
     "dev:server": "ts-node-dev --respawn --transpile-only --exit-child --project server/tsconfig.json server/src/index.ts",
     "build": "vite build",
     "server:build": "tsc -p server/tsconfig.json",
