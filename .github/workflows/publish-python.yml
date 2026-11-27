@@ -7,6 +7,23 @@ name: Publish Python packages
 # this check only avoids an always-failing publish attempt instead of
 # changing what actually gets shipped.
 #
+# Race condition (found 2026-11-27, real failure in the wild): the
+# "changed" check above reads PyPI's main /pypi/<name>/json endpoint,
+# which can lag a published release by some minutes (observed directly:
+# a version already live on the Simple API and installable had this
+# endpoint still reporting the previous version). Two commits touching
+# the same package landing within that window each trigger their own
+# run of this workflow; both can independently read the same stale
+# "not yet published" state and both decide changed=true, racing to
+# publish the identical version. The actual package content is never
+# at risk (PyPI refuses to let a second upload overwrite an existing
+# file), but the losing run used to fail loudly with a 400 "File
+# already exists" error on an otherwise-healthy release. skip-existing
+# below makes that case a silent success instead of a failure; the
+# release-tag push just after it is given the same tolerance, since a
+# publish that was skipped this way still needs its own matching tag,
+# which the winning run already pushed.
+#
 # Test gate (issue #56): a changed-version package's own test suite must
 # pass before it is built and published — a plain `if:` condition implies
 # success() of earlier steps, so a failing "Run tests" step here already
@@ -150,10 +167,20 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: ${{ matrix.dir }}/dist
+          skip-existing: true
 
       - name: Tag the release
         if: steps.version.outputs.changed == 'true'
         run: |
           tag="${{ matrix.dist_name }}-py-v${{ steps.version.outputs.local }}"
           git tag "$tag"
-          git push origin "$tag"
+          git push origin "$tag" || {
+            # Same race as the publish step above: a concurrent run for
+            # the same version may have already pushed this exact tag.
+            # Only swallow that specific case, not a real push failure.
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+              echo "Tag $tag already exists on origin (published by a concurrent run) — not fatal."
+            else
+              exit 1
+            fi
+          }

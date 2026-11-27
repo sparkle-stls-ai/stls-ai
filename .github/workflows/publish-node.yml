@@ -5,6 +5,16 @@ name: Publish Node packages
 # currently live on npm. Bumping the version is the release trigger; an
 # unchanged version is a silent no-op.
 #
+# Same race as publish-python.yml's own note (found there 2026-11-27 from
+# a real failure): two commits touching the same package close together
+# can each trigger their own run, both read the registry before either
+# has published, and both decide changed=true. The losing run's `npm
+# publish` and tag push are each wrapped below to treat "this exact
+# version/tag already exists" as a benign no-op instead of a failure —
+# npm has no built-in skip-existing equivalent to pypa/gh-action-pypi-
+# publish's, so this checks for that specific case by hand rather than
+# swallowing every publish error.
+#
 # stls-mcp and stls-identity both depend on stls-core via
 # "file:../stls-core" in their committed package.json, so that local
 # dev and the interop CI always exercise the sibling package's current
@@ -105,14 +115,28 @@ jobs:
       - name: Publish to npm
         if: steps.version.outputs.changed == 'true'
         working-directory: node/stls-core
-        run: npm publish --provenance --access public
+        run: |
+          npm publish --provenance --access public || {
+            published=$(npm view "stls-core@${{ steps.version.outputs.local }}" version 2>/dev/null || echo "")
+            if [ "$published" = "${{ steps.version.outputs.local }}" ]; then
+              echo "stls-core@${{ steps.version.outputs.local }} already published by a concurrent run — not fatal."
+            else
+              exit 1
+            fi
+          }
 
       - name: Tag the release
         if: steps.version.outputs.changed == 'true'
         run: |
           tag="stls-core-node-v${{ steps.version.outputs.local }}"
           git tag "$tag"
-          git push origin "$tag"
+          git push origin "$tag" || {
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+              echo "Tag $tag already exists on origin (published by a concurrent run) — not fatal."
+            else
+              exit 1
+            fi
+          }
 
   publish-stls-mcp:
     needs: publish-stls-core
@@ -226,14 +250,28 @@ jobs:
       - name: Publish to npm
         if: steps.version.outputs.changed == 'true'
         working-directory: node/stls-mcp
-        run: npm publish --provenance --access public
+        run: |
+          npm publish --provenance --access public || {
+            published=$(npm view "stls-mcp@${{ steps.version.outputs.local }}" version 2>/dev/null || echo "")
+            if [ "$published" = "${{ steps.version.outputs.local }}" ]; then
+              echo "stls-mcp@${{ steps.version.outputs.local }} already published by a concurrent run — not fatal."
+            else
+              exit 1
+            fi
+          }
 
       - name: Tag the release
         if: steps.version.outputs.changed == 'true'
         run: |
           tag="stls-mcp-node-v${{ steps.version.outputs.local }}"
           git tag "$tag"
-          git push origin "$tag"
+          git push origin "$tag" || {
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+              echo "Tag $tag already exists on origin (published by a concurrent run) — not fatal."
+            else
+              exit 1
+            fi
+          }
 
   publish-stls-identity:
     needs: publish-stls-core
@@ -337,11 +375,25 @@ jobs:
       - name: Publish to npm
         if: steps.version.outputs.changed == 'true'
         working-directory: node/stls-identity
-        run: npm publish --provenance --access public
+        run: |
+          npm publish --provenance --access public || {
+            published=$(npm view "stls-identity@${{ steps.version.outputs.local }}" version 2>/dev/null || echo "")
+            if [ "$published" = "${{ steps.version.outputs.local }}" ]; then
+              echo "stls-identity@${{ steps.version.outputs.local }} already published by a concurrent run — not fatal."
+            else
+              exit 1
+            fi
+          }
 
       - name: Tag the release
         if: steps.version.outputs.changed == 'true'
         run: |
           tag="stls-identity-node-v${{ steps.version.outputs.local }}"
           git tag "$tag"
-          git push origin "$tag"
+          git push origin "$tag" || {
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+              echo "Tag $tag already exists on origin (published by a concurrent run) — not fatal."
+            else
+              exit 1
+            fi
+          }
