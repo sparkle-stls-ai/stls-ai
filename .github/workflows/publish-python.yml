@@ -54,11 +54,17 @@ jobs:
             pypi_environment: pypi-stls-core
             run_tests: true
             test_args: ""
+            extras: "dev"
           - dir: python/stls-a2a
             dist_name: stls_a2a
             pypi_environment: pypi-stls-a2a
             run_tests: true
             test_args: ""
+            # google-adk is an optional extra as of issue #65 — needed
+            # here so google_adapter_error_surfacing_test.py (a real
+            # regression test, not just a skip-if-missing nicety)
+            # actually runs instead of skipping.
+            extras: "dev,google-adk"
           - dir: python/stls-identity
             dist_name: stls-identity
             pypi_environment: pypi-stls-identity
@@ -71,11 +77,13 @@ jobs:
               --ignore=tests/test_postgres_store.py
               --ignore=tests/test_status_list_redis.py
               --ignore=tests/test_trust_registry.py
+            extras: "dev"
           - dir: python/stls-mcp
             dist_name: stls_mcp
             pypi_environment: pypi-stls-mcp
             run_tests: true
             test_args: ""
+            extras: "dev"
     # Must match the PyPI project's configured Trusted Publisher
     # environment name (one-time setup per project on pypi.org). PyPI
     # requires the (owner, repo, workflow file, environment) tuple to be
@@ -123,7 +131,7 @@ jobs:
       - name: Install dev dependencies
         if: steps.version.outputs.changed == 'true' && matrix.run_tests
         working-directory: ${{ matrix.dir }}
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[${{ matrix.extras }}]"
 
       - name: Run tests
         if: steps.version.outputs.changed == 'true' && matrix.run_tests

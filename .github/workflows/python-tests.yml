@@ -47,8 +47,14 @@ jobs:
         include:
           - dir: python/stls-core
             test_args: ""
+            extras: "dev"
           - dir: python/stls-a2a
             test_args: ""
+            # google-adk is an optional extra as of issue #65 — needed
+            # here so google_adapter_error_surfacing_test.py (a real
+            # regression test, not just a skip-if-missing nicety)
+            # actually runs in CI instead of skipping.
+            extras: "dev,google-adk"
           - dir: python/stls-identity
             # Excluded: need a real Postgres/Redis, out of scope for
             # this no-infra gate (same list as publish-python.yml).
@@ -58,8 +64,10 @@ jobs:
               --ignore=tests/test_postgres_store.py
               --ignore=tests/test_status_list_redis.py
               --ignore=tests/test_trust_registry.py
+            extras: "dev"
           - dir: python/stls-mcp
             test_args: ""
+            extras: "dev"
 
     steps:
       - uses: actions/checkout@v4
@@ -70,7 +78,7 @@ jobs:
 
       - name: Install dev dependencies
         working-directory: ${{ matrix.dir }}
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[${{ matrix.extras }}]"
 
       - name: Run tests
         working-directory: ${{ matrix.dir }}

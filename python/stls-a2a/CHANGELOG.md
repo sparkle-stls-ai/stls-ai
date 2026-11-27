@@ -65,6 +65,20 @@ time, contradicting that same intent, is now lazy too.
   `name="pqc"` explicitly to `KeySessionProviderFactory` and sets
   `KEY_PROVIDER_NAME=pqc` via `os.environ.setdefault(...)` before
   anything PQC-dependent is imported).
+- CI (`python-tests.yml`, `publish-python.yml`): `tests/google_adapter_error_surfacing_test.py`
+  imports `google.adk.agents` directly (not through this package's own
+  lazy-import wrapper, since it's constructing a real `Agent`/
+  `InMemoryRunner` for the test itself) — once `google-adk` became an
+  optional extra, CI's plain `pip install -e ".[dev]"` stopped
+  installing it, and that one file's `ModuleNotFoundError` aborted the
+  *entire* test session at collection time (pytest treats a collection
+  error as fatal to the whole run, not just that file). Added
+  `pytest.importorskip("google.adk")` so it degrades to a clean skip
+  instead — the same fragility class this whole issue is about, just
+  in a test file instead of library code. Both workflows now also
+  install `stls_a2a[dev,google-adk]` specifically for this package
+  (others stay `[dev]`-only), so the test actually runs in CI rather
+  than permanently skipping there.
 
 ### Security
 
