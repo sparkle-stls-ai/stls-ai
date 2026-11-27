@@ -56,3 +56,27 @@ export const STLS_EXTENSION_URI = "https://stls-ai.com/extensions/mcp-secure-tra
  * rehandshake option.
  */
 export const ERR_SESSION_EXPIRED = -32004;
+
+/**
+ * Same numeric value and meaning as stls_a2a's ERR_IDENTITY_CHALLENGE_REQUIRED
+ * (issue #15 gap #1) — brought here for #46. Raised by auth.ts's
+ * wrapWithAuth() with status 401 when identityVerifier is configured
+ * and the caller hasn't yet presented a valid VerifiablePresentation
+ * for its current STLS session. Distinct from ERR_SESSION_EXPIRED: this
+ * code justifies calling identityChallengeHandler and retrying with a
+ * signed presentation header, not a re-handshake — see transport.ts's
+ * identityChallengeHandler option.
+ */
+export const ERR_IDENTITY_CHALLENGE_REQUIRED = -32005;
+
+/**
+ * MUST match stls_identity.PRESENTATION_HEADER / node/stls-identity's
+ * PRESENTATION_HEADER exactly — hardcoded as a literal here, deliberately
+ * NOT imported from stls-identity, to preserve the same one-way
+ * dependency rule already documented for identityVerifier/
+ * identityChallengeHandler: stls-mcp must stay fully usable without
+ * stls-identity installed. python/stls-a2a makes the same choice
+ * (hardcodes this same literal rather than importing it) — kept
+ * consistent here rather than introducing a different convention.
+ */
+export const HEADER_IDENTITY_PRESENTATION = "X-STLS-Identity-Presentation";

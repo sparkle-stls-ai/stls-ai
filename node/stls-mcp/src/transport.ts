@@ -31,7 +31,7 @@ import {
 } from "stls-core";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 
-import { ERR_SESSION_EXPIRED, MCP_STLS_PATH } from "./constants.js";
+import { ERR_IDENTITY_CHALLENGE_REQUIRED, ERR_SESSION_EXPIRED, MCP_STLS_PATH } from "./constants.js";
 
 // performClientHandshake(), performPqcClientHandshake() and
 // StlsHandshakeFailed moved to stls-core (client-handshake.ts) as part
@@ -73,6 +73,20 @@ export interface CreateStlsFetchOptions {
    * provider-agnostic.
    */
   rehandshake?: () => Promise<{ sessionId: string; transport: StlsTransport }>;
+  /**
+   * Given the server-issued challenge string, returns (sync or async)
+   * the headers to merge into the retried request — typically
+   * node/stls-identity's IdentityPresenter.onChallenge, passed
+   * directly. This package never imports stls-identity; this is a
+   * duck type, same posture as identityVerifier on the server side
+   * (auth.ts). undefined (default): no change from before this
+   * existed — an ERR_IDENTITY_CHALLENGE_REQUIRED 401 just propagates.
+   * Independent retry budget from `rehandshake` — a single call can
+   * legitimately retry once for session expiry AND once for an
+   * identity challenge (two different causes, same "retry exactly
+   * once per cause" contract as python/stls-mcp's StlsHttpxTransport).
+   */
+  identityChallengeHandler?: (challenge: string) => Record<string, string> | Promise<Record<string, string>>;
 }
 
 /**
@@ -90,6 +104,30 @@ export async function looksLikeSessionExpired(response: Response): Promise<boole
     return typeof body === "object" && body !== null && body.error?.code === ERR_SESSION_EXPIRED;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Recognizes a 401 response as ERR_IDENTITY_CHALLENGE_REQUIRED and
+ * extracts the challenge to sign over — distinct from
+ * ERR_SESSION_EXPIRED's own 401 (that one justifies a re-handshake;
+ * this one justifies calling identityChallengeHandler and retrying
+ * with a signed VerifiablePresentation header instead). Mirrors
+ * python/stls-mcp's _looks_like_identity_challenge_required()
+ * (stls_mcp_transport.py). Exported for direct unit testing, same
+ * reasoning as looksLikeSessionExpired().
+ *
+ * Returns the challenge string, or undefined if this isn't that error.
+ */
+export async function looksLikeIdentityChallengeRequired(response: Response): Promise<string | undefined> {
+  try {
+    const body = (await response.clone().json()) as { error?: { code?: unknown; challenge?: unknown } } | null;
+    if (typeof body === "object" && body !== null && body.error?.code === ERR_IDENTITY_CHALLENGE_REQUIRED) {
+      return typeof body.error.challenge === "string" ? body.error.challenge : undefined;
+    }
+    return undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -122,6 +160,7 @@ export function createStlsFetch(
   const stlsPath = options.stlsPath ?? MCP_STLS_PATH;
   const innerFetch = options.fetch ?? globalThis.fetch;
   const rehandshake = options.rehandshake;
+  const identityChallengeHandler = options.identityChallengeHandler;
 
   // Mutable: a successful rehandshake (below) swaps these for the
   // lifetime of this fetch closure, so every later call — not just the
@@ -129,12 +168,13 @@ export function createStlsFetch(
   let currentSessionId = sessionId;
   let currentTransport = transport;
 
-  return (url: string | URL, init?: RequestInit): Promise<Response> => doFetch(url, init, false);
+  return (url: string | URL, init?: RequestInit): Promise<Response> => doFetch(url, init, false, false);
 
   async function doFetch(
     url: string | URL,
     init: RequestInit | undefined,
     retried: boolean,
+    identityRetried: boolean,
   ): Promise<Response> {
     const targetUrl = url instanceof URL ? url : new URL(url);
     const method = (init?.method ?? "GET").toUpperCase();
@@ -167,13 +207,27 @@ export function createStlsFetch(
     // Error responses (4xx/5xx) are always sent in plaintext server-side
     // (see middleware.ts) — never try to decrypt them.
     if (response.status >= 400) {
-      if (response.status === 401 && !retried && rehandshake !== undefined && (await looksLikeSessionExpired(response))) {
-        // Not caught here: a rehandshake failure propagates immediately,
-        // with no retry — same fail-fast contract as the Python side.
-        const next = await rehandshake();
-        currentSessionId = next.sessionId;
-        currentTransport = next.transport;
-        return doFetch(url, init, true);
+      if (response.status === 401) {
+        if (!retried && rehandshake !== undefined && (await looksLikeSessionExpired(response))) {
+          // Not caught here: a rehandshake failure propagates immediately,
+          // with no retry — same fail-fast contract as the Python side.
+          const next = await rehandshake();
+          currentSessionId = next.sessionId;
+          currentTransport = next.transport;
+          return doFetch(url, init, true, identityRetried);
+        }
+
+        if (!identityRetried && identityChallengeHandler !== undefined) {
+          const challenge = await looksLikeIdentityChallengeRequired(response);
+          if (challenge !== undefined) {
+            const identityHeaders = await identityChallengeHandler(challenge);
+            const retriedHeaders = new Headers(init?.headers);
+            for (const [key, value] of Object.entries(identityHeaders)) {
+              retriedHeaders.set(key, value);
+            }
+            return doFetch(url, { ...init, headers: retriedHeaders }, retried, true);
+          }
+        }
       }
       return response;
     }

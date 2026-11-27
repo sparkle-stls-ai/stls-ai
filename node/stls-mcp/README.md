@@ -226,6 +226,54 @@ For the enterprise `ApiKeyManager` (Redis/File/Postgres), pass an instance
 **not yet started** — its start/stop lifecycle is managed automatically,
 same design as Python's `create_secure_mcp_app()`.
 
+### Optional: DID/VC identity check (issue #15 gap #1)
+
+`identityVerifier` adds an ADDITIONAL check on top of `apiKeyManager`/
+`auth` — never a substitute for them. It's a duck type, same posture as
+`apiKeyManager`: `stls-mcp` never imports `stls-identity`, it only
+calls `identityVerifier.verifyRequest(request, { challenge })`
+expecting `{ ok, error? }`. `node/stls-identity`'s
+`RequestPresentationVerifier` is the ready-made implementation, built
+on `Sentinel` — same object `python/stls-mcp`/`stls-a2a` already use
+for this. Omitting it (the default) means zero header parsing, zero
+challenge-cache use, zero behavior change.
+
+```ts
+import { createSecureMcpApp } from "stls-mcp";
+
+const app = await createSecureMcpApp(getServer, provider, {
+  apiKeyManager, // optional, independent of identity
+  identityVerifier: myIdentityVerifier,
+});
+```
+
+On the client side, `createStlsFetch()` takes a matching
+`identityChallengeHandler` — typically `node/stls-identity`'s
+`IdentityPresenter.onChallenge`, or
+`identityChallengeHandlerFromEnv()`, passed directly. The first call on
+a session gets `ERR_IDENTITY_CHALLENGE_REQUIRED` (-32005) with a fresh
+challenge; the handler signs a `VerifiablePresentation` over it and the
+SAME call retries automatically, exactly once — independent retry
+budget from the existing re-handshake-on-`ERR_SESSION_EXPIRED`
+behavior (a single request can legitimately retry once for each
+cause).
+
+```ts
+import { createStlsFetch } from "stls-mcp";
+
+const stlsFetch = createStlsFetch(sessionId, transport, {
+  identityChallengeHandler: myPresenter.onChallenge,
+});
+```
+
+Keyed off `stls-core`'s own `HEADER_SESSION_ID` (`X-STLS-Session-ID`) —
+unlike `stls-a2a` (which has its own `X-A2A-Session-ID`), `stls-mcp`
+already uses the generic `stls-core` session header for the STLS
+crypto binding, so there's no second header to introduce. Scoped to
+the encrypted endpoint in practice: the plain MCP endpoint never
+carries that header, so the check is naturally a no-op there even when
+`identityVerifier` is configured.
+
 ## Known limitations (v0.1)
 
 - **Streamable HTTP only** — no stdio transport, same as Python (nothing

@@ -63,7 +63,7 @@ import type { ApiKeyManager, AuthConfig, KeySessionProvider } from "stls-core";
 
 import { MCP_PLAIN_PATH, MCP_STLS_PATH } from "./constants.js";
 import { encryptedHandler } from "./middleware.js";
-import { wrapWithAuth, type RequestHandler } from "./auth.js";
+import { wrapWithAuth, type IdentityVerifierLike, type RequestHandler } from "./auth.js";
 
 export interface CreateSecureMcpAppOptions {
   /** Path of the encrypted endpoint. Default MCP_STLS_PATH ("/mcp-stls"). */
@@ -76,6 +76,17 @@ export interface CreateSecureMcpAppOptions {
   auth?: AuthConfig;
   /** Enterprise ApiKeyManager — takes priority over `auth` if both are set. Pass an instance NOT yet started; its lifecycle is the caller's responsibility (there is no app-level lifespan hook here, unlike create_secure_mcp_app() in Python — see README). */
   apiKeyManager?: ApiKeyManager;
+  /**
+   * Optional DID/VC identity check (issue #15 gap #1, brought here in
+   * #46), duck-typed — this package never imports stls-identity, it
+   * only calls `identityVerifier.verifyRequest(request, { challenge })`
+   * expecting `{ ok, error? }`. Runs as an ADDITIONAL check, strictly
+   * after apiKeyManager/auth have already passed. undefined (default)
+   * = disabled, zero behavior change. Scoped to {stlsPath} in practice:
+   * it keys off the STLS session header, which {plainPath} requests
+   * never carry — see auth.ts's checkIdentity().
+   */
+  identityVerifier?: IdentityVerifierLike;
 }
 
 function normalizePath(pathname: string): string {
@@ -132,8 +143,16 @@ export async function createSecureMcpApp(
   // authenticate every encrypted request twice (once on /mcp-stls, once
   // on the internal call with the same headers) — redundant, not a
   // security issue, just wasted work. Mirrors python/stls-mcp exactly.
-  const guardedPlain = wrapWithAuth(innerHandle, { auth: options.auth, apiKeyManager: options.apiKeyManager });
-  const guardedStls = wrapWithAuth(stlsHandler, { auth: options.auth, apiKeyManager: options.apiKeyManager });
+  const guardedPlain = wrapWithAuth(innerHandle, {
+    auth: options.auth,
+    apiKeyManager: options.apiKeyManager,
+    identityVerifier: options.identityVerifier,
+  });
+  const guardedStls = wrapWithAuth(stlsHandler, {
+    auth: options.auth,
+    apiKeyManager: options.apiKeyManager,
+    identityVerifier: options.identityVerifier,
+  });
 
   // ── Handshake endpoints — always open, by design ────────────────────────
   const handshakeHandler: RequestHandler = async (request: Request): Promise<Response> => {

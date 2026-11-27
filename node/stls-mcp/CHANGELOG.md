@@ -7,6 +7,40 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.8] — 2026-11-27
+
+Brings the DID/VC identity-presentation hook (issue #15 gap #1,
+already in `python/stls-a2a`) to `stls-mcp` — issue #46, now unblocked
+by `node/stls-identity` (issue #47). Direct port of the same change in
+`python/stls-mcp` 0.1.8.
+
+### Added
+
+- `createSecureMcpApp({..., identityVerifier})` — optional, duck-typed
+  DID/VC identity check, additional to and strictly after
+  `apiKeyManager`/`auth`. Implemented in `wrapWithAuth()`'s
+  `checkIdentity()` (`auth.ts`): mints a challenge on first contact per
+  STLS session (`HEADER_SESSION_ID` from `stls-core`), returns
+  `401 ERR_IDENTITY_CHALLENGE_REQUIRED` (-32005) with the challenge,
+  then verifies the presented `X-STLS-Identity-Presentation` header
+  against the cached challenge on retry. Scoped to `MCP_STLS_PATH` in
+  practice (no session header on the plain path). `undefined` (default)
+  = zero behavior change.
+- `createStlsFetch(..., { identityChallengeHandler })` — client-side
+  retry-once on `ERR_IDENTITY_CHALLENGE_REQUIRED`, independent retry
+  budget from the existing session-expiry retry.
+- `constants.ERR_IDENTITY_CHALLENGE_REQUIRED` (-32005, same value as
+  Python's) and `HEADER_IDENTITY_PRESENTATION`
+  (`X-STLS-Identity-Presentation`, hardcoded literal — never imported
+  from `stls-identity`, preserving the one-way dependency rule).
+
+### Fixed
+
+- `wrapWithAuth()`'s early-return guard only checked `apiKeyManager`/
+  `auth` — an `identityVerifier` configured alone would never even
+  engage the gate. Same fix as `python/stls-mcp`'s
+  `_AuthGateASGI._gate_enabled()`.
+
 ## [0.1.7] — 2026-11-19
 
 No `.ts` source changes. Picks up `node/stls-core` 0.1.10 (`file:../stls-core`)

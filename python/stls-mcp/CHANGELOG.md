@@ -7,6 +7,42 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.8] — 2026-11-27
+
+Brings the DID/VC identity-presentation hook (issue #15 gap #1,
+already in `python/stls-a2a`) to `stls-mcp` — issue #46, now unblocked
+by `node/stls-identity` (issue #47).
+
+### Added
+
+- `create_secure_mcp_app(..., identity_verifier=...)` — optional,
+  duck-typed DID/VC identity check, additional to and strictly after
+  `api_key_manager`/`auth`. Implemented in `_AuthGateASGI`
+  (`stls_mcp_auth.py`): mints a challenge on first contact per STLS
+  session (`X-STLS-Session-ID`, not a custom header — unlike
+  `stls-a2a`, this package already has the generic `stls-core` session
+  header to key off), returns `401 ERR_IDENTITY_CHALLENGE_REQUIRED`
+  (-32005) with the challenge, then verifies the presented
+  `X-STLS-Identity-Presentation` header against the cached challenge
+  on retry. Scoped to `MCP_STLS_PATH` in practice (no session header on
+  the plain path). None (default) = zero behavior change.
+- `StlsHttpxTransport(..., identity_challenge_handler=...)` — client-side
+  retry-once on `ERR_IDENTITY_CHALLENGE_REQUIRED`, independent retry
+  budget from the existing session-expiry retry (a single request can
+  retry once for each cause). `stls_httpx_factory()` threads it through.
+- `stls_mcp_constants.ERR_IDENTITY_CHALLENGE_REQUIRED` (-32005, same
+  value as `stls_a2a`'s) and `HEADER_IDENTITY_PRESENTATION`
+  (`X-STLS-Identity-Presentation`, hardcoded literal — never imported
+  from `stls_identity`, preserving the one-way dependency rule).
+
+### Fixed
+
+- `_AuthGateASGI._gate_enabled()` only checked `api_key_manager`/`auth`
+  — an `identity_verifier` configured alone (no API key, no
+  `AuthConfig`) would never even reach the check. Fixed as part of
+  adding the identity check, which depends on the gate actually
+  engaging for identity-only configurations.
+
 ## [0.1.7] — 2026-11-19
 
 No code changes in this package. Documents the cross-process
