@@ -10,4 +10,11 @@ redis>=5.0.0
 # liboqs-python is a ctypes wrapper: it MUST match the liboqs C library
 # version baked into the image (see ARG LIBOQS_VERSION in the Dockerfile).
 # A version mismatch causes AttributeError at runtime, not at install time.
-stls_a2a[pqc]>=0.1.11
+stls_a2a[pqc]>=0.1.14
+
+# Identity presentation (issue #42 follow-up): lets this service present
+# its own DID/Verifiable Credential to an agent that requires it (e.g.
+# the coordinator, see samples/server/sofia-admin's server/coordinator/
+# server.py with REQUIRE_IDENTITY_PRESENTATION=true). Off by default —
+# see .env.example's own identity section.
+stls_identity>=0.1.7

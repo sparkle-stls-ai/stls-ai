@@ -166,6 +166,36 @@ Doesn't start the key-exchange sidecar (step 5) — only needed for
 > `base`/`arqit_py` too, not just `pqc`. (Not a direct import of `stls_core`'s cache — see the note at the top of
 > `secure_transport.py` for why.)
 
+### Identity presentation (issue #42 follow-up)
+
+| Variable | Default | Description |
+|---|---|---|
+| `IDENTITY_AGENT_ID` | *(unset)* | Unset = this service presents no identity at all — every call behaves exactly as before this feature. Set to `sofia-client-secure` after bootstrapping (see below). |
+| `GOVERNING_AUTHORITY_HOST` | `sofia.sparkle.example.com` | Must match `identity_manager/.env`'s own value. |
+| `IDENTITY_KEYSTORE_BACKEND` / `_REDIS_URL` / `_REDIS_NAMESPACE` | `redis` / `redis://localhost:6379` / `stls:identity:signingkey` | Must point at the SAME Redis + namespace as `identity_manager/.env` — this service reads the signing key `bootstrap_sofia_client_secure_identity.py` wrote there, it doesn't generate its own. |
+| `IDENTITY_CREDENTIAL_CACHE_BACKEND` | `redis` | Same reasoning — must be `redis` (not the `memory` default) to find the credential that bootstrap script cached. |
+| `STATUS_LIST_REDIS_URL` | `redis://localhost:6379` | Fallback for the credential cache above when a dedicated `IDENTITY_CREDENTIAL_CACHE_REDIS_URL` isn't set. |
+
+Lets this service present a signed `VerifiablePresentation` when an agent requires one instead of just a
+PQC-encrypted session — e.g. the coordinator in `samples/server/sofia-admin`, once that service's own
+`REQUIRE_IDENTITY_PRESENTATION=true`. `secure_transport.py` recognizes the resulting 401
+(`ERR_IDENTITY_CHALLENGE_REQUIRED`) on `/secure/send`/`/secure/stream`, signs the server-issued challenge, and
+retries the SAME call once with the presentation attached — transparent to the Express backend and the browser,
+same "sign and retry" dance `stls_a2a`'s own `STLSHttpxTransport` already does for Google-ADK-based clients
+(`identity_challenge_from_response()`, exported from `stls_a2a` specifically so this lower-level,
+`SecureA2ATransportAdapter`-based service could reuse the exact same 401 recognition).
+
+**One-time setup**, before setting `IDENTITY_AGENT_ID` above — from `samples/server/sofia-admin/server/identity_manager/`
+(same real Postgres/Redis as that service's own `.env`):
+
+```bash
+python bootstrap_sofia_client_secure_identity.py
+```
+
+Idempotent — safe to re-run. Without this step, `IDENTITY_AGENT_ID` set but no key/credential found means this
+service silently presents nothing (immediate 401 from whoever required identity, no error raised here — check that
+service's own logs, not this one's).
+
 ### Post-quantum key exchange (`KEY_PROVIDER_NAME=pqc`)
 
 Hybrid X25519 + ML-KEM-768 handshake, performed lazily on the first `/secure/send` or `/secure/stream` call for a

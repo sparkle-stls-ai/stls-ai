@@ -46,6 +46,7 @@ Covers:
      success path when identity_verifier is None.
 """
 
+import json
 from typing import Any
 
 import httpx
@@ -57,6 +58,7 @@ from stls_a2a import (
     KeySessionProvider,
     KeySessionProviderFactory,
     create_secure_a2a_endpoint,
+    identity_challenge_from_response,
     start_task_store_cleanup,
 )
 from stls_a2a.stls_a2a_adapters_model import ERR_IDENTITY_CHALLENGE_REQUIRED
@@ -448,3 +450,67 @@ async def test_enable_plain_endpoint_false_with_base_url_does_not_crash():
     card = app._a2a_agent_registry[path]
     assert card.url is None
     assert card.secure_url == "http://localhost:9999/agents/no-plain/secure-a2a"
+
+
+# ---------------------------------------------------------------------------
+# Regression: identity_challenge_from_response() against a REAL unread
+# httpx streaming response (found 2026-11-28 debugging
+# samples/client/sofia-client-secure's own identity retry).
+#
+# Two distinct bugs stacked here, both real, both found against a real
+# running server (the mocked _FakeAdapter tests above never exercise
+# actual httpx `client.stream()` semantics):
+#
+#   1. response.json() on a 401 raised inside `async with
+#      client.stream(...)` throws httpx.ResponseNotRead (the body is
+#      never auto-read for a streamed request, unlike a plain
+#      client.post()) — silently swallowed by this function's own bare
+#      `except Exception: return None`, so it always returned None.
+#      Fixed by making it async and always calling response.aread()
+#      first.
+#   2. aread() only works WHILE still inside the `async with
+#      client.stream(...)` block that raised — by the time an
+#      exception has propagated OUT of it (as it does by the time any
+#      caller's `except httpx.HTTPStatusError` clause gets control),
+#      the stream is already closed and aread() raises
+#      httpx.StreamClosed instead (confirmed empirically — not just
+#      "not yet read", genuinely too late to read). Fixed at the
+#      source: SecureA2ATransportAdapter.stream_secure_message()
+#      (stls_a2a_integration.py) now reads the body itself, inside the
+#      same `async with` block, the moment raise_for_status() raises,
+#      before re-raising — exactly what this test reproduces below.
+# ---------------------------------------------------------------------------
+
+async def test_identity_challenge_from_response_reads_a_real_unread_streaming_response():
+    async def app(scope, receive, send):
+        body = json.dumps({
+            "jsonrpc": "2.0",
+            "error": {
+                "code": ERR_IDENTITY_CHALLENGE_REQUIRED,
+                "message": "Identity presentation required",
+                "challenge": "real-streaming-challenge",
+            },
+            "id": None,
+        }).encode()
+        await send({"type": "http.response.start", "status": 401, "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": body})
+
+    transport = httpx.ASGITransport(app=app)
+    exc_response: httpx.Response | None = None
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with client.stream("POST", "/secure-a2a") as resp:
+            assert not resp.is_stream_consumed  # the exact precondition that broke this before the fix
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                # Same read-before-propagating pattern now in
+                # stream_secure_message() — reading here, still inside
+                # this `async with` block, is what makes the content
+                # survive past both nested blocks closing on the way out.
+                await resp.aread()
+                exc_response = exc.response
+
+    assert exc_response is not None
+    assert exc_response.is_closed  # both async-with blocks have exited by now
+    challenge = await identity_challenge_from_response(exc_response)
+    assert challenge == "real-streaming-challenge"

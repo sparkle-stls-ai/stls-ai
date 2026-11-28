@@ -50,4 +50,5 @@ from .stls_a2a_secure_remote import (
     SecureSessionManager,
     STLSHttpxTransport,
     ContextualSecureRemoteA2aAgent,
+    identity_challenge_from_response,
 )

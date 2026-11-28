@@ -323,6 +323,53 @@ deployment presenting many identity-checked calls per second would want a
 caching layer in front of it (the same MRI-bounded freshness window
 `Sentinel`/`StatusListManager` already assume elsewhere).
 
+### Gating the coordinator's own endpoint ([issue #42](https://github.com/sparkle-stls-ai/stls-ai/issues/42) follow-up)
+
+Same mechanism, one level up: the section above makes the coordinator
+prove its identity to `identity_manager`; this makes the coordinator, in
+turn, require identity from whoever calls **it** — `samples/client/sofia-client-secure`
+today, the only real client in this repo that talks to the coordinator over
+`/agents/sofia-admin-coordinator/secure-a2a`.
+
+`coordinator/server.py`'s own `_build_identity_verifier()` differs from
+`identity_manager`'s in one deliberate way: it never pre-resolves a
+specific caller's key into `trusted_issuer_keys` (no lifespan-deferred
+step needed at all, unlike `identity_manager`'s `_populate_coordinator_key()`)
+— it trusts the Governing Authority's key (to verify an Identity
+Credential's issuer signature) and resolves EVERY caller's own holder
+key generically, straight from that caller's own DID Document
+(`stls_identity.make_did_document_holder_key_resolver()`, issue #42).
+There is no fixed roster of expected callers to maintain here, by design:
+any agent with a bootstrapped identity can present one.
+
+**Setting it up:**
+
+1. Bootstrap `sofia-client-secure`'s own identity — from `server/identity_manager/`:
+
+   ```bash
+   python bootstrap_sofia_client_secure_identity.py
+   ```
+
+2. Configure `samples/client/sofia-client-secure/.env` with the matching
+   `IDENTITY_AGENT_ID=sofia-client-secure` + the same keystore/credential-cache
+   Redis settings as `identity_manager/.env` (see that sample's own README,
+   "Identity presentation" section) — restart `secure_transport.py`.
+
+3. Set `REQUIRE_IDENTITY_PRESENTATION=true` and `IDENTITY_PG_DSN` (same
+   Postgres as `identity_manager/.env`'s own) in `coordinator/.env`, restart
+   the coordinator.
+
+4. Call the coordinator through `sofia-client-secure` as usual — the first
+   call on a fresh session gets the automatic challenge/retry
+   (`secure_transport.py`'s own `_send_with_identity_retry()`/
+   `_stream_with_identity_retry()`), transparent to the Express backend and
+   the browser above it.
+
+Any OTHER caller of the coordinator's endpoint without a bootstrapped
+identity (or with `REQUIRE_IDENTITY_PRESENTATION=false`, the default) is
+unaffected — this gate is additive, same off-by-default posture as every
+other piece of issue #15/#45/#42.
+
 ### Testing delegation ([issue #48](https://github.com/sparkle-stls-ai/stls-ai/issues/48))
 
 `tools_identity.py` deliberately never issues an Operational Credential

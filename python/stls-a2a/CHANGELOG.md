@@ -7,6 +7,46 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.14] — 2026-11-28
+
+### Fixed
+
+- **Real bug, found against a real server, not just mocks**: a 401
+  `ERR_IDENTITY_CHALLENGE_REQUIRED` response on the STREAMING path
+  (`SecureA2ATransportAdapter.stream_secure_message()`,
+  `STLSHttpxTransport._open_stream()`) was never actually retried —
+  the identity-retry logic silently never fired. Two compounding
+  causes: (1) `httpx.Response.json()` on a 401 raised inside `async
+  with client.stream(...)` throws `httpx.ResponseNotRead` (a streamed
+  response's body isn't auto-read, unlike a plain `client.post()`),
+  swallowed by `identity_challenge_from_response()`'s own bare
+  `except Exception: return None`; (2) even reading the body in that
+  function wasn't enough, because by the time ANY caller's `except`
+  clause gets control, the nested `async with` blocks that raised have
+  already exited and closed the stream — `response.aread()` at that
+  point raises `httpx.StreamClosed` instead. Existing test coverage
+  for this path (`test_client_retries_once_on_identity_challenge_stream`)
+  used a fully mocked adapter, so it never exercised real httpx
+  streaming semantics and never caught either bug. Fixed at the
+  source: `stream_secure_message()` now reads the body itself, inside
+  the same `async with` block, the instant `raise_for_status()`
+  raises — before re-raising, while the stream is still open.
+  `identity_challenge_from_response()` also made `async` and now
+  always calls `response.aread()` defensively (safe whether or not
+  the body was already read).
+
+### Added
+
+- `identity_challenge_from_response()` (`stls_a2a_secure_remote.py`) is
+  now exported from the package root. Previously private
+  (`_looks_like_identity_challenge_required`), used only by
+  `STLSHttpxTransport`'s own identity-retry logic — promoted to public
+  so any client built directly on `SecureA2ATransportAdapter` (which
+  has no identity-retry logic of its own, unlike `STLSHttpxTransport`)
+  can recognize an `ERR_IDENTITY_CHALLENGE_REQUIRED` 401 and implement
+  the same retry itself. First real consumer:
+  `samples/client/sofia-client-secure/python/secure_transport.py`.
+
 ## [0.1.13] — 2026-11-27
 
 Issue #74: authorization scope was never propagated from identity
