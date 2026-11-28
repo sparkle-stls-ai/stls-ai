@@ -39,6 +39,15 @@ PORT        = int(os.getenv("PORT", 8016))
 BASE_URL    = os.getenv("BASE_URL", "").rstrip("/")
 AUTH_PG_DSN = os.getenv("AUTH_PG_DSN", "")
 
+# Issue #80 follow-up: require a verified DID/VC presentation (not just
+# an API key) from the coordinator — this agent is called exclusively
+# via ContextualSecureRemoteA2aAgent (agent_coordinator.py), same
+# posture as identity_manager's own endpoint. Off by default: the
+# operator flips it on once the coordinator's identity has been
+# bootstrapped (bootstrap_coordinator_identity.py, or a
+# sofia_identity_agent chat call).
+REQUIRE_IDENTITY_PRESENTATION = os.getenv("REQUIRE_IDENTITY_PRESENTATION", "false").strip().lower() == "true"
+
 # ---------------------------------------------------------------------------
 # Audit hook — shared, standard logging.
 # In production: replace default_audit_hook() with a hook that sends to a SIEM.
@@ -72,6 +81,16 @@ managers = (
     ApiKeyManagerGroup()
     .add("postgres_manager", pg_manager)
 )
+
+# ---------------------------------------------------------------------------
+# Identity verifier (issue #80 follow-up) — see
+# stls_identity.request_presentation_verifier_from_env()'s own
+# docstring. None (REQUIRE_IDENTITY_PRESENTATION=false, the default) =
+# disabled, zero behavior change.
+# ---------------------------------------------------------------------------
+from stls_identity import request_presentation_verifier_from_env
+
+_identity_verifier = request_presentation_verifier_from_env()
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -113,6 +132,10 @@ def build_app() -> FastAPI:
         base_url=BASE_URL, # needed to build the agent card with the correct URL
         framework="google-adk",
         api_key_manager=pg_manager,
+        identity_verifier=_identity_verifier,
+        # Issue #80 point 4 would close the plain /agents/sofia-grantor/
+        # endpoint once a verifier is configured — left enabled for now
+        # per explicit instruction, revisit later.
     )
 
     # ── Diagnostic endpoints ──────────────────────────────────────────────
@@ -163,6 +186,7 @@ def main() -> None:
     print(f"\n🔐 Auth backends:")
     print(f"   PostgresLoader→ /agents/sofia-grantor/    ({_pg_status})")
     print(f"\n   Redis cache: {'enabled (' + _redis_url + ')' if _use_redis else 'disabled (AUTH_KM_USE_REDIS=false)'}")
+    print(f"\n🪪 Identity presentation (issue #80): {'REQUIRED' if REQUIRE_IDENTITY_PRESENTATION else 'disabled (REQUIRE_IDENTITY_PRESENTATION=false)'}")
     print(f"\n🌐 Global endpoints:")
     print(f"   Cards:   http://localhost:{PORT}/.well-known/agent-card.json")
     print(f"   Health:  http://localhost:{PORT}/auth/health")

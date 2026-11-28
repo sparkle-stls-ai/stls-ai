@@ -44,6 +44,18 @@ Expected env vars:
                                  Grantor getting its own separately-published
                                  list (a real simplification; see this
                                  sample's README for the tradeoff).
+  IDENTITY_PG_DSN               SAME Postgres "sofia" database as
+                                 identity_manager's own IDENTITY_PG_DSN —
+                                 required for _get_delegation_manager() to
+                                 resolve this agent's CURRENT
+                                 verification_method_id from its own DID
+                                 Document. Missing/unreachable degrades
+                                 silently(-ish — see the WARNING log) to
+                                 load_delegation_manager()'s hardcoded
+                                 "#key-1" default, which signs every
+                                 Operational Credential with a WRONG
+                                 reference the moment this agent's key has
+                                 ever been rotated.
 """
 
 from __future__ import annotations
@@ -60,7 +72,9 @@ import redis.asyncio as redis_asyncio
 
 from stls_identity import (
     IdentityCredentialCacheFactory,
+    PostgresDIDDocumentStore,
     StatusListManager,
+    current_verification_method,
     domain_and_path_to_did,
     load_delegation_manager,
 )
@@ -83,26 +97,57 @@ async def _get_delegation_manager():
     instead (see below), not cached here, since it CAN change
     (reissued/revoked) independently of this object's lifetime.
 
-    KNOWN LIMITATION (issue #42, now implemented at the package level):
-    this cache is never invalidated, so if this Grantor's signing key
-    is ever rotated (stls_identity.rotate_signing_key()) while this
-    service keeps running, every delegation issued afterward signs
-    with the stale grantor_verification_method_id this manager was
-    built with — load_delegation_manager() defaults that id to
-    "{holder_did}#key-1" when not told otherwise, which becomes WRONG
-    the moment a rotation closes that key generation (see
-    load_delegation_manager()'s own docstring). A verifier then finds
-    that verification method CLOSED at the new credential's own
-    signing time and rejects it outright. Restarting this service
-    after a rotation picks up the new key correctly; this module does
-    not yet resolve or refresh the current verification_method_id on
-    its own, since doing so needs a DIDDocumentStoreBase this process
-    doesn't otherwise hold (see identity_manager/server.py's
-    _populate_coordinator_key() for the pattern to follow if this ever
-    needs to survive a live rotation without a restart)."""
+    Resolves the CURRENT verification_method_id from this agent's own
+    DID Document (Postgres) before building the manager — WITHOUT this,
+    load_delegation_manager() defaults to "{holder_did}#key-1", which is
+    silently WRONG after a rotation (stls_identity.rotate_signing_key())
+    closes that key generation: a verifier then finds that verification
+    method CLOSED at the new credential's own signing time and rejects
+    it outright, "unknown or untrusted verification method". Found
+    exactly this way in production — the DEFAULT, not just a stale
+    cache, is what was wrong: restarting this service after a rotation
+    did NOT fix it on its own, since a fresh build still fell back to
+    the hardcoded "#key-1" default. Same pattern as
+    identity_manager/server.py's _populate_coordinator_key(), applied
+    here instead of at FastAPI lifespan time since this function is
+    only ever awaited from inside a real request (delegate_to_agent()),
+    already on a real event loop — no lifespan deferral needed.
+
+    REMAINING LIMITATION: this cache is still never invalidated after
+    the first build, so a rotation that happens WHILE this process
+    keeps running (after this function's first call) is not picked up
+    until restart — only the "wrong default even on a fresh start" bug
+    is fixed here.
+    """
     global _delegation_manager
     if _delegation_manager is not None:
         return _delegation_manager
+
+    did_store = PostgresDIDDocumentStore(dsn=os.environ.get("IDENTITY_PG_DSN", ""))
+    document = await did_store.get(IDENTITY_AGENT_ID)
+    if document is None:
+        # Falls through to load_delegation_manager()'s own
+        # "{holder_did}#key-1" default below — same degraded behavior
+        # as before this fix, but now LOGGED instead of silent: the
+        # likely cause is IDENTITY_PG_DSN missing/unset/unreachable in
+        # THIS service's own .env (it's a new requirement, added for
+        # this fix — grantor_agent never needed it before), not
+        # necessarily a code regression. Check this log line before
+        # assuming the resolution logic itself is wrong — if
+        # PostgresDIDDocumentStore.get() hit a real connection error,
+        # its own ERROR-level log line appears right above this one.
+        logger.warning(
+            "%r has no DID Document on record (IDENTITY_PG_DSN=%r) — "
+            "falling back to load_delegation_manager()'s default "
+            "verification_method_id ('#key-1'), which is WRONG if this "
+            "agent's key has ever been rotated. Every Operational "
+            "Credential signed this way will be rejected by a verifier "
+            "once that key generation closes.",
+            IDENTITY_AGENT_ID, os.environ.get("IDENTITY_PG_DSN", ""),
+        )
+    verification_method_id = (
+        current_verification_method(document).id if document is not None else None
+    )
 
     status_redis = redis_asyncio.from_url(
         os.environ.get("STATUS_LIST_REDIS_URL", "redis://localhost:6379"),
@@ -116,6 +161,7 @@ async def _get_delegation_manager():
         governing_authority_host=_GOVERNING_AUTHORITY_HOST,
         status_list_manager=status_list_manager,
         status_list_publish_url=_STATUS_LIST_PUBLISH_URL,
+        verification_method_id=verification_method_id,
     )
     if manager is None:
         raise RuntimeError(

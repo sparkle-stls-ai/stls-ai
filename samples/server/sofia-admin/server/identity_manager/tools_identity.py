@@ -206,13 +206,32 @@ async def _deps() -> _Deps:
     # Without this step, that endpoint would respond "authority DID
     # Document not bootstrapped yet" forever — it's not a transient
     # error, nobody ever publishes it on its own.
-    authority_document = build_did_document(
-        host=_GOVERNING_AUTHORITY_HOST,
-        agent_path_segments=[],
-        governing_authority_did=_GOVERNING_AUTHORITY_DID,
-        signing_public_key=authority_pub,
-    )
-    await did_store.put(_GOVERNING_AUTHORITY_AGENT_ID, authority_document)
+    #
+    # BUGFIX: only build+publish a FRESH document the first time this
+    # Authority has ever been seen (no document on record yet). This
+    # used to run unconditionally on every call to _deps() — i.e. on
+    # every process (re)start, since _deps() is itself a once-per-process
+    # singleton — rebuilding a brand-new, single-verification-method
+    # document from authority_pub (whatever key currently sits in the
+    # keystore) and OVERWRITING whatever was already published. If the
+    # Authority's own key had ever been rotated (rotate_agent_identity()
+    # closes the old method, adds a new current one), the very next
+    # identity_manager restart silently collapsed that back down to a
+    # single "#key-1" entry bound to the current key — erasing the
+    # rotation's audit trail and un-closing "#key-1", with no error or
+    # log line to notice it by. Found while investigating a related,
+    # already-fixed bug in grantor_agent/tools_delegation.py (a stale
+    # hardcoded verification_method_id) — same root cause class (a
+    # per-agent key reference assumed to never change), different agent.
+    existing_authority_document = await did_store.get(_GOVERNING_AUTHORITY_AGENT_ID)
+    if existing_authority_document is None:
+        authority_document = build_did_document(
+            host=_GOVERNING_AUTHORITY_HOST,
+            agent_path_segments=[],
+            governing_authority_did=_GOVERNING_AUTHORITY_DID,
+            signing_public_key=authority_pub,
+        )
+        await did_store.put(_GOVERNING_AUTHORITY_AGENT_ID, authority_document)
 
     # Trust Anchor Registry — Sparkle as anchor operator (Option A,
     # centralized). Full package store (including key history) — here
@@ -306,8 +325,15 @@ async def bootstrap_agent_identity(agent_id: str) -> dict:
 
     Idempotent: calling it again on an already-bootstrapped agent_id
     returns the same DID, created=False — it never generates a second
-    key for the same agent. This also holds for an agent that will
-    become a Grantor: the bootstrap is identical to any other agent's.
+    key for the same agent, AND never rebuilds/overwrites its DID
+    Document (BUGFIX — this used to rebuild unconditionally from the
+    keystore's CURRENT key and overwrite the stored document every
+    single call, silently collapsing any rotation history
+    rotate_agent_identity() had recorded back down to a single,
+    re-opened "#key-1" entry; see _deps()'s own authority-bootstrap
+    comment for the identical bug on the Authority's own document).
+    This also holds for an agent that will become a Grantor: the
+    bootstrap is identical to any other agent's.
 
     Args:
         agent_id: the agent's identifier on the platform
@@ -319,6 +345,11 @@ async def bootstrap_agent_identity(agent_id: str) -> dict:
     d = await _deps()
     try:
         _, public_key, created = bootstrap_signing_key(agent_id, d.keystore)
+
+        existing_document = await d.did_store.get(agent_id)
+        if existing_document is not None:
+            return {"did": existing_document.id, "created": False}
+
         document = build_did_document(
             host=_GOVERNING_AUTHORITY_HOST,
             agent_path_segments=["agents", agent_id],

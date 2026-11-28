@@ -3,10 +3,13 @@
 A Google ADK **coordinator agent** that administers the Sofia Platform by
 delegating to specialized **sub-agents**, each exposed as its own
 independent STLS-A2A service. The example demonstrates agent-to-agent
-orchestration over A2A, with three different transport-security postures
-depending on how sensitive each sub-agent's domain is — up to requiring
-the caller to prove its own verifiable identity (issue #45), not just an
-API key, for the most sensitive ones.
+orchestration over A2A, with two transport-security postures: one
+sub-agent (`sofia_monitoring_agent`) stays plain (API key only), and
+every other sub-agent — plus the coordinator's own endpoint — sits
+behind an encrypted STLS session and can additionally require the
+caller to prove its own verifiable identity (issue #15/#45/#80), not
+just an API key, via the same `REQUIRE_IDENTITY_PRESENTATION` switch on
+each one.
 
 ---
 
@@ -63,10 +66,10 @@ flowchart TB
 
     subgraph SubAgents["Sub-agents (sub_agents[])"]
         MON["sofia_monitoring_agent\nRemoteA2aAgent + X-API-Key header\n:8011  /agents/sofia-monitoring/secure-a2a\ntools_monitoring.py → AgentRegistry (PG)"]
-        KEYS["sofia_api_keys_agent\nContextualSecureRemoteA2aAgent\n+ X-API-Key header + STLS encrypted session (PQC)\n:8012  /agents/sofia-api-keys/secure-a2a\ntools_keys_mgmt.py → API keys (PG+Redis)"]
-        RED["sofia_redis_agent\nRemoteA2aAgent + X-API-Key header\n:8013  /agents/sofia-redis/secure-a2a\ntools_redis.py → TaskStore (Redis)\n→ STLS session cache (Redis)\n→ key cache / revocation SET (Redis)"]
+        KEYS["sofia_api_keys_agent\nContextualSecureRemoteA2aAgent\n+ X-API-Key header + STLS encrypted session (PQC)\n+ identity_verifier (issue #80, off by default)\n:8012  /agents/sofia-api-keys/secure-a2a\ntools_keys_mgmt.py → API keys (PG+Redis)"]
+        RED["sofia_redis_agent\nContextualSecureRemoteA2aAgent\n+ X-API-Key header + STLS encrypted session (PQC)\n+ identity_verifier (issue #80, off by default)\n:8013  /agents/sofia-redis/secure-a2a\ntools_redis.py → TaskStore (Redis)\n→ STLS session cache (Redis)\n→ key cache / revocation SET (Redis)"]
         ID["sofia_identity_agent\nContextualSecureRemoteA2aAgent\n+ X-API-Key header + STLS encrypted session (PQC)\n+ identity_verifier (issue #45)\n:8014  /agents/sofia-identity/secure-a2a\ntools_identity.py → DID/VC (PG+Redis)"]
-        GRANT["sofia_grantor_agent (issue #51)\nContextualSecureRemoteA2aAgent + X-API-Key header\n:8016  /agents/sofia-grantor/secure-a2a\ntools_delegation.py → load_delegation_manager()\n→ keystore + credential cache (Redis, SHARED with ID)"]
+        GRANT["sofia_grantor_agent (issue #51)\nContextualSecureRemoteA2aAgent\n+ X-API-Key header + STLS encrypted session (PQC)\n+ identity_verifier (issue #80, off by default)\n:8016  /agents/sofia-grantor/secure-a2a\ntools_delegation.py → load_delegation_manager()\n→ keystore + credential cache (Redis, SHARED with ID)"]
     end
 
     BRIDGE["identity_bridge\n:8000  GET /identity/status-list\n(separate process, must be running\nfor ID's own revocation checks)"]
@@ -93,15 +96,16 @@ calls to it as standard A2A `messages/send` requests over HTTP. From the
 coordinator's point of view, each sub-agent is just a URL plus a client:
 
 ```python
-sofia_redis_agent = RemoteA2aAgent(
-    agent_card=f"{BASE_URL_REDIS}{AGENT_CARD_WELL_KNOWN_PATH}",
-    httpx_client=httpx.AsyncClient(headers={"X-API-Key": API_KEY_REDIS}, ...),
+sofia_monitoring_agent = RemoteA2aAgent(
+    agent_card=f"{BASE_URL_MONITORING}{AGENT_CARD_WELL_KNOWN_PATH}",
+    httpx_client=httpx.AsyncClient(headers={"X-API-Key": API_KEY_MONITORING}, ...),
 )
 
 sofia_api_keys_agent = ContextualSecureRemoteA2aAgent(
     agent_card=f"{BASE_URL_API_KEYS}{AGENT_CARD_WELL_KNOWN_PATH}",
     extra_headers={"X-API-Key": API_KEY_API_KEYS},
     context_keys=[],
+    identity_challenge_handler=_identity_challenge_handler,
 )
 ```
 
@@ -113,34 +117,36 @@ to coordinate both `sofia_api_keys_agent` and `sofia_redis_agent` for
 cross-domain questions such as "is the key for agent X still cached in
 Redis?".
 
-### Three transport-security postures, by design
+### Two transport-security postures, by design
 
 All five sub-agents sit behind `create_secure_a2a_endpoint`, so every call
 is authenticated with a per-agent static `X-API-Key` (issued and checked via
 each sub-agent's own `PostgresLoader` + `ApiKeyManager`). On top of that,
-**three sub-agents get an extra layer**: `sofia_api_keys_agent`, because it is
-the one that creates, reads and revokes the credentials every other agent
-relies on; `sofia_grantor_agent`, because it mints real delegated permissions
-(issue #51); and `sofia_identity_agent` — the most sensitive one on the
-platform (bootstraps/issues/revokes identities, onboards trust anchors) —
-which additionally requires the caller to prove its *own* verifiable
-identity, not just present a static key (issue #15/#45):
+**every sub-agent except `sofia_monitoring_agent`** goes over an encrypted
+STLS session (`ContextualSecureRemoteA2aAgent`) and can additionally
+require the caller to prove its *own* verifiable identity, not just present
+a static key (issue #15/#45, generalized to every secure sub-agent by
+issue #80):
 
-| | `sofia_monitoring_agent` / `sofia_redis_agent` | `sofia_api_keys_agent` / `sofia_grantor_agent` | `sofia_identity_agent` |
-|---|---|---|---|
-| ADK wrapper | `RemoteA2aAgent` | `ContextualSecureRemoteA2aAgent` | `ContextualSecureRemoteA2aAgent` |
-| Auth | `X-API-Key` header, plain `httpx.AsyncClient` | `X-API-Key` header **+** STLS encrypted session | `X-API-Key` header **+** STLS encrypted session **+** `identity_verifier` |
-| Payload encryption | none (relies on transport/network security) | AES-256-GCM over a PQC-derived session key (hybrid X25519 + ML-KEM-768 by default), transparent to the ADK | same as `sofia_api_keys_agent` |
-| Session/user context propagation | n/a | supported via `context_keys` (disabled here — `context_keys=[]` — since this sample has no per-user session state to forward) | same (disabled) |
-| Identity presentation | n/a | n/a | the coordinator must present a signed `VerifiablePresentation` of its own, verified server-side via `RequestPresentationVerifier` — see [Identity-compliant sub-agents](#identity-compliant-sub-agents-issue-45) |
+| | `sofia_monitoring_agent` | `sofia_api_keys_agent` / `sofia_redis_agent` / `sofia_identity_agent` / `sofia_grantor_agent` |
+|---|---|---|
+| ADK wrapper | `RemoteA2aAgent` | `ContextualSecureRemoteA2aAgent` |
+| Auth | `X-API-Key` header, plain `httpx.AsyncClient` | `X-API-Key` header **+** STLS encrypted session |
+| Payload encryption | none (relies on transport/network security) | AES-256-GCM over a PQC-derived session key (hybrid X25519 + ML-KEM-768 by default), transparent to the ADK |
+| Session/user context propagation | n/a | supported via `context_keys` (disabled here — `context_keys=[]` — since this sample has no per-user session state to forward) |
+| Identity presentation | n/a | optional, per sub-agent, via that sub-agent's own `REQUIRE_IDENTITY_PRESENTATION` — off by default for all four. When on, the coordinator must present a signed `VerifiablePresentation` of its own, verified server-side via `stls_identity.request_presentation_verifier_from_env()`. The sub-agent's plain endpoint stays reachable regardless (closing it via `enable_plain_endpoint=False` is left for later — see [Identity-compliant sub-agents](#identity-compliant-sub-agents-issue-45)) |
 
-`sofia_grantor_agent` is deliberately *not* at the `sofia_identity_agent` tier
-yet — it only protects its own endpoint with an API key, same as
-`sofia_api_keys_agent`. Requiring a `VerifiablePresentation` from whoever
-calls it too (so "which human/process asked for this" is cryptographically
-tied to the issued delegation, not just "held a valid API key") is a natural
-hardening step, not yet built — see
-[Delegation with a real Grantor agent](#delegation-with-a-real-grantor-agent-issue-51).
+Each of the four secure sub-agents' own `identity_verifier` is wired
+identically — same `request_presentation_verifier_from_env()` call, same
+`REQUIRE_IDENTITY_PRESENTATION` switch, same Governing Authority trust
+anchor — so flipping it on for `sofia_api_keys_agent` or
+`sofia_grantor_agent` needs no code change, only their own `.env`.
+`sofia_identity_agent` is simply the one this was first built and tested
+against (issue #45, the most sensitive sub-agent on the platform); the
+other three had never had any identity check at all until issue #80 closed
+that parity gap — see
+[Delegation with a real Grantor agent](#delegation-with-a-real-grantor-agent-issue-51)
+for `sofia_grantor_agent`'s own authorization story on top of this.
 
 This mirrors the general STLS-A2A security layering: `create_secure_a2a_endpoint`
 on the server side always requires API-key authorization, while the
@@ -156,10 +162,10 @@ protection in transit.
    the request needs.
 3. For each selected sub-agent, ADK issues an A2A `messages/send` call to
    that agent's own `secure-a2a` endpoint, carrying the sub-agent's
-   `X-API-Key` (and, for `sofia_api_keys_agent`/`sofia_identity_agent`, an
-   STLS-encrypted payload). For `sofia_identity_agent`, if
-   `REQUIRE_IDENTITY_PRESENTATION=true` there, the first call on a session
-   gets `ERR_IDENTITY_CHALLENGE_REQUIRED` back with a fresh challenge;
+   `X-API-Key` and, for every sub-agent except `sofia_monitoring_agent`, an
+   STLS-encrypted payload. If that sub-agent's own
+   `REQUIRE_IDENTITY_PRESENTATION=true`, the first call on a session gets
+   `ERR_IDENTITY_CHALLENGE_REQUIRED` back with a fresh challenge;
    `STLSHttpxTransport` signs a `VerifiablePresentation` over it
    (`identity_challenge_handler`) and retries automatically, exactly once —
    transparent to the ADK layer.
@@ -179,34 +185,38 @@ protection in transit.
 
 ## Running locally
 
-Start the four sub-agents first (any order), then the coordinator — each
+Start the five sub-agents first (any order), then the coordinator — each
 reads its peer's URL from its own `.env`:
 
 ```bash
 # from each directory, in any order
-cd server/monitoring      && python3 server.py   # :8011
-cd server/keys_management && python3 server.py   # :8012
-cd server/redis           && python3 server.py   # :8013
-cd server/identity_manager && python3 server.py  # :8014
+cd server/monitoring       && python3 server.py   # :8011
+cd server/keys_management  && python3 server.py   # :8012
+cd server/redis            && python3 server.py   # :8013
+cd server/identity_manager && python3 server.py   # :8014
+cd server/grantor_agent    && python3 server.py   # :8016
 
-# last — it resolves BASE_URL_MONITORING / BASE_URL_API_KEYS / BASE_URL_REDIS / BASE_URL_IDENTITY
-cd server/coordinator     && python3 server.py   # :8010
+# last — it resolves BASE_URL_MONITORING / BASE_URL_API_KEYS / BASE_URL_REDIS /
+# BASE_URL_IDENTITY / BASE_URL_GRANTOR
+cd server/coordinator      && python3 server.py   # :8010
 ```
 
-Each `.env` already points `BASE_URL_*` at `localhost:801{1,2,3,4}` for local
-development; set `API_KEY_REDIS` / `API_KEY_API_KEYS` / `API_KEY_MONITORING` /
-`API_KEY_IDENTITY` in `server/coordinator/.env` to API keys issued by each
-sub-agent's own Postgres-backed key store.
+Each `.env` already points `BASE_URL_*` at `localhost:801{1,2,3,4,6}` for
+local development; set `API_KEY_REDIS` / `API_KEY_API_KEYS` /
+`API_KEY_MONITORING` / `API_KEY_IDENTITY` / `API_KEY_GRANTOR` in
+`server/coordinator/.env` to API keys issued by each sub-agent's own
+Postgres-backed key store.
 
-By default `identity_manager`'s `REQUIRE_IDENTITY_PRESENTATION=false`, so
-`sofia_identity_agent` behaves exactly like the other three sub-agents —
-nothing above needs the identity-specific setup until you want to exercise
-it. See [Identity-compliant sub-agents](#identity-compliant-sub-agents-issue-45)
+By default every secure sub-agent's own `REQUIRE_IDENTITY_PRESENTATION=false`,
+so `sofia_api_keys_agent`/`sofia_redis_agent`/`sofia_identity_agent`/
+`sofia_grantor_agent` all behave exactly like `sofia_monitoring_agent` (API
+key only) — nothing above needs the identity-specific setup until you want
+to exercise it. See [Identity-compliant sub-agents](#identity-compliant-sub-agents-issue-45)
 for that.
 
 ---
 
-## Identity-compliant sub-agents ([issue #45](https://github.com/sparkle-stls-ai/stls-ai/issues/45))
+## Identity-compliant sub-agents ([issue #45](https://github.com/sparkle-stls-ai/stls-ai/issues/45) / [issue #80](https://github.com/sparkle-stls-ai/stls-ai/issues/80))
 
 Follow-up to [issue #15](https://github.com/sparkle-stls-ai/stls-ai/issues/15)
 gap #1 (the `X-STLS-Identity-Presentation` wire format, see
@@ -215,21 +225,38 @@ applying the `identity_verifier`/`identity_challenge_handler` mechanism
 built there to a real platform, not just the standalone
 [`19_identity_presentation`](../19_identity_presentation) sample.
 
-### Why `sofia_identity_agent`
+### Why `sofia_identity_agent` first, then every secure sub-agent
 
-Among the four sub-agents, `identity_manager` was the only one with
+Among the four secure sub-agents, `identity_manager` was the only one with
 `api_key_manager` commented out in its `server.py` — unauthenticated,
 despite being the most sensitive one (it bootstraps/issues/revokes
 identities for every other agent, and onboards trust anchors). Issue #45
-closes that gap in two steps: re-enabling `api_key_manager` (parity with
+closed that gap in two steps: re-enabling `api_key_manager` (parity with
 its siblings), and additionally requiring the caller to prove its own
 verifiable identity — not just present a static key — since managing
 identities is exactly the kind of operation that should itself require one.
 
+Issue #80 generalized the second half of that to `sofia_api_keys_agent`,
+`sofia_redis_agent` and `sofia_grantor_agent` too. Along the way, a
+concrete gap was found: none of the four secure sub-agents' own
+`create_secure_a2a_endpoint()` call passed `enable_plain_endpoint`, so
+their plain, unencrypted endpoint stays reachable with **no** identity
+check even once `REQUIRE_IDENTITY_PRESENTATION=true` locks down the
+secure one — same gap the coordinator's own endpoint has (see
+[Gating the coordinator's own endpoint](#gating-the-coordinators-own-endpoint-issue-42-follow-up)
+below). `create_secure_a2a_endpoint()`/`create_secure_mcp_app()` now
+support `enable_plain_endpoint=False` for exactly this (plus the
+symmetric `enable_secure_endpoint`, issue #80's own library change —
+see [`python/stls-a2a`](../../../python/stls-a2a)'s and
+[`python/stls-mcp`](../../../python/stls-mcp)'s own CHANGELOGs), but
+none of this sample's `server.py` files pass it yet: the plain endpoint
+is left reachable everywhere, by explicit choice, until closing it is
+revisited.
+
 ### The coordinator's identity is resolved dynamically, not from a file
 
-The coordinator (the Requestor) and `identity_manager` (the Verifier) both
-read from the **same** persistent stores `tools_identity.py` already
+The coordinator (the Requestor) and each secure sub-agent (the Verifier)
+both read from the **same** persistent stores `tools_identity.py` already
 maintains:
 
 - the identity **keystore** (Redis-backed `IdentityKeystoreBase`) — holds
@@ -240,11 +267,20 @@ maintains:
   the coordinator's current `NetworkAuthorityCredential`, written every
   time `issue_identity_credential_for_agent` runs (it always caches what it
   issues now — see below).
-- the **DID store** (Postgres) — `identity_manager`'s own
-  `_build_identity_verifier()` resolves the coordinator's public key from
-  there at startup, inside the FastAPI `lifespan` (the real uvicorn event
-  loop — see the code comment in `identity_manager/server.py` for why that
-  ordering matters).
+- the **DID store** (Postgres) — `keys_management`/`redis`/`grantor_agent`'s
+  own `server.py` each resolve the coordinator's public key from there via
+  `stls_identity.request_presentation_verifier_from_env()` (issue #80) —
+  one call, generically trusting whichever caller's own DID Document
+  resolves under `make_did_document_holder_key_resolver()`, no per-caller
+  key to pre-populate. `coordinator/server.py` now uses the same call for
+  its own endpoint (see
+  [Gating the coordinator's own endpoint](#gating-the-coordinators-own-endpoint-issue-42-follow-up)
+  below). `identity_manager/server.py` keeps its own, slightly different
+  hand-rolled version (`_build_identity_verifier()` +
+  `_populate_coordinator_key()`, a lifespan-deferred step resolving the
+  coordinator's key specifically) — already proven end to end for issue
+  #45 before #80 existed, left as is rather than risk regressing the one
+  identity path that's been live the longest.
 
 Nothing is cached in a one-shot local file. Whichever path bootstraps or
 re-issues the coordinator's identity — the standalone
@@ -310,6 +346,9 @@ listed in the order you're likely to encounter them:
 | `validate_operational_credential`/`validate_external_operational_credential` (external case): `unknown or untrusted verification method` for the Grantor's own key | Found while testing #48's delegation flows: `tools_identity.py`'s shared `d.sentinel` only ever held the Governing Authority's key — correct for a plain Identity Credential, but an Operational Credential is signed by the **Grantor**, not the Authority, and `Sentinel.verify_signature()` does no automatic DID-document resolution by design. The internal case (`validate_operational_credential`) never resolved the Grantor's key the way the external case already did | Fixed in both `identity_manager/tools_identity.py` and `operator-b/identity_manager/tools_identity.py` — the internal case now also resolves the Grantor's key from `did_store` before verifying |
 | `validate_external_operational_credential`/`validate_external_identity_credential`: `signature verification failed` for the external Grantor's own identity, even with the right code | The onboarded Trust Anchor Registry key for the external Authority is stale — its signing key drifted (e.g. a Redis reset on its keystore DB) since the DID Document was last fetched/onboarded | Re-fetch the external Authority's current DID Document and re-run `onboard_trust_anchor` with its current key — `PostgresTrustAnchorRegistryStore.put()` handles this as a rotation automatically, no manual revoke needed first |
 | `validate_external_operational_credential` (or any tool taking a large credential as an argument): `signature verification failed`, but the same data passes when validated directly via a script | Found while testing #48: pasting a large JSON credential as chat text makes the conversational agent *regenerate* it as tool-call arguments — a single-character drift anywhere in a long `proofValue` is enough to break RFC 8785 canonicalization, even though the content looks identical to a human. Not a bug in the verification logic | **Attach the credential as a file** instead of pasting it as text — resolved this reliably in testing |
+| `validate_operational_credential`/`validate_external_operational_credential`: `unknown or untrusted verification method: ...#key-1`, right after rotating a Grantor's key (`rotate_agent_identity`) — restarting `sofia_grantor_agent` did **not** fix it | A real bug, not a stale-process issue: `grantor_agent/tools_delegation.py`'s `_get_delegation_manager()` never passed `verification_method_id` to `load_delegation_manager()`, which then always defaults to the hardcoded `"{holder_did}#key-1"` — WRONG the moment a rotation closes that key generation, on every fresh start, not just a stale cache | Fixed: `_get_delegation_manager()` now resolves the agent's CURRENT verification method from its DID Document (`PostgresDIDDocumentStore` + `current_verification_method()`) before building the manager. **Any Operational Credential already issued with the stale reference stays invalid** — it was signed with the wrong id, not just cached wrong; issue a new one after restarting `sofia_grantor_agent` with the fix |
+| Deployed the fix above, restarted `sofia_grantor_agent`, re-issued an Operational Credential — **still** signed `...#key-1`, no error, no behavior change at all | `IDENTITY_PG_DSN`/`IDENTITY_PG_DID_TABLE` are a NEW requirement this fix introduced for `grantor_agent` specifically (it never needed Postgres before issue #80) — they were added to `grantor_agent/env.example` but, since `.env` itself predates that change and isn't regenerated from the example automatically, the REAL `.env` still didn't have them. `PostgresDIDDocumentStore.get()` fails closed (logs its own `ERROR`, returns `None`) when `IDENTITY_PG_DSN` is empty, so the code silently falls through to the exact same old `"#key-1"` default — looking, from the outside, exactly like the fix did nothing | Added a `WARNING`-level log right at that fallback (`"has no DID Document on record (IDENTITY_PG_DSN=...)"`) so this is diagnosable from the server log instead of guessing. Added the missing `IDENTITY_PG_DSN`/`IDENTITY_PG_DID_TABLE` (SAME Postgres "sofia" database/table as `identity_manager`'s own) to `grantor_agent/.env` — and, for parity/consistency, to `keys_management/.env` and `redis/.env` too, even though those two don't strictly need Postgres yet (`REQUIRE_IDENTITY_PRESENTATION=false` there short-circuits before touching it) |
+| Same investigation, a second bug found: a Grantor (or the Authority itself) rotated via `rotate_agent_identity()`, then `identity_manager` (or `operator-b/identity_manager`) restarted — the rotation's closed-key entry silently disappears from the DID Document, as if it never rotated | `bootstrap_agent_identity()` and `_deps()`'s own Authority bootstrap both rebuilt a brand-new, single-verification-method DID Document from whatever key currently sits in the keystore and **unconditionally overwrote** the stored one on every call — i.e. on every process restart (`_deps()` is a once-per-process singleton) and on every re-bootstrap of an already-provisioned agent | Fixed in both `identity_manager/tools_identity.py` and `operator-b/identity_manager/tools_identity.py`: both now check `did_store.get(...)` first and skip the rebuild entirely if a document already exists, in both `bootstrap_agent_identity()` and the Authority's own bootstrap inside `_deps()` |
 | `cache_operational_credential`'s own cached copy fails `validate_operational_credential` with `"credential is unsigned"` (`proof` missing), even though `delegate_to_agent` issued it correctly | Extends #48's finding (issue #54): the corruption doesn't need a human paste — it also happens when the chat agent itself re-emits its **own prior tool-call result** as the argument to a *new* tool call (here: `delegate_to_agent`'s JSON output relayed into `cache_operational_credential`). Confirmed via `grantor_agent/dump_delegation_fixture.py` + `identity_manager/run_delegation_fixture.py` (same no-chat-relay-anywhere pattern as #48's own fixture scripts): `proof` survives intact at every stage when chat never touches the credential in between | Same fix as #48 — route large signed credentials through a file or a direct script/A2A call between tool invocations, never through the model re-typing one as another tool's argument |
 | The sub-agent's error never shows up in the chat UI at all | A real, general bug in `GoogleADKAdapter` (not identity-specific) — `event.is_error()` doesn't exist on `google.adk.events.Event`, so a failing sub-agent's error was silently dropped. Fixed in `stls_a2a_google_adapter.py` (see issue #45's GitHub comments for the full writeup) | Update `stls_a2a` to a version including that fix |
 | `sofia_grantor_agent`: `400 INVALID_ARGUMENT ... Unknown name "additional_properties" at 'tools[0].function_declarations[0].parameters.properties[...].value'` | Found while testing #51: a `dict`-typed tool parameter (tried both bare `dict` and `dict[str, str]`) makes `google-adk` generate a function-declaration schema that Gemini's function-calling API rejects outright — same `google-genai` version this sample already uses successfully elsewhere for other agents' `dict`-typed tool parameters, so this isn't a blanket "dict never works" issue; it reproduced consistently for this specific tool regardless, root cause not fully isolated | Avoid a `dict` parameter type entirely for `delegate_to_agent`'s `scope` — it now takes `scope_json: str` (a JSON-encoded object) and parses it with `json.loads()` inside the tool. A plain string parameter never triggers the problematic schema path |
@@ -331,16 +370,30 @@ turn, require identity from whoever calls **it** — `samples/client/sofia-clien
 today, the only real client in this repo that talks to the coordinator over
 `/agents/sofia-admin-coordinator/secure-a2a`.
 
-`coordinator/server.py`'s own `_build_identity_verifier()` differs from
-`identity_manager`'s in one deliberate way: it never pre-resolves a
-specific caller's key into `trusted_issuer_keys` (no lifespan-deferred
+`coordinator/server.py` builds its own verifier with
+`stls_identity.request_presentation_verifier_from_env()` (issue #80 —
+the same call `keys_management`/`redis`/`grantor_agent/server.py` now use
+for their own endpoints too). It differs from `identity_manager`'s
+hand-rolled version in one deliberate way, by design: it never pre-resolves
+a specific caller's key into `trusted_issuer_keys` (no lifespan-deferred
 step needed at all, unlike `identity_manager`'s `_populate_coordinator_key()`)
 — it trusts the Governing Authority's key (to verify an Identity
 Credential's issuer signature) and resolves EVERY caller's own holder
 key generically, straight from that caller's own DID Document
 (`stls_identity.make_did_document_holder_key_resolver()`, issue #42).
 There is no fixed roster of expected callers to maintain here, by design:
-any agent with a bootstrapped identity can present one.
+any agent with a bootstrapped identity can present one — exactly what
+`request_presentation_verifier_from_env()` itself does for every sub-agent
+it's wired into now.
+
+A concrete gap was found while scoping issue #80: `coordinator/server.py`
+never passes `enable_plain_endpoint` either, so its own plain
+`/agents/sofia-admin-coordinator/` endpoint stays reachable with no
+identity check at all even once `REQUIRE_IDENTITY_PRESENTATION=true` is
+set below — same gap every secure sub-agent has. `create_secure_a2a_endpoint()`
+supports `enable_plain_endpoint=False` for this (issue #80's own library
+change), but it isn't passed here yet, by explicit choice — the plain
+channel is left open for now, closing it is a later step.
 
 **Setting it up:**
 

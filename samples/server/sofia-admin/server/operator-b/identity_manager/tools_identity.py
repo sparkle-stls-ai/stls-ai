@@ -206,13 +206,23 @@ async def _deps() -> _Deps:
     # Without this step, that endpoint would respond "authority DID
     # Document not bootstrapped yet" forever — it's not a transient
     # error, nobody ever publishes it on its own.
-    authority_document = build_did_document(
-        host=_GOVERNING_AUTHORITY_HOST,
-        agent_path_segments=[],
-        governing_authority_did=_GOVERNING_AUTHORITY_DID,
-        signing_public_key=authority_pub,
-    )
-    await did_store.put(_GOVERNING_AUTHORITY_AGENT_ID, authority_document)
+    #
+    # BUGFIX: only build+publish a FRESH document the first time this
+    # Authority has ever been seen (no document on record yet) — see
+    # identity_manager/tools_identity.py's own (non-operator-b) copy of
+    # this comment for the full writeup. Used to run unconditionally on
+    # every _deps() call (i.e. every process restart), silently
+    # collapsing any rotation history back down to a single, re-opened
+    # "#key-1" entry.
+    existing_authority_document = await did_store.get(_GOVERNING_AUTHORITY_AGENT_ID)
+    if existing_authority_document is None:
+        authority_document = build_did_document(
+            host=_GOVERNING_AUTHORITY_HOST,
+            agent_path_segments=[],
+            governing_authority_did=_GOVERNING_AUTHORITY_DID,
+            signing_public_key=authority_pub,
+        )
+        await did_store.put(_GOVERNING_AUTHORITY_AGENT_ID, authority_document)
 
     # Trust Anchor Registry — Sparkle as anchor operator (Option A,
     # centralized). Full package store (including key history) — here
@@ -306,8 +316,10 @@ async def bootstrap_agent_identity(agent_id: str) -> dict:
 
     Idempotent: calling it again on an already-bootstrapped agent_id
     returns the same DID, created=False — it never generates a second
-    key for the same agent. This also holds for an agent that will
-    become a Grantor: the bootstrap is identical to any other agent's.
+    key for the same agent, AND never rebuilds/overwrites its DID
+    Document (BUGFIX — see the non-operator-b copy of this module for
+    the full writeup). This also holds for an agent that will become a
+    Grantor: the bootstrap is identical to any other agent's.
 
     Args:
         agent_id: the agent's identifier on the platform
@@ -319,6 +331,11 @@ async def bootstrap_agent_identity(agent_id: str) -> dict:
     d = await _deps()
     try:
         _, public_key, created = bootstrap_signing_key(agent_id, d.keystore)
+
+        existing_document = await d.did_store.get(agent_id)
+        if existing_document is not None:
+            return {"did": existing_document.id, "created": False}
+
         document = build_did_document(
             host=_GOVERNING_AUTHORITY_HOST,
             agent_path_segments=["agents", agent_id],

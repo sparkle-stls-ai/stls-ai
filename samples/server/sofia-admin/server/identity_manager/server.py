@@ -220,6 +220,9 @@ def build_app() -> FastAPI:
         framework="google-adk",
         api_key_manager=pg_manager,
         identity_verifier=identity_verifier,
+        # Issue #80 point 4 would close the plain /agents/sofia-identity/
+        # endpoint once a verifier is configured — left enabled for now
+        # per explicit instruction, revisit later.
     )
 
     
