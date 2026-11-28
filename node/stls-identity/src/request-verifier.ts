@@ -15,6 +15,10 @@
 
 import { PRESENTATION_HEADER, type VerifiableCredential } from "./models.js";
 import { CredentialVerificationError, Sentinel } from "./verifier.js";
+import { bootstrapSigningKey, makeDidDocumentHolderKeyResolver } from "./did.js";
+import { IdentityKeystoreFactory } from "./keystore.js";
+import { PostgresDIDDocumentStore } from "./postgres-store.js";
+import { fetchRemoteCredentialStatus } from "./status.js";
 
 /**
  * Matches the minimal duck type stls-a2a's identity_verifier hook
@@ -135,4 +139,77 @@ export class RequestPresentationVerifier {
       throw exc;
     }
   }
+}
+
+export interface RequestPresentationVerifierFromEnvOptions {
+  requireEnvVar?: string;
+  governingAuthorityDidEnvVar?: string;
+  governingAuthorityHostEnvVar?: string;
+  governingAuthorityAgentIdEnvVar?: string;
+  identityPgDsnEnvVar?: string;
+}
+
+/**
+ * One-call wiring for stls-mcp's `identityVerifier` option, entirely
+ * driven by environment variables — the verifier-side counterpart of
+ * `identityChallengeHandlerFromEnv()` (presentation.ts). Port of
+ * python/stls-identity's request_presentation_verifier_from_env()
+ * (stls_id_request_verifier.py).
+ *
+ * `requireEnvVar` ("false" by default): off means this returns
+ * undefined — no presentation ever checked, same off-by-default
+ * posture as every other piece of issue #15/#45.
+ *
+ * Trusts the Governing Authority's own key (via `bootstrapSigningKey()`)
+ * plus, generically, whichever holder's current or historical key is
+ * published in its own DID Document under `governingAuthorityHost`
+ * (`makeDidDocumentHolderKeyResolver()`) — no caller-specific key ever
+ * needs pre-populating by hand.
+ *
+ * Uses `fetchRemoteCredentialStatus` (a live HTTP fetch per
+ * verification, no caching) as the status resolver. A caller wanting a
+ * different one should build `RequestPresentationVerifier` directly
+ * instead of this convenience wrapper.
+ *
+ * @throws if `requireEnvVar` is true but `governingAuthorityHostEnvVar`
+ *   or `identityPgDsnEnvVar` isn't set.
+ */
+export async function requestPresentationVerifierFromEnv(
+  options: RequestPresentationVerifierFromEnvOptions = {},
+): Promise<RequestPresentationVerifier | undefined> {
+  const requireEnvVar = options.requireEnvVar ?? "REQUIRE_IDENTITY_PRESENTATION";
+  const hostEnvVar = options.governingAuthorityHostEnvVar ?? "GOVERNING_AUTHORITY_HOST";
+  const didEnvVar = options.governingAuthorityDidEnvVar ?? "GOVERNING_AUTHORITY_DID";
+  const agentIdEnvVar = options.governingAuthorityAgentIdEnvVar ?? "GOVERNING_AUTHORITY_AGENT_ID";
+  const pgDsnEnvVar = options.identityPgDsnEnvVar ?? "IDENTITY_PG_DSN";
+
+  if ((process.env[requireEnvVar] ?? "false").trim().toLowerCase() !== "true") {
+    return undefined;
+  }
+
+  const host = (process.env[hostEnvVar] ?? "").trim();
+  const pgDsn = (process.env[pgDsnEnvVar] ?? "").trim();
+  if (!host || !pgDsn) {
+    throw new Error(
+      `${requireEnvVar}=true but ${hostEnvVar} and ${pgDsnEnvVar} must both be set ` +
+        "to build an identityVerifier.",
+    );
+  }
+
+  const governingAuthorityDid = (process.env[didEnvVar] ?? `did:web:${host}`).trim();
+  const governingAuthorityAgentId = (process.env[agentIdEnvVar] ?? "governing-authority").trim();
+  const authorityVmId = `${governingAuthorityDid}#key-1`;
+
+  const keystore = IdentityKeystoreFactory.build();
+  const { publicKey: authorityPublicKey } = await bootstrapSigningKey(
+    governingAuthorityAgentId,
+    keystore,
+  );
+  const trustedKeys = new Map<string, Uint8Array>([[authorityVmId, authorityPublicKey]]);
+
+  const didStore = new PostgresDIDDocumentStore({ dsn: pgDsn });
+  const holderKeyResolver = makeDidDocumentHolderKeyResolver(didStore, host);
+
+  const sentinel = new Sentinel({ trustedIssuerKeys: trustedKeys, holderKeyResolver });
+  return new RequestPresentationVerifier(sentinel, fetchRemoteCredentialStatus);
 }

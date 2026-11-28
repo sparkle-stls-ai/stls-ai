@@ -115,6 +115,8 @@ def create_secure_mcp_app(
     auth: AuthConfig | None = None,
     api_key_manager: Any | None = None,
     identity_verifier: Any | None = None,
+    enable_plain_endpoint: bool = True,
+    enable_secure_endpoint: bool = True,
 ) -> Any:
     """
     Builds the complete ASGI app with plain + STLS-encrypted MCP endpoints.
@@ -180,6 +182,21 @@ def create_secure_mcp_app(
                               {plain_path} requests never carry — see
                               _AuthGateASGI._check_identity_async() in
                               stls_mcp_auth.py.
+        enable_plain_endpoint:  If True (default), mounts {plain_path} as an
+                              external exposure. Set False to expose this
+                              server over the encrypted channel only.
+        enable_secure_endpoint: If True (default), mounts {stls_path} (and
+                              the STLS/PQC handshake endpoint(s)) as an
+                              external exposure. Set False for a pure
+                              standard-MCP deployment with no STLS session
+                              ever negotiated. Issue #80, mirrors
+                              create_secure_a2a_endpoint()'s
+                              enable_plain_endpoint/enable_secure_endpoint in
+                              stls-a2a. Raises ValueError at setup time if
+                              both this and enable_plain_endpoint end up
+                              False — no reachable endpoint is a
+                              misconfiguration, not a valid "disable
+                              everything" state.
 
     Returns:
         ASGI app ready to be served with uvicorn (uvicorn.run(app, ...)
@@ -211,70 +228,51 @@ def create_secure_mcp_app(
         app = create_secure_mcp_app(mcp, provider)
         # uvicorn.run(app, host="0.0.0.0", port=8000)
     """
+    if not enable_plain_endpoint and not enable_secure_endpoint:
+        raise ValueError(
+            "create_secure_mcp_app: enable_plain_endpoint and "
+            "enable_secure_endpoint can't both be False — that would "
+            "register no reachable endpoint at all."
+        )
+
     cache = session_cache or SessionCacheFactory.build()
 
     # ── Standard app, generated and managed entirely by the official SDK ──────
+    # Built unconditionally even with enable_plain_endpoint=False: with the
+    # secure endpoint enabled, StlsMcpMiddleware still needs it to forward
+    # decrypted requests internally.
     plain_app = mcp.streamable_http_app()
 
-    # ── Encrypted middleware, same session manager, internal forwarding ──────
-    # NOTE: uses the "bare" plain_app (without the auth gate) — StlsMcpMiddleware
-    # internally forwards every decrypted request to this same instance; if
-    # it were the protected one, every encrypted request would get
-    # authenticated twice (once inbound on MCP_STLS_PATH, once on the
-    # internal forward with the same headers — redundant, not a security
-    # problem but needless double work on every call). The auth gate only
-    # goes on the two external exposures, built right below.
-    stls_app = StlsMcpMiddleware(plain_app, cache, stls_path=stls_path, plain_path=plain_path)
-
-    # ── Auth gate — applied ONLY to the two external exposures ───────────────
+    # ── Auth gate — applied ONLY to the external plain exposure ──────────────
     # (the "bare" plain_app above stays shared and unprotected for
     # StlsMcpMiddleware's internal forwarding). If auth and api_key_manager
     # are both None, wrap_with_auth returns the app unchanged — no overhead.
     guarded_plain_app = wrap_with_auth(
         plain_app, auth=auth, api_key_manager=api_key_manager, identity_verifier=identity_verifier,
-    )
-    guarded_stls_app = wrap_with_auth(
-        stls_app, auth=auth, api_key_manager=api_key_manager, identity_verifier=identity_verifier,
-    )
+    ) if enable_plain_endpoint else None
 
-    # ── Standard STLS handshake endpoint (HMAC challenge/response) ────────
-    async def handshake_endpoint(request: Request) -> JSONResponse:
-        try:
-            body = await request.json()
-            handshake_request = HandshakeRequest.model_validate(body)
-        except Exception as exc:
-            return JSONResponse(
-                {"jsonrpc": "2.0", "error": {"code": -32600, "message": f"Invalid request: {exc}"}, "id": None},
-                status_code=400,
-            )
+    # ── Routes: built dynamically based on the active provider and toggles ───
+    routes: list = []
 
-        try:
-            response = await perform_handshake(handshake_request, key_session_provider, cache)
-        except HandshakeError as exc:
-            logger.warning("Handshake failed: %s", exc.message)
-            status = 400 if exc.code == -32600 else 503
-            return JSONResponse(
-                {"jsonrpc": "2.0", "error": {"code": exc.code, "message": exc.message}, "id": None},
-                status_code=status,
-            )
+    # ── Encrypted endpoints (issue #80: enable_secure_endpoint) ───────────────
+    if enable_secure_endpoint:
+        # NOTE: uses the "bare" plain_app (without the auth gate) — StlsMcpMiddleware
+        # internally forwards every decrypted request to this same instance; if
+        # it were the protected one, every encrypted request would get
+        # authenticated twice (once inbound on MCP_STLS_PATH, once on the
+        # internal forward with the same headers — redundant, not a security
+        # problem but needless double work on every call). The auth gate only
+        # goes on the external exposure, built right below.
+        stls_app = StlsMcpMiddleware(plain_app, cache, stls_path=stls_path, plain_path=plain_path)
+        guarded_stls_app = wrap_with_auth(
+            stls_app, auth=auth, api_key_manager=api_key_manager, identity_verifier=identity_verifier,
+        )
 
-        return JSONResponse(response.model_dump())
-
-    # ── Routes: built dynamically based on the active provider ──────────────
-    provider_name = os.getenv("KEY_PROVIDER_NAME", "base").strip().lower()
-    routes = [Route(HANDSHAKE_PATH, handshake_endpoint, methods=["POST"])]
-
-    # Additional PQC endpoint — registered only when KEY_PROVIDER_NAME=pqc.
-    # The StlsMcpMiddleware is agnostic to the handshake type: sessions
-    # created by /stls/pqc/handshake end up in the same session_cache and
-    # are accessible via the identical X-STLS-Session-ID.
-    if provider_name == "pqc":
-        from stls_core import PQCHandshakeRequest, PQCHandshakeError, perform_pqc_handshake
-
-        async def pqc_handshake_endpoint(request: Request) -> JSONResponse:
+        # ── Standard STLS handshake endpoint (HMAC challenge/response) ────────
+        async def handshake_endpoint(request: Request) -> JSONResponse:
             try:
                 body = await request.json()
-                pqc_request = PQCHandshakeRequest.model_validate(body)
+                handshake_request = HandshakeRequest.model_validate(body)
             except Exception as exc:
                 return JSONResponse(
                     {"jsonrpc": "2.0", "error": {"code": -32600, "message": f"Invalid request: {exc}"}, "id": None},
@@ -282,9 +280,9 @@ def create_secure_mcp_app(
                 )
 
             try:
-                response = await perform_pqc_handshake(pqc_request, cache)
-            except PQCHandshakeError as exc:
-                logger.warning("PQC handshake failed: %s", exc.message)
+                response = await perform_handshake(handshake_request, key_session_provider, cache)
+            except HandshakeError as exc:
+                logger.warning("Handshake failed: %s", exc.message)
                 status = 400 if exc.code == -32600 else 503
                 return JSONResponse(
                     {"jsonrpc": "2.0", "error": {"code": exc.code, "message": exc.message}, "id": None},
@@ -293,13 +291,49 @@ def create_secure_mcp_app(
 
             return JSONResponse(response.model_dump())
 
-        routes.append(Route(HANDSHAKE_PQC_PATH, pqc_handshake_endpoint, methods=["POST"]))
-        logger.info("stls-mcp: PQC endpoint registered on %s", HANDSHAKE_PQC_PATH)
+        routes.append(Route(HANDSHAKE_PATH, handshake_endpoint, methods=["POST"]))
 
-    routes += [
-        Mount(stls_path, app=guarded_stls_app),
-        Mount("/", app=guarded_plain_app),
-    ]
+        # Additional PQC endpoint — registered only when KEY_PROVIDER_NAME=pqc.
+        # The StlsMcpMiddleware is agnostic to the handshake type: sessions
+        # created by /stls/pqc/handshake end up in the same session_cache and
+        # are accessible via the identical X-STLS-Session-ID.
+        provider_name = os.getenv("KEY_PROVIDER_NAME", "base").strip().lower()
+        if provider_name == "pqc":
+            from stls_core import PQCHandshakeRequest, PQCHandshakeError, perform_pqc_handshake
+
+            async def pqc_handshake_endpoint(request: Request) -> JSONResponse:
+                try:
+                    body = await request.json()
+                    pqc_request = PQCHandshakeRequest.model_validate(body)
+                except Exception as exc:
+                    return JSONResponse(
+                        {"jsonrpc": "2.0", "error": {"code": -32600, "message": f"Invalid request: {exc}"}, "id": None},
+                        status_code=400,
+                    )
+
+                try:
+                    response = await perform_pqc_handshake(pqc_request, cache)
+                except PQCHandshakeError as exc:
+                    logger.warning("PQC handshake failed: %s", exc.message)
+                    status = 400 if exc.code == -32600 else 503
+                    return JSONResponse(
+                        {"jsonrpc": "2.0", "error": {"code": exc.code, "message": exc.message}, "id": None},
+                        status_code=status,
+                    )
+
+                return JSONResponse(response.model_dump())
+
+            routes.append(Route(HANDSHAKE_PQC_PATH, pqc_handshake_endpoint, methods=["POST"]))
+            logger.info("stls-mcp: PQC endpoint registered on %s", HANDSHAKE_PQC_PATH)
+
+        routes.append(Mount(stls_path, app=guarded_stls_app))
+    else:
+        logger.info("Secure MCP endpoint disabled (enable_secure_endpoint=False): %s", stls_path)
+
+    if enable_plain_endpoint:
+        routes.append(Mount("/", app=guarded_plain_app))
+    else:
+        logger.info("Plain MCP endpoint disabled (enable_plain_endpoint=False): %s", plain_path)
 
     # ── Lifespan: propagates the SDK's session_manager.run() ──────────────────
     # Critical detail verified experimentally against mcp>=1.27: the
