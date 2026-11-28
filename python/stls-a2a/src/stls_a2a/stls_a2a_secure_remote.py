@@ -545,7 +545,7 @@ class STLSHttpxTransport(httpx.AsyncBaseTransport):
                 and not _identity_retried
                 and self._identity_challenge_handler is not None
             ):
-                challenge = _looks_like_identity_challenge_required(exc.response)
+                challenge = await identity_challenge_from_response(exc.response)
                 if challenge is not None:
                     logger.info(
                         "STLSHttpxTransport: identity presentation required toward %s, "
@@ -623,7 +623,7 @@ class STLSHttpxTransport(httpx.AsyncBaseTransport):
                 and not _identity_retried
                 and self._identity_challenge_handler is not None
             ):
-                challenge = _looks_like_identity_challenge_required(exc.response)
+                challenge = await identity_challenge_from_response(exc.response)
                 if challenge is not None:
                     logger.info(
                         "STLSHttpxTransport: identity presentation required toward %s "
@@ -758,7 +758,7 @@ def _looks_like_session_expired(response: httpx.Response) -> bool:
     return isinstance(error, dict) and error.get("code") == _ERR_SESSION_EXPIRED
 
 
-def _looks_like_identity_challenge_required(response: httpx.Response) -> Optional[str]:
+async def identity_challenge_from_response(response: httpx.Response) -> Optional[str]:
     """
     Recognizes a 401 response as ERR_IDENTITY_CHALLENGE_REQUIRED (-32005)
     and extracts the challenge to sign over — distinct from
@@ -766,9 +766,30 @@ def _looks_like_identity_challenge_required(response: httpx.Response) -> Optiona
     this one justifies calling identity_challenge_handler and retrying
     with a signed VerifiablePresentation header instead).
 
+    Public (exported from the package root) since STLSHttpxTransport
+    isn't the only caller needing this: any client built directly on
+    SecureA2ATransportAdapter (which has no identity-retry logic of its
+    own) needs the exact same 401 recognition to implement that retry
+    itself — see samples/client/sofia-client-secure/python/secure_transport.py.
+
+    Async (was sync) — a response reached via httpx's streaming
+    `client.stream()` (as `_open_stream()` below uses, and as
+    SecureA2ATransportAdapter.stream_secure_message() uses internally)
+    has NOT had its body read yet when raise_for_status() fires on it;
+    calling .json() on it directly raises httpx.ResponseNotRead, caught
+    by the bare `except Exception` below and silently treated as "not
+    a challenge" — which made this function ALWAYS return None for
+    every streaming caller, the identity retry never firing, until a
+    real (non-mocked) server exercised this path for the first time
+    and surfaced it. response.aread() is always safe to call, whether
+    or not the body was already read (confirmed empirically: it
+    returns the cached content on an already-consumed response, same
+    as for a real unread streaming one).
+
     Returns the challenge string, or None if this isn't that error.
     """
     try:
+        await response.aread()
         body = response.json()
     except Exception:
         return None

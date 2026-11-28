@@ -90,7 +90,10 @@ from stls_a2a import (
     KeySessionProviderFactory,
     SecureA2ATransportAdapter,
     create_pqc_a2a_transport,
+    identity_challenge_from_response,
 )
+from stls_identity import identity_challenge_handler_from_env
+import httpx
 
 load_dotenv(override=True)
 
@@ -111,6 +114,102 @@ logger = logging.getLogger(__name__)
 
 SESSION_CACHE_TTL = int(os.getenv("SESSION_CACHE_TTL", "3600"))
 _KEY_PROVIDER = os.getenv("KEY_PROVIDER_NAME", "base").strip().lower()
+
+# ── Identity presentation (issue #42 follow-up) ─────────────────────────────
+# Built once at import time, same pattern as
+# samples/server/sofia-admin's agent_coordinator.py: IDENTITY_AGENT_ID unset
+# (the default) means "this service presents no identity" — every call
+# below stays byte-for-byte what it was before this feature, since
+# _identity_challenge_handler is simply None and the 401-retry branch
+# never triggers. Needed only against an agent that has
+# REQUIRE_IDENTITY_PRESENTATION=true (e.g. the coordinator, see
+# samples/server/sofia-admin/server/coordinator/server.py) — bootstrap
+# this identity first via identity_manager/
+# bootstrap_sofia_client_secure_identity.py.
+_identity_challenge_handler = identity_challenge_handler_from_env()
+
+
+async def _maybe_await(value):
+    """identity_challenge_handler_from_env()'s returned callable may
+    return either a dict directly or an Awaitable[dict] — same
+    tolerance stls_a2a's own STLSHttpxTransport applies to the same
+    handler shape."""
+    if hasattr(value, "__await__"):
+        return await value
+    return value
+
+
+async def _send_with_identity_retry(
+    build_adapter, payload: dict[str, Any], extra_headers: dict[str, str] | None,
+) -> dict[str, Any]:
+    """
+    Wraps SecureA2ATransportAdapter.send_secure_message() with the same
+    "sign the challenge and retry once" dance STLSHttpxTransport
+    already does internally (stls_a2a_secure_remote.py) — needed here
+    because SecureA2ATransportAdapter itself has no identity-retry
+    logic of its own, it's the low-level, headers-driven adapter this
+    service builds fresh on every call.
+
+    build_adapter: zero-arg callable returning a fresh
+        SecureA2ATransportAdapter — a retry needs a NEW adapter
+        (previous one may have consumed its single-use session key
+        material), not the same instance reused.
+    """
+    try:
+        return await build_adapter().send_secure_message(payload, extra_headers=extra_headers)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 401 or _identity_challenge_handler is None:
+            raise
+        challenge = await identity_challenge_from_response(exc.response)
+        if challenge is None:
+            raise
+        logger.info("secure_send: identity presentation required, signing and retrying")
+        identity_headers = await _maybe_await(_identity_challenge_handler(challenge))
+        return await build_adapter().send_secure_message(
+            payload, extra_headers={**(extra_headers or {}), **identity_headers},
+        )
+
+
+async def _stream_with_identity_retry(
+    build_adapter, payload: dict[str, Any], stream_timeout: float,
+    extra_headers: dict[str, str] | None,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """
+    Streaming counterpart of _send_with_identity_retry() — same
+    constraint as STLSHttpxTransport._open_stream(): the identity check
+    runs server-side BEFORE the SSE response ever opens, so a 401
+    surfaces as a plain httpx.HTTPStatusError on the FIRST chunk, never
+    as a later in-stream "error" event. Retried at most once.
+    """
+    headers = extra_headers
+    identity_retried = False
+    while True:
+        agen = build_adapter().stream_secure_message(
+            payload, stream_timeout=stream_timeout, extra_headers=headers,
+        )
+        try:
+            first_chunk = await agen.__anext__()
+        except StopAsyncIteration:
+            return
+        except httpx.HTTPStatusError as exc:
+            if (
+                exc.response.status_code == 401
+                and not identity_retried
+                and _identity_challenge_handler is not None
+            ):
+                challenge = await identity_challenge_from_response(exc.response)
+                if challenge is not None:
+                    logger.info("secure_stream: identity presentation required, signing and retrying")
+                    identity_headers = await _maybe_await(_identity_challenge_handler(challenge))
+                    headers = {**(headers or {}), **identity_headers}
+                    identity_retried = True
+                    continue
+            raise
+
+        yield first_chunk
+        async for chunk in agen:
+            yield chunk
+        return
 
 
 @dataclass
@@ -474,14 +573,16 @@ async def secure_send(req: SecureCallRequest) -> dict[str, Any]:
 
     extra_headers = {"X-API-Key": req.api_key} if req.api_key else None
 
-    try:
-        adapter = SecureA2ATransportAdapter(
+    def _build_adapter() -> SecureA2ATransportAdapter:
+        return SecureA2ATransportAdapter(
             session_key=session.key_data,
             session_id=session.key_identifier,
             base_url=req.url,
         )
+
+    try:
         safe_payload = {**req.payload, "id": 1}
-        response: dict[str, Any] = await adapter.send_secure_message(safe_payload, extra_headers=extra_headers)
+        response: dict[str, Any] = await _send_with_identity_retry(_build_adapter, safe_payload, extra_headers)
         if response.get("error"):
             raise HTTPException(status_code=502, detail=str(response["error"]))
         return response
@@ -510,17 +611,19 @@ async def secure_stream(req: SecureCallRequest) -> StreamingResponse:
 
     extra_headers = {"X-API-Key": req.api_key} if req.api_key else None
 
-    async def _generate() -> AsyncGenerator[str, None]:
-        adapter = SecureA2ATransportAdapter(
+    def _build_adapter() -> SecureA2ATransportAdapter:
+        return SecureA2ATransportAdapter(
             session_key=session.key_data,
             session_id=session.key_identifier,
             base_url=req.url,
         )
+
+    async def _generate() -> AsyncGenerator[str, None]:
         safe_payload = {**req.payload, "id": 1}
         req_id: Any = req.payload.get("id", "1")
 
         try:
-            async for chunk in adapter.stream_secure_message(safe_payload, stream_timeout=180.0, extra_headers=extra_headers):
+            async for chunk in _stream_with_identity_retry(_build_adapter, safe_payload, 180.0, extra_headers):
                 event = chunk.get("event", "")
 
                 if event == "error":

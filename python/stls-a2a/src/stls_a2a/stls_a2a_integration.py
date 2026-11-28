@@ -480,7 +480,23 @@ class SecureA2ATransportAdapter:
                 json=encrypted,
                 headers=_headers,
             ) as resp:
-                resp.raise_for_status()
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError:
+                    # Reads the body WHILE still inside this `async with`
+                    # block, before it propagates out and both nested
+                    # `async with` blocks (this one, then the client's own)
+                    # close the underlying stream on the way out. Once
+                    # closed, response.aread() raises httpx.StreamClosed —
+                    # too late to read by the time a caller's `except`
+                    # clause gets control. Caught the hard way: a 401
+                    # identity-challenge-required response reaching
+                    # identity_challenge_from_response() (stls_a2a_secure_remote.py)
+                    # AFTER this point always returned None — the retry
+                    # never fired for any real (non-mocked) streaming
+                    # caller, found debugging samples/client/sofia-client-secure.
+                    await resp.aread()
+                    raise
                 event_type = ""
                 async for raw_line in resp.aiter_lines():
                     line = raw_line.strip()

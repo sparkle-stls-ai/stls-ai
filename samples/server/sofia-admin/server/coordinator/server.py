@@ -39,6 +39,72 @@ from stls_a2a import (
 PORT        = int(os.getenv("PORT", "8080"))
 AUTH_PG_DSN = os.getenv("AUTH_PG_DSN", "")
 
+# Identity presentation (issue #42 follow-up): require every caller of
+# THIS coordinator's own /secure-a2a endpoint — sofia-client-secure
+# today, potentially other clients later — to present a verified
+# identity, not just a PQC-encrypted session. Off by default: the
+# operator flips it on once sofia-client-secure's own identity has been
+# bootstrapped (identity_manager/bootstrap_sofia_client_secure_identity.py)
+# and is ready to present it (see secure_transport.py's own
+# identity_challenge_handler wiring).
+REQUIRE_IDENTITY_PRESENTATION = os.getenv("REQUIRE_IDENTITY_PRESENTATION", "false").strip().lower() == "true"
+_GOVERNING_AUTHORITY_DID = os.getenv("GOVERNING_AUTHORITY_DID", "did:web:sofia.sparkle.example.com")
+_GOVERNING_AUTHORITY_HOST = os.getenv("GOVERNING_AUTHORITY_HOST", "sofia.sparkle.example.com")
+_GOVERNING_AUTHORITY_AGENT_ID = os.getenv("GOVERNING_AUTHORITY_AGENT_ID", "governing-authority")
+_AUTHORITY_VM_ID = f"{_GOVERNING_AUTHORITY_DID}#key-1"
+
+
+def _build_identity_verifier():
+    """
+    Builds the coordinator's own RequestPresentationVerifier, or None
+    if REQUIRE_IDENTITY_PRESENTATION=false (the default — fully
+    disabled, zero behavior change for every existing caller).
+
+    Unlike identity_manager/server.py's own _build_identity_verifier()
+    — which only ever needs to trust ONE known caller (the coordinator
+    itself) and resolves that single key via a lifespan-deferred step
+    (_populate_coordinator_key(), see that module's own comment for
+    why the event-loop timing matters there) — this endpoint has no
+    fixed set of expected callers: sofia-client-secure today,
+    potentially others later. So trusted_issuer_keys only ever needs
+    the Governing Authority's own key (to verify an Identity
+    Credential's issuer signature); the holder's own key — whoever is
+    presenting — is resolved generically via holder_key_resolver
+    (issue #42), straight from that agent's own DID Document, with no
+    pre-populated per-caller dict to maintain. Both steps here
+    (IdentityKeystoreFactory.build() + bootstrap_signing_key()) are
+    fully sync and PostgresDIDDocumentStore's pool is lazy (opened on
+    first real request, on uvicorn's own loop) — no lifespan deferral
+    needed at all.
+    """
+    if not REQUIRE_IDENTITY_PRESENTATION:
+        logger.info("REQUIRE_IDENTITY_PRESENTATION=false — identity_verifier is None, hook fully disabled.")
+        return None
+
+    from stls_identity import (
+        IdentityKeystoreFactory,
+        PostgresDIDDocumentStore,
+        RequestPresentationVerifier,
+        Sentinel,
+        bootstrap_signing_key,
+        fetch_remote_credential_status,
+        make_did_document_holder_key_resolver,
+    )
+
+    keystore = IdentityKeystoreFactory.build()
+    _, authority_pub, _ = bootstrap_signing_key(_GOVERNING_AUTHORITY_AGENT_ID, keystore)
+
+    did_store = PostgresDIDDocumentStore(dsn=os.environ.get("IDENTITY_PG_DSN", ""))
+    holder_key_resolver = make_did_document_holder_key_resolver(
+        did_store, governing_authority_host=_GOVERNING_AUTHORITY_HOST,
+    )
+
+    sentinel = Sentinel(
+        trusted_issuer_keys={_AUTHORITY_VM_ID: authority_pub},
+        holder_key_resolver=holder_key_resolver,
+    )
+    return RequestPresentationVerifier(sentinel, status_resolver=fetch_remote_credential_status)
+
 
 def _resolve_base_url() -> str:
     """
@@ -127,6 +193,7 @@ def build_app() -> FastAPI:
         base_url=BASE_URL, # needed to build the agent card with the correct URL
         framework="google-adk",
         # api_key_manager=pg_manager
+        identity_verifier=_build_identity_verifier(),
     )
 
     @app.get("/auth/health")
@@ -164,6 +231,7 @@ def main() -> None:
     print(f"\n🔐 Auth backends:")
     print(f"   PostgresLoader → {_pg_status}")
     print(f"   Redis cache    : {'enabled (' + _redis_url + ')' if _use_redis else 'disabled'}")
+    print(f"\n🪪 Identity presentation (issue #42): {'REQUIRED' if REQUIRE_IDENTITY_PRESENTATION else 'disabled (REQUIRE_IDENTITY_PRESENTATION=false)'}")
     print(f"\n🤖 Agents:")
     print(f"   sofia-admin   {BASE_URL}/agents/sofia-admin-coordinator/secure-a2a")
     print()
