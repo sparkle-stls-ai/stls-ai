@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.11] — 2026-11-28
+
+### Added
+
+- Issue #80: `create_secure_mcp_app()` gained `enable_plain_endpoint: bool =
+  True` and `enable_secure_endpoint: bool = True`, mirroring stls-a2a's
+  `create_secure_a2a_endpoint()`. `enable_secure_endpoint=False` drops the
+  encrypted `{stls_path}` mount and both the HMAC and PQC handshake routes
+  entirely; `enable_plain_endpoint=False` drops the external `{plain_path}`
+  mount (the plain app underneath is still built when the secure endpoint
+  is enabled — `StlsMcpMiddleware` needs it to forward decrypted requests
+  internally). Raises `ValueError` at setup time if both end up `False`.
+
 ## [0.1.10] — 2026-11-27
 
 Issue #74: authorization scope was never propagated from identity

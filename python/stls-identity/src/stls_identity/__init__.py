@@ -78,6 +78,7 @@ from .stls_id_request_verifier import (
     PresentationVerificationResult,
     RequestPresentationVerifier,
     StatusResolver,
+    request_presentation_verifier_from_env,
 )
 from .stls_id_postgres_store import (
     DDL,
@@ -99,7 +100,7 @@ from .stls_id_trust_registry_client import (
 )
 from .stls_id_trust_registry_bridge import create_trust_registry_router
 
-__version__ = "0.1.7"
+__version__ = "0.1.8"
 
 __all__ = [
     # models
@@ -171,6 +172,7 @@ __all__ = [
     "PresentationVerificationResult",
     "RequestPresentationVerifier",
     "StatusResolver",
+    "request_presentation_verifier_from_env",
     # postgres_store
     "DDL",
     "DIDDocumentStoreBase",

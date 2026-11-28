@@ -2039,6 +2039,7 @@ def create_secure_a2a_endpoint(
     framework: str = 'auto',
     adapter_kwargs: Optional[Dict[str, Any]] = None,
     enable_plain_endpoint: bool = True,
+    enable_secure_endpoint: bool = True,
     auth: Optional[AuthConfig] = None,
     api_key_manager: Optional[Any] = None,
     agent_name: Optional[str] = None,
@@ -2056,6 +2057,15 @@ def create_secure_a2a_endpoint(
         framework:              Framework ('auto', 'google-adk', 'langchain', …)
         adapter_kwargs:         Additional parameters for the adapter
         enable_plain_endpoint:  If True, registers /a2a and /a2a/stream (unencrypted)
+        enable_secure_endpoint: If True (default), registers {path}, {path}/stream and
+                                {path}/capabilities (encrypted). Set False to expose
+                                this agent over the plain channel only — e.g. a pure
+                                interop deployment that never wants an STLS session
+                                negotiated at all. Issue #80, symmetric to
+                                enable_plain_endpoint. Raises ValueError at setup time
+                                if both this and enable_plain_endpoint end up False:
+                                no reachable endpoint is a misconfiguration, not a
+                                valid "disable everything" state.
         auth:                   Legacy AuthConfig (in-memory, backward-compatible).
                                 None (default) = no validation.
         api_key_manager:        Enterprise ApiKeyManager (optional).
@@ -2072,6 +2082,13 @@ def create_secure_a2a_endpoint(
     from starlette.requests import Request
     from starlette.responses import JSONResponse
     from starlette.routing import Route
+
+    if not enable_plain_endpoint and not enable_secure_endpoint:
+        raise ValueError(
+            "create_secure_a2a_endpoint: enable_plain_endpoint and "
+            "enable_secure_endpoint can't both be False — that would "
+            f"register no reachable endpoint at all for path={path!r}."
+        )
 
     # Creates the appropriate adapter for the framework
     kwargs = adapter_kwargs or {}
@@ -2105,10 +2122,11 @@ def create_secure_a2a_endpoint(
     # to_a2a() already supports url=None (it only requires at least one
     # of url/secure_url to be set — see its own docstring/guard), so the
     # fix is to require plain_path too, not just base_url.
+    secure_path = path if enable_secure_endpoint else None
     agent_card = to_a2a(
         agent=agent,
         url=(base_url + plain_path) if (base_url and plain_path) else plain_path,
-        secure_url=base_url + path if base_url else path,
+        secure_url=(base_url + secure_path) if (base_url and secure_path) else secure_path,
     )
     
     app._a2a_agent_registry[path] = agent_card
@@ -2132,7 +2150,7 @@ def create_secure_a2a_endpoint(
             "agent_name":   _name,
             "base_url":     _effective_base_url,
             "plain_url":    (_effective_base_url + plain_path) if _effective_base_url and plain_path else plain_path,
-            "secure_url":   (_effective_base_url + path) if _effective_base_url else path,
+            "secure_url":   (_effective_base_url + secure_path) if _effective_base_url and secure_path else secure_path,
             "framework":    framework,
             "capabilities": agent_card.to_dict() if hasattr(agent_card, "to_dict") else {},
         }
@@ -2245,7 +2263,11 @@ def create_secure_a2a_endpoint(
     # Uses middleware.sessions to populate the same SessionCache shared
     # with get_transport(): when an encrypted request arrives, session_id
     # is found in the cache without going through the Arqit lazy derivation.
-    if os.getenv("KEY_PROVIDER_NAME", "base").strip().lower() == "pqc":
+    # Gated on enable_secure_endpoint: this agent has no encrypted channel
+    # to establish a session for. A DIFFERENT agent mounted on the same
+    # app with enable_secure_endpoint=True still registers it normally
+    # (the "once per app" guard below is per-route, not per-agent).
+    if enable_secure_endpoint and os.getenv("KEY_PROVIDER_NAME", "base").strip().lower() == "pqc":
         try:
             from stls_core import HANDSHAKE_PQC_PATH, PQCHandshakeRequest, PQCHandshakeError, perform_pqc_handshake as _perform_pqc_hs
 
@@ -2282,69 +2304,74 @@ def create_secure_a2a_endpoint(
                 "PQC endpoint not registered: %s", _e,
             )
 
-    app.routes.append(Route(path, secure_a2a_handler, methods=["POST"]))
+    # ── Encrypted endpoints (issue #80: enable_secure_endpoint) ───────────────
+    if enable_secure_endpoint:
+        app.routes.append(Route(path, secure_a2a_handler, methods=["POST"]))
 
-    # ── Capabilities endpoint ─────────────────────────────────────────────────
+        # ── Capabilities endpoint ─────────────────────────────────────────────
 
-    async def capabilities_handler(request: Request):
-        """Endpoint to get the agent's capabilities"""
-        capabilities = agent_adapter.get_capabilities()
-        capabilities['secure_transport'] = {
-            'enabled': True,
-            'encryption': 'AES-256-GCM',
-            'key_derivation': 'HKDF-SHA256'
-        }
-        return JSONResponse(content=capabilities)
-    
-    app.routes.append(Route(f"{path}/capabilities", capabilities_handler, methods=["GET"]))
+        async def capabilities_handler(request: Request):
+            """Endpoint to get the agent's capabilities"""
+            capabilities = agent_adapter.get_capabilities()
+            capabilities['secure_transport'] = {
+                'enabled': True,
+                'encryption': 'AES-256-GCM',
+                'key_derivation': 'HKDF-SHA256'
+            }
+            return JSONResponse(content=capabilities)
+
+        app.routes.append(Route(f"{path}/capabilities", capabilities_handler, methods=["GET"]))
+    else:
+        logger.info("Secure A2A endpoint disabled (enable_secure_endpoint=False): %s", path)
 
     # ── Encrypted SSE endpoint ──────────────────────────────────────────────────
 
-    async def secure_a2a_stream_handler(request: Request):
-        """
-        POST {path}/stream  →  text/event-stream
+    if enable_secure_endpoint:
+        async def secure_a2a_stream_handler(request: Request):
+            """
+            POST {path}/stream  →  text/event-stream
 
-        Accepts an AES-256-GCM request identical to /secure-a2a,
-        but responds with SSE for messages/sendStream and tasks/subscribe.
+            Accepts an AES-256-GCM request identical to /secure-a2a,
+            but responds with SSE for messages/sendStream and tasks/subscribe.
 
-        Each SSE event is encrypted with the same session key:
-            event: TaskStatusUpdateEvent | TaskArtifactUpdateEvent | error
-            data: <AES-256-GCM encrypted JSON>
+            Each SSE event is encrypted with the same session key:
+                event: TaskStatusUpdateEvent | TaskArtifactUpdateEvent | error
+                data: <AES-256-GCM encrypted JSON>
 
-        Mandatory headers in the response:
-            Content-Type: text/event-stream
-            Cache-Control: no-cache
-            X-Accel-Buffering: no   ← disables nginx buffering
-        """
-        from starlette.responses import StreamingResponse
+            Mandatory headers in the response:
+                Content-Type: text/event-stream
+                Cache-Control: no-cache
+                X-Accel-Buffering: no   ← disables nginx buffering
+            """
+            from starlette.responses import StreamingResponse
 
-        auth_err = await middleware._check_auth_async(request)
-        if auth_err:
-            return auth_err
+            auth_err = await middleware._check_auth_async(request)
+            if auth_err:
+                return auth_err
 
-        try:
-            encrypted_data = await request.json()
-        except Exception:
-            async def _parse_error():
-                yield _sse_event("error", {"code": -32700, "message": "Parse error: body isn't valid JSON"})
+            try:
+                encrypted_data = await request.json()
+            except Exception:
+                async def _parse_error():
+                    yield _sse_event("error", {"code": -32700, "message": "Parse error: body isn't valid JSON"})
+                return StreamingResponse(
+                    _parse_error(),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                )
+
+            http_ctx = middleware._extract_http_context(request)
             return StreamingResponse(
-                _parse_error(),
+                middleware.process_secure_stream(encrypted_data, http_context=http_ctx or None),
                 media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",   # essential with nginx as reverse proxy
+                    "Connection": "keep-alive",
+                },
             )
 
-        http_ctx = middleware._extract_http_context(request)
-        return StreamingResponse(
-            middleware.process_secure_stream(encrypted_data, http_context=http_ctx or None),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",   # essential with nginx as reverse proxy
-                "Connection": "keep-alive",
-            },
-        )
-
-    app.routes.append(Route(f"{path}/stream", secure_a2a_stream_handler, methods=["POST"]))
+        app.routes.append(Route(f"{path}/stream", secure_a2a_stream_handler, methods=["POST"]))
 
     # ── Plain (unencrypted) endpoints for standard A2A interoperability ────────
     if enable_plain_endpoint:

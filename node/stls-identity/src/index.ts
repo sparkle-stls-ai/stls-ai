@@ -22,4 +22,4 @@ export * from "./trust-registry-client.js";
 export * from "./issuer.js";
 export * from "./delegation.js";
 
-export const STLS_IDENTITY_NODE_VERSION = "0.1.7";
+export const STLS_IDENTITY_NODE_VERSION = "0.1.8";

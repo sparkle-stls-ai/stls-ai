@@ -83,16 +83,22 @@ _identity_challenge_handler = identity_challenge_handler_from_env()
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-sofia_redis_agent = RemoteA2aAgent(
+sofia_redis_agent = ContextualSecureRemoteA2aAgent(
     name="sofia_redis_agent",
     description=(
         "Agent to monitor and manage Redis instances used by the Sofia Platform."
     ),
     agent_card=f"{BASE_URL_REDIS}{AGENT_CARD_WELL_KNOWN_PATH}",
-    httpx_client=httpx.AsyncClient(
-        headers={"X-API-Key": API_KEY_REDIS},
-        timeout=httpx.Timeout(60.0),
-    ),    
+    extra_headers={"X-API-Key": API_KEY_REDIS},
+    # No session.state context to propagate here — encrypted transport only,
+    # same behavior as the plain RemoteA2aAgent it replaces (issue #80
+    # follow-up: every sub-agent except monitoring now goes over the
+    # encrypted channel).
+    context_keys=[],
+    # Issue #80 follow-up: same coordinator identity as sofia_identity_agent
+    # below — None until the coordinator has been bootstrapped, harmless
+    # no-op until the redis sub-agent's own REQUIRE_IDENTITY_PRESENTATION=true.
+    identity_challenge_handler=_identity_challenge_handler,
 )
 
 
@@ -106,6 +112,11 @@ sofia_api_keys_agent = ContextualSecureRemoteA2aAgent(
     # No session.state context to propagate here — encrypted transport only,
     # same behavior as the plain RemoteA2aAgent it replaces.
     context_keys=[],
+    # Issue #80 follow-up: same coordinator identity as sofia_identity_agent
+    # below — None until the coordinator has been bootstrapped (see
+    # _identity_challenge_handler above), harmless no-op until
+    # keys_management's own REQUIRE_IDENTITY_PRESENTATION=true.
+    identity_challenge_handler=_identity_challenge_handler,
 )
 
 
@@ -154,11 +165,11 @@ sofia_grantor_agent = ContextualSecureRemoteA2aAgent(
     agent_card=f"{BASE_URL_GRANTOR}{AGENT_CARD_WELL_KNOWN_PATH}",
     extra_headers={"X-API-Key": API_KEY_GRANTOR},
     context_keys=[],
-    # No identity_challenge_handler here (yet): sofia_grantor_agent/server.py
-    # only protects itself with an API key today, not identity_verifier —
-    # unlike sofia_identity_agent, which required issue #45's VP flow.
-    # Add one here the same way _identity_challenge_handler was wired
-    # above if the Grantor's own endpoint ever requires it too.
+    # Issue #80 follow-up: grantor_agent/server.py now builds its own
+    # identity_verifier the same way identity_manager does — same
+    # coordinator identity, harmless no-op until that agent's own
+    # REQUIRE_IDENTITY_PRESENTATION=true.
+    identity_challenge_handler=_identity_challenge_handler,
 )
 
 

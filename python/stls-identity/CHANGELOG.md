@@ -2,6 +2,31 @@
 
 All relevant changes to this package, in reverse chronological order.
 
+## [0.1.8] — 2026-11-28
+
+Issue #80 follow-up: every sub-agent server in `samples/server/sofia-admin`
+reachable via `ContextualSecureRemoteA2aAgent` needed the same
+`identity_verifier` wiring identity_manager/server.py already had — until
+now, each caller hand-rolled ~30-50 lines of `Sentinel`/
+`RequestPresentationVerifier`/`PostgresDIDDocumentStore` setup to do it
+(identity_manager/server.py, coordinator/server.py).
+
+### Added
+
+- `request_presentation_verifier_from_env()` (`stls_id_request_verifier.py`):
+  one-call, environment-driven wiring for stls-a2a's/stls-mcp's
+  `identity_verifier` hook — the verifier-side counterpart of the
+  pre-existing `identity_challenge_handler_from_env()`. Off by default
+  (`REQUIRE_IDENTITY_PRESENTATION=false` → `None`); trusts the Governing
+  Authority's own key plus, generically, whichever holder's key is
+  published in its own DID Document (`make_did_document_holder_key_resolver()`)
+  — no caller-specific key ever needs pre-populating by hand. Raises
+  `ValueError` at setup time if enabled without
+  `GOVERNING_AUTHORITY_HOST`/`IDENTITY_PG_DSN`.
+- Node: `requestPresentationVerifierFromEnv()` (`request-verifier.ts`), 1:1
+  port of the above (async, since `bootstrapSigningKey()`'s keystore lookup
+  is async in Node).
+
 ## [0.1.7] — 2026-11-27
 
 Issue #42: an individual agent had no equivalent of the Trust Anchor

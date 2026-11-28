@@ -99,6 +99,22 @@ export interface CreateSecureMcpAppOptions {
    * tool to read back.
    */
   identityStore?: VerifiedIdentityStore;
+  /**
+   * If true (default), mounts `plainPath` as an external exposure. Set
+   * false to expose this server over the encrypted channel only.
+   */
+  enablePlainEndpoint?: boolean;
+  /**
+   * If true (default), mounts `stlsPath` (and the STLS/PQC handshake
+   * endpoint(s)) as an external exposure. Set false for a pure
+   * standard-MCP deployment with no STLS session ever negotiated. Issue
+   * #80, mirrors python/stls-mcp's create_secure_mcp_app() and
+   * stls-a2a's create_secure_a2a_endpoint() enablePlainEndpoint/
+   * enableSecureEndpoint. Throws at setup time if both this and
+   * enablePlainEndpoint end up false — no reachable endpoint is a
+   * misconfiguration, not a valid "disable everything" state.
+   */
+  enableSecureEndpoint?: boolean;
 }
 
 function normalizePath(pathname: string): string {
@@ -127,6 +143,15 @@ export async function createSecureMcpApp(
   keySessionProvider: KeySessionProvider,
   options: CreateSecureMcpAppOptions = {},
 ): Promise<RequestHandler> {
+  const enablePlainEndpoint = options.enablePlainEndpoint ?? true;
+  const enableSecureEndpoint = options.enableSecureEndpoint ?? true;
+  if (!enablePlainEndpoint && !enableSecureEndpoint) {
+    throw new Error(
+      "createSecureMcpApp: enablePlainEndpoint and enableSecureEndpoint " +
+        "can't both be false — that would register no reachable endpoint at all.",
+    );
+  }
+
   const stlsPath = normalizePath(options.stlsPath ?? MCP_STLS_PATH);
   const plainPath = normalizePath(options.plainPath ?? MCP_PLAIN_PATH);
   const cache = options.sessionCache ?? (await SessionCacheFactory.build());
@@ -147,89 +172,103 @@ export async function createSecureMcpApp(
     }
   };
 
-  const stlsHandler = encryptedHandler(innerHandle, cache, { plainPath });
-
-  // ── Auth gate — applied ONLY to the two external exposures ─────────────
+  // ── Auth gate — applied ONLY to the external exposures that are enabled ──
   // innerHandle itself stays unguarded: encryptedHandler() calls it
   // internally for every decrypted request, and gating it too would
   // authenticate every encrypted request twice (once on /mcp-stls, once
   // on the internal call with the same headers) — redundant, not a
   // security issue, just wasted work. Mirrors python/stls-mcp exactly.
-  const guardedPlain = wrapWithAuth(innerHandle, {
-    auth: options.auth,
-    apiKeyManager: options.apiKeyManager,
-    identityVerifier: options.identityVerifier,
-    identityStore: options.identityStore,
-  });
-  const guardedStls = wrapWithAuth(stlsHandler, {
-    auth: options.auth,
-    apiKeyManager: options.apiKeyManager,
-    identityVerifier: options.identityVerifier,
-    identityStore: options.identityStore,
-  });
+  const guardedPlain: RequestHandler | null = enablePlainEndpoint
+    ? wrapWithAuth(innerHandle, {
+        auth: options.auth,
+        apiKeyManager: options.apiKeyManager,
+        identityVerifier: options.identityVerifier,
+        identityStore: options.identityStore,
+      })
+    : null;
 
-  // ── Handshake endpoints — always open, by design ────────────────────────
-  const handshakeHandler: RequestHandler = async (request: Request): Promise<Response> => {
-    let handshakeRequest: HandshakeRequest;
-    try {
-      handshakeRequest = (await request.json()) as HandshakeRequest;
-    } catch (exc) {
-      return jsonRpcError(400, -32600, `Invalid request: ${(exc as Error).message}`);
-    }
-    try {
-      const response = await performHandshake(handshakeRequest, keySessionProvider, cache);
-      return jsonRpcResponse(response);
-    } catch (exc) {
-      if (exc instanceof HandshakeError) {
-        return jsonRpcError(exc.code === -32600 ? 400 : 503, exc.code, exc.message);
+  // ── Encrypted endpoints (issue #80: enableSecureEndpoint) ───────────────
+  let guardedStls: RequestHandler | null = null;
+  let handshakeHandler: RequestHandler | null = null;
+  let pqcHandshakeHandler: RequestHandler | null = null;
+
+  if (enableSecureEndpoint) {
+    const stlsHandler = encryptedHandler(innerHandle, cache, { plainPath });
+    guardedStls = wrapWithAuth(stlsHandler, {
+      auth: options.auth,
+      apiKeyManager: options.apiKeyManager,
+      identityVerifier: options.identityVerifier,
+      identityStore: options.identityStore,
+    });
+
+    // ── Handshake endpoints — always open, by design ──────────────────────
+    handshakeHandler = async (request: Request): Promise<Response> => {
+      let handshakeRequest: HandshakeRequest;
+      try {
+        handshakeRequest = (await request.json()) as HandshakeRequest;
+      } catch (exc) {
+        return jsonRpcError(400, -32600, `Invalid request: ${(exc as Error).message}`);
       }
-      throw exc;
-    }
-  };
-
-  const providerName = (process.env.KEY_PROVIDER_NAME ?? "base").trim().toLowerCase();
-  const pqcHandshakeHandler: RequestHandler | null =
-    providerName === "pqc"
-      ? async (request: Request): Promise<Response> => {
-          let pqcRequest: PQCHandshakeRequest;
-          try {
-            pqcRequest = (await request.json()) as PQCHandshakeRequest;
-          } catch (exc) {
-            return jsonRpcError(400, -32600, `Invalid request: ${(exc as Error).message}`);
-          }
-          try {
-            const response = await performPqcHandshake(pqcRequest, cache);
-            return jsonRpcResponse(response);
-          } catch (exc) {
-            if (exc instanceof PQCHandshakeError) {
-              return jsonRpcError(exc.code === -32600 ? 400 : 503, exc.code, exc.message);
-            }
-            throw exc;
-          }
+      try {
+        const response = await performHandshake(handshakeRequest, keySessionProvider, cache);
+        return jsonRpcResponse(response);
+      } catch (exc) {
+        if (exc instanceof HandshakeError) {
+          return jsonRpcError(exc.code === -32600 ? 400 : 503, exc.code, exc.message);
         }
-      : null;
+        throw exc;
+      }
+    };
 
-  if (pqcHandshakeHandler) {
+    const providerName = (process.env.KEY_PROVIDER_NAME ?? "base").trim().toLowerCase();
+    if (providerName === "pqc") {
+      pqcHandshakeHandler = async (request: Request): Promise<Response> => {
+        let pqcRequest: PQCHandshakeRequest;
+        try {
+          pqcRequest = (await request.json()) as PQCHandshakeRequest;
+        } catch (exc) {
+          return jsonRpcError(400, -32600, `Invalid request: ${(exc as Error).message}`);
+        }
+        try {
+          const response = await performPqcHandshake(pqcRequest, cache);
+          return jsonRpcResponse(response);
+        } catch (exc) {
+          if (exc instanceof PQCHandshakeError) {
+            return jsonRpcError(exc.code === -32600 ? 400 : 503, exc.code, exc.message);
+          }
+          throw exc;
+        }
+      };
+      // eslint-disable-next-line no-console
+      console.log(`stls-mcp: PQC endpoint registered on ${HANDSHAKE_PQC_PATH}`);
+    }
+  } else {
     // eslint-disable-next-line no-console
-    console.log(`stls-mcp: PQC endpoint registered on ${HANDSHAKE_PQC_PATH}`);
+    console.log(`stls-mcp: secure endpoint disabled (enableSecureEndpoint=false): ${stlsPath}`);
   }
+
+  if (!enablePlainEndpoint) {
+    // eslint-disable-next-line no-console
+    console.log(`stls-mcp: plain endpoint disabled (enablePlainEndpoint=false): ${plainPath}`);
+  }
+
   // eslint-disable-next-line no-console
-  console.log(`stls-mcp started: plain=${plainPath} stls=${stlsPath} handshake=${HANDSHAKE_PATH}`);
+  console.log(`stls-mcp started: plain=${enablePlainEndpoint ? plainPath : "disabled"} stls=${enableSecureEndpoint ? stlsPath : "disabled"} handshake=${enableSecureEndpoint ? HANDSHAKE_PATH : "disabled"}`);
 
   // ── Dispatcher — plain pathname comparison, no router involved ─────────
   return async (request: Request): Promise<Response> => {
     const pathname = normalizePath(new URL(request.url).pathname);
 
-    if (pathname === HANDSHAKE_PATH && request.method === "POST") {
+    if (handshakeHandler && pathname === HANDSHAKE_PATH && request.method === "POST") {
       return handshakeHandler(request);
     }
     if (pqcHandshakeHandler && pathname === HANDSHAKE_PQC_PATH && request.method === "POST") {
       return pqcHandshakeHandler(request);
     }
-    if (pathname === stlsPath) {
+    if (guardedStls && pathname === stlsPath) {
       return guardedStls(request);
     }
-    if (pathname === plainPath) {
+    if (guardedPlain && pathname === plainPath) {
       return guardedPlain(request);
     }
     return jsonRpcError(404, -32601, "Not found");

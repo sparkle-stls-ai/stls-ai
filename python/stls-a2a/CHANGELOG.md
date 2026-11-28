@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.15] — 2026-11-28
+
+### Added
+
+- Issue #80: `create_secure_a2a_endpoint()` gained `enable_secure_endpoint:
+  bool = True`, symmetric to the pre-existing `enable_plain_endpoint`. Set
+  `False` to expose an agent over the plain channel only — no `/secure-a2a`,
+  no `/secure-a2a/stream`, no `/secure-a2a/capabilities`, and no PQC
+  handshake route registered for that agent's call. Raises `ValueError` at
+  setup time if `enable_plain_endpoint` and `enable_secure_endpoint` end up
+  both `False` — no reachable endpoint is a misconfiguration, not a valid
+  "disable everything" state.
+
 ## [0.1.14] — 2026-11-28
 
 ### Fixed

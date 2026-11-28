@@ -9,6 +9,20 @@ of which this package is the TypeScript port.
 
 ---
 
+## [0.1.8] — 2026-11-28
+
+1:1 port of `python/stls-identity` 0.1.8 (issue #80 follow-up).
+
+### Added
+
+- `requestPresentationVerifierFromEnv()` (`request-verifier.ts`):
+  environment-driven wiring for stls-mcp's `identityVerifier` option — the
+  verifier-side counterpart of `identityChallengeHandlerFromEnv()`. Async
+  (unlike the Python version's sync `request_presentation_verifier_from_env()`),
+  since `bootstrapSigningKey()`'s keystore lookup is async in Node. Off by
+  default; throws if enabled without `GOVERNING_AUTHORITY_HOST`/
+  `IDENTITY_PG_DSN`.
+
 ## [0.1.7] — 2026-11-27
 
 1:1 port of `python/stls-identity` 0.1.7 (issue #42): an individual

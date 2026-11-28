@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { signCredentialPayload } from "../src/signing.js";
 import { buildVerifiablePresentation, attachIdentityPresentationHeader } from "../src/presentation.js";
-import { RequestPresentationVerifier } from "../src/request-verifier.js";
+import { RequestPresentationVerifier, requestPresentationVerifierFromEnv } from "../src/request-verifier.js";
 import { IdentityManager } from "../src/issuer.js";
 import { DelegationManager } from "../src/delegation.js";
 import { Sentinel } from "../src/verifier.js";
@@ -257,4 +257,35 @@ function fakeRequest(headers: Record<string, string>) {
     scope: { action: "reroute_traffic", segment: "MER-SEG-7" },
   });
   console.log("OK: T06 delegated presentation carries requestorDid/grantorDid/scope through");
+}
+
+// T07/T08 — requestPresentationVerifierFromEnv() (issue #80). Full
+// wiring (Sentinel/trust/DID resolution/status fetch) needs a real
+// Postgres DID store and a real Redis-or-memory keystore — out of
+// scope here, same posture as identityChallengeHandlerFromEnv()'s own
+// coverage (presentation.smoke.ts). Covers only the off-by-default
+// guarantee and the fail-loud guard, which is what every caller
+// actually relies on at startup.
+{
+  delete process.env.REQUIRE_IDENTITY_PRESENTATION;
+  const off1 = await requestPresentationVerifierFromEnv();
+  assert.equal(off1, undefined);
+
+  process.env.REQUIRE_IDENTITY_PRESENTATION = "false";
+  const off2 = await requestPresentationVerifierFromEnv();
+  assert.equal(off2, undefined);
+  console.log("OK: T07 off by default (unset and explicit 'false')");
+}
+
+{
+  process.env.REQUIRE_IDENTITY_PRESENTATION = "true";
+  delete process.env.GOVERNING_AUTHORITY_HOST;
+  delete process.env.IDENTITY_PG_DSN;
+
+  await assert.rejects(
+    () => requestPresentationVerifierFromEnv(),
+    /GOVERNING_AUTHORITY_HOST.*IDENTITY_PG_DSN/,
+  );
+  delete process.env.REQUIRE_IDENTITY_PRESENTATION;
+  console.log("OK: T08 enabled without host/dsn throws");
 }

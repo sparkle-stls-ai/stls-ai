@@ -19,4 +19,4 @@ export { createSecureMcpApp, stlsCapabilitiesFragment, type CreateSecureMcpAppOp
 export { toNodeRequestListener } from "./http-adapter.js";
 export * from "./transport.js";
 
-export const STLS_MCP_NODE_VERSION = "0.1.10";
+export const STLS_MCP_NODE_VERSION = "0.1.11";

@@ -23,6 +23,7 @@ import base64
 import binascii
 import datetime as dt
 import json
+import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -33,6 +34,7 @@ __all__ = [
     "PresentationVerificationResult",
     "RequestPresentationVerifier",
     "StatusResolver",
+    "request_presentation_verifier_from_env",
 ]
 
 
@@ -147,3 +149,89 @@ class RequestPresentationVerifier:
                 )
         except CredentialVerificationError as exc:
             return PresentationVerificationResult(ok=False, error=str(exc))
+
+
+def request_presentation_verifier_from_env(
+    *,
+    require_env_var: str = "REQUIRE_IDENTITY_PRESENTATION",
+    governing_authority_did_env_var: str = "GOVERNING_AUTHORITY_DID",
+    governing_authority_host_env_var: str = "GOVERNING_AUTHORITY_HOST",
+    governing_authority_agent_id_env_var: str = "GOVERNING_AUTHORITY_AGENT_ID",
+    identity_pg_dsn_env_var: str = "IDENTITY_PG_DSN",
+) -> "RequestPresentationVerifier | None":
+    """
+    One-call wiring for stls-a2a's/stls-mcp's `identity_verifier` hook
+    (issue #15 gap #1), entirely driven by environment variables — the
+    verifier-side counterpart of identity_challenge_handler_from_env()
+    (stls_id_presentation.py), generalizing the ~30 lines of
+    hand-rolled Sentinel/RequestPresentationVerifier setup that used to
+    be duplicated per sub-agent server (see
+    samples/server/sofia-admin/server/identity_manager/server.py's
+    `_build_identity_verifier()`, written before this existed).
+
+    `require_env_var` ("false" by default): off means this returns
+    None — no presentation ever checked, same off-by-default posture
+    as every other piece of issue #15/#45.
+
+    Trusts two things: the Governing Authority's own key (resolved via
+    `bootstrap_signing_key()`, same signing key every agent's identity
+    ultimately chains to), and — generically, for ANY caller, not just
+    one hardcoded agent — whichever holder's current or historical key
+    is published in its own DID Document under
+    `governing_authority_host`, via `make_did_document_holder_key_resolver()`.
+    That second part is why no caller-specific key ever needs
+    pre-populating by hand: an already-bootstrapped caller (e.g. the
+    sofia-admin coordinator, or sofia-client-secure) resolves correctly
+    the first time, with no special-casing here.
+
+    Uses `fetch_remote_credential_status` (a live HTTP fetch per
+    verification, no caching) as the status resolver — the same
+    tradeoff RequestPresentationVerifier's own docstring documents as
+    the common case. A caller wanting a different one (e.g. a
+    Redis-backed StatusListManager read, like
+    samples/peer/20_operator_identity_federation/meridian_agent) should
+    build RequestPresentationVerifier directly instead of this
+    convenience wrapper.
+
+    Raises:
+        ValueError: `require_env_var` is true but `governing_authority_host_env_var`
+            or `identity_pg_dsn_env_var` isn't set — a half-configured
+            verifier would fail closed on every request anyway; fail
+            loudly at setup time instead.
+    """
+    if os.environ.get(require_env_var, "false").strip().lower() != "true":
+        return None
+
+    host = os.environ.get(governing_authority_host_env_var, "").strip()
+    pg_dsn = os.environ.get(identity_pg_dsn_env_var, "").strip()
+    if not host or not pg_dsn:
+        raise ValueError(
+            f"{require_env_var}=true but {governing_authority_host_env_var!r} "
+            f"and {identity_pg_dsn_env_var!r} must both be set to build an "
+            "identity_verifier."
+        )
+
+    governing_authority_did = os.environ.get(
+        governing_authority_did_env_var, f"did:web:{host}",
+    ).strip()
+    governing_authority_agent_id = os.environ.get(
+        governing_authority_agent_id_env_var, "governing-authority",
+    ).strip()
+    authority_vm_id = f"{governing_authority_did}#key-1"
+
+    from .stls_id_did import bootstrap_signing_key, make_did_document_holder_key_resolver
+    from .stls_id_keystore import IdentityKeystoreFactory
+    from .stls_id_postgres_store import PostgresDIDDocumentStore
+    from .stls_id_status import fetch_remote_credential_status
+
+    keystore = IdentityKeystoreFactory.build()
+    _, authority_pub, _ = bootstrap_signing_key(governing_authority_agent_id, keystore)
+    trusted_keys = {authority_vm_id: authority_pub}
+
+    did_store = PostgresDIDDocumentStore(dsn=pg_dsn)
+    holder_key_resolver = make_did_document_holder_key_resolver(
+        did_store, governing_authority_host=host,
+    )
+
+    sentinel = Sentinel(trusted_issuer_keys=trusted_keys, holder_key_resolver=holder_key_resolver)
+    return RequestPresentationVerifier(sentinel, status_resolver=fetch_remote_credential_status)

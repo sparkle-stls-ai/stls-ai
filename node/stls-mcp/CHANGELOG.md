@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.11] — 2026-11-28
+
+1:1 port of `python/stls-mcp` 0.1.11 (issue #80).
+
+### Added
+
+- `createSecureMcpApp()` gained `enablePlainEndpoint?: boolean` and
+  `enableSecureEndpoint?: boolean` options (both default `true`), mirroring
+  python/stls-mcp's `create_secure_mcp_app()`. `enableSecureEndpoint: false`
+  drops `stlsPath` and both handshake endpoints from the dispatcher;
+  `enablePlainEndpoint: false` drops `plainPath`. Throws at setup time if
+  both end up `false`.
+
 ## [0.1.10] — 2026-11-27
 
 1:1 port of `python/stls-mcp` 0.1.10 (issue #74): authorization scope

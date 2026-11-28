@@ -25,6 +25,7 @@ from stls_identity import (
     bootstrap_signing_key,
     build_did_document,
     build_verifiable_presentation,
+    request_presentation_verifier_from_env,
 )
 
 
@@ -241,3 +242,34 @@ async def test_malformed_header_is_rejected_without_raising():
 
     assert result.ok is False
     assert "malformed" in result.error
+
+
+# ── request_presentation_verifier_from_env() (issue #80) ──────────────────
+# Full wiring (Sentinel/trust/DID resolution/status fetch) needs a real
+# Postgres DID store and a real Redis-or-memory keystore — out of scope
+# for a unit test here, same posture as identity_challenge_handler_from_env()'s
+# own test coverage (presentation_test.py). Covers only the off-by-default
+# guarantee and the fail-loud guard, which is what every caller actually
+# relies on at import time.
+
+def test_from_env_off_by_default(monkeypatch):
+    monkeypatch.delenv("REQUIRE_IDENTITY_PRESENTATION", raising=False)
+    assert request_presentation_verifier_from_env() is None
+
+
+def test_from_env_disabled_explicitly(monkeypatch):
+    monkeypatch.setenv("REQUIRE_IDENTITY_PRESENTATION", "false")
+    assert request_presentation_verifier_from_env() is None
+
+
+def test_from_env_enabled_without_host_or_dsn_raises(monkeypatch):
+    monkeypatch.setenv("REQUIRE_IDENTITY_PRESENTATION", "true")
+    monkeypatch.delenv("GOVERNING_AUTHORITY_HOST", raising=False)
+    monkeypatch.delenv("IDENTITY_PG_DSN", raising=False)
+
+    try:
+        request_presentation_verifier_from_env()
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "GOVERNING_AUTHORITY_HOST" in str(exc)
+        assert "IDENTITY_PG_DSN" in str(exc)

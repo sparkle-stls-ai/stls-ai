@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stls-identity"
-version = "0.1.7"
+version = "0.1.8"
 description = "DID + Verifiable Credential identity layer for the STLS AI ecosystem"
 readme = "README.md"
 requires-python = ">=3.12"
